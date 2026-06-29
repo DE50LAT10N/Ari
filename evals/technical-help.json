@@ -1,0 +1,10 @@
+{
+  "id": "technical-help-brief",
+  "messages": [
+    { "role": "user", "content": "Почему npm install падает с EACCES?" }
+  ],
+  "expected": {
+    "mustContainAny": ["права", "прав", "permission", "eacces", "админ"],
+    "maxLength": 1200
+  }
+}

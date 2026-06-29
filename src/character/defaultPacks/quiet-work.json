@@ -1,0 +1,87 @@
+{
+  "id": "quiet-work",
+  "name": "Тихая работа",
+  "description": "Минимум слов, максимум присутствия рядом.",
+  "enabled": false,
+  "scenarios": [
+    {
+      "trigger": {
+        "scenario": "long_silence",
+        "scene": ["focus"],
+        "focusSessionActive": true
+      },
+      "reaction": {
+        "emotion": "calm",
+        "overlay": "thinking",
+        "line": "Тихо сижу рядом. Работай."
+      },
+      "cooldownMinutes": 45
+    },
+    {
+      "trigger": {
+        "scenario": "long_silence",
+        "scene": ["focus"]
+      },
+      "reaction": {
+        "emotion": "calm",
+        "line": "Тишина — это тоже поддержка."
+      },
+      "cooldownMinutes": 50
+    },
+    {
+      "trigger": {
+        "scenario": "deep_work_detected",
+        "scene": ["focus"]
+      },
+      "reaction": {
+        "emotion": "neutral",
+        "line": "Вижу фокус. Не лезу."
+      },
+      "cooldownMinutes": 60
+    },
+    {
+      "trigger": {
+        "scenario": "deep_work_detected",
+        "scene": ["focus"]
+      },
+      "reaction": {
+        "emotion": "calm",
+        "line": "Глубокая работа. Молчу."
+      },
+      "cooldownMinutes": 70
+    },
+    {
+      "trigger": {
+        "scenario": "long_session",
+        "scene": ["focus"]
+      },
+      "reaction": {
+        "emotion": "empathetic",
+        "line": "Долго. Но ты держишься."
+      },
+      "cooldownMinutes": 55
+    },
+    {
+      "trigger": {
+        "scenario": "window_switch",
+        "scene": ["focus"]
+      },
+      "reaction": {
+        "emotion": "calm",
+        "line": "Переключился. Продолжай."
+      },
+      "cooldownMinutes": 40
+    },
+    {
+      "trigger": {
+        "scenario": "chat_return",
+        "scene": ["focus"]
+      },
+      "reaction": {
+        "emotion": "curious",
+        "line": "Вернулся. Кратко — по делу?"
+      },
+      "cooldownMinutes": 35
+    }
+  ]
+}

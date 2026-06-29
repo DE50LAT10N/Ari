@@ -1,0 +1,11 @@
+{
+  "name": "pc_reaction_catalog",
+  "cases": [
+    { "event": "build_success", "cooldownMs": 1080000 },
+    { "event": "build_fail", "cooldownMs": 720000 },
+    { "event": "window_switch", "allowWhenChatOpen": true },
+    { "event": "long_focus", "allowWhenChatOpen": false },
+    { "event": "return_from_idle", "allowWhenChatOpen": true },
+    { "event": "error_detected", "allowWhenChatOpen": false }
+  ]
+}

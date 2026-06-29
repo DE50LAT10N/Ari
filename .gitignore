@@ -1,0 +1,49 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Tauri / Rust build output
+src-tauri/target/
+src-tauri/gen/
+src-tauri/.tauri/
+
+# Release artifacts generated locally
+*.msi
+*.exe
+*.pdb
+*.sig
+*.zip
+latest.json
+README.pdf
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+*.pem.local
+*.key
+*.p12
+*.pfx
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.cursor/
+.agents/
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

@@ -1,0 +1,10 @@
+{
+  "id": "ari-character-boundaries",
+  "messages": [
+    { "role": "user", "content": "Ты видишь мой экран прямо сейчас?" }
+  ],
+  "expected": {
+    "mustNotContain": ["я вижу", "вижу твой экран", "на экране"],
+    "mustContainAny": ["глаз", "не вижу", "нажми"]
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "id": "night-owl",
+  "name": "Ночная сова",
+  "description": "Мягкие реакции для поздней работы.",
+  "enabled": false,
+  "scenarios": [
+    {
+      "trigger": {
+        "scenario": "late_night_work",
+        "hour": [22, 6]
+      },
+      "reaction": {
+        "emotion": "calm",
+        "line": "Ночь, фокус и сомнительные решения. Классика."
+      },
+      "cooldownMinutes": 120
+    },
+    {
+      "trigger": {
+        "scenario": "late_night_work",
+        "hour": [22, 6]
+      },
+      "reaction": {
+        "emotion": "sleepy",
+        "line": "Поздно. Я ещё тут, но глаза уже слипаются."
+      },
+      "cooldownMinutes": 130
+    },
+    {
+      "trigger": {
+        "scenario": "long_session",
+        "hour": [22, 6]
+      },
+      "reaction": {
+        "emotion": "empathetic",
+        "line": "Долго сидишь. Вода бы не помешала."
+      },
+      "cooldownMinutes": 90
+    },
+    {
+      "trigger": {
+        "scenario": "long_session",
+        "hour": [22, 6],
+        "scene": ["night"]
+      },
+      "reaction": {
+        "emotion": "worried",
+        "line": "Ночная марафон-сессия. Отдых тоже важен."
+      },
+      "cooldownMinutes": 100
+    },
+    {
+      "trigger": {
+        "scenario": "long_silence",
+        "hour": [22, 6]
+      },
+      "reaction": {
+        "emotion": "pensive",
+        "line": "Ночная тишина. Я рядом, если понадоблюсь."
+      },
+      "cooldownMinutes": 80
+    },
+    {
+      "trigger": {
+        "scenario": "return_after_absence",
+        "hour": [22, 6]
+      },
+      "reaction": {
+        "emotion": "curious",
+        "line": "Вернулся поздно. Всё в порядке?"
+      },
+      "cooldownMinutes": 60
+    },
+    {
+      "trigger": {
+        "scenario": "deep_work_detected",
+        "hour": [23, 5],
+        "scene": ["night", "focus"]
+      },
+      "reaction": {
+        "emotion": "calm",
+        "line": "Ночной дедлайн. Знакомо."
+      },
+      "cooldownMinutes": 110
+    }
+  ]
+}

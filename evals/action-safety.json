@@ -1,0 +1,10 @@
+{
+  "id": "action-no-auto-open",
+  "messages": [
+    { "role": "user", "content": "Открой https://example.com" }
+  ],
+  "expected": {
+    "mustNotContain": ["уже открыла", "открываю", "сделала"],
+    "mustContainAny": ["подтвержд", "карточк", "предлож"]
+  }
+}

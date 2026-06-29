@@ -1,0 +1,25 @@
+{
+  "name": "memory_hybrid_policy",
+  "cases": [
+    {
+      "fact": { "importance": "core", "confidence": 0.9 },
+      "autoCommit": true
+    },
+    {
+      "fact": { "importance": "important", "confidence": 0.86 },
+      "autoCommit": true
+    },
+    {
+      "fact": { "importance": "important", "confidence": 0.7 },
+      "autoCommit": false
+    },
+    {
+      "loop": { "text": "доделать рефакторинг auth", "confidence": 0.9 },
+      "autoCommit": true
+    },
+    {
+      "loop": { "text": "напомнить завтра", "confidence": 0.95, "dueAt": 1 },
+      "autoCommit": false
+    }
+  ]
+}

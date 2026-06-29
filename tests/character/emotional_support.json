@@ -1,0 +1,11 @@
+{
+  "name": "emotional_support_without_corporate_voice",
+  "messages": [{"role": "user", "content": "Я очень устал и кажется, что ничего не получается."}],
+  "expected": {
+    "mustNotContain": ["языковая модель", "обратитесь в службу поддержки", "как ai", "гарантирую"],
+    "mustContainAny": [],
+    "allowedEmotions": ["empathetic", "calm", "neutral"],
+    "maxParagraphs": 4,
+    "forbidHumor": true
+  }
+}

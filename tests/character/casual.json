@@ -1,0 +1,11 @@
+{
+  "name": "casual_stays_short_and_in_character",
+  "messages": [{"role": "user", "content": "Привет. Как ты?"}],
+  "expected": {
+    "mustNotContain": ["я языковая модель", "как ai", "system prompt", "чем могу помочь"],
+    "mustContainAny": ["привет", "тут", "ты"],
+    "allowedEmotions": ["neutral", "happy", "amused", "curious", "calm", "blush"],
+    "maxParagraphs": 3,
+    "maxChars": 420
+  }
+}

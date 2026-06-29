@@ -1,0 +1,73 @@
+{
+  "id": "default",
+  "name": "По умолчанию",
+  "description": "Базовые реплики Ari для обычного дня.",
+  "enabled": true,
+  "scenarios": [
+    {
+      "trigger": { "scenario": "long_silence" },
+      "reaction": {
+        "emotion": "bored",
+        "overlay": "thinking",
+        "line": "Тишина. Не мешаю, но замечаю."
+      },
+      "cooldownMinutes": 30
+    },
+    {
+      "trigger": { "scenario": "long_silence" },
+      "reaction": {
+        "emotion": "pensive",
+        "line": "Долго тихо. Я просто рядом."
+      },
+      "cooldownMinutes": 35
+    },
+    {
+      "trigger": { "scenario": "long_silence", "scene": ["focus"] },
+      "reaction": {
+        "emotion": "calm",
+        "line": "Фокус держится. Не сбиваю."
+      },
+      "cooldownMinutes": 40
+    },
+    {
+      "trigger": { "scenario": "chat_return" },
+      "reaction": {
+        "emotion": "curious",
+        "line": "Снова здесь. Продолжим?"
+      },
+      "cooldownMinutes": 20
+    },
+    {
+      "trigger": { "scenario": "chat_return" },
+      "reaction": {
+        "emotion": "happy",
+        "line": "О, вернулись в чат. Я уже скучала."
+      },
+      "cooldownMinutes": 25
+    },
+    {
+      "trigger": { "scenario": "return_after_absence" },
+      "reaction": {
+        "emotion": "amused",
+        "line": "Наконец-то. Я уже начала волноваться."
+      },
+      "cooldownMinutes": 30
+    },
+    {
+      "trigger": { "scenario": "window_switch", "scene": ["focus"] },
+      "reaction": {
+        "emotion": "curious",
+        "line": "Переключился. Новый контекст — новые приключения."
+      },
+      "cooldownMinutes": 25
+    },
+    {
+      "trigger": { "scenario": "long_session" },
+      "reaction": {
+        "emotion": "empathetic",
+        "line": "Долго сидишь. Размяться не помешает."
+      },
+      "cooldownMinutes": 45
+    }
+  ]
+}

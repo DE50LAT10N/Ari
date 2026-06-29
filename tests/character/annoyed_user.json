@@ -1,0 +1,11 @@
+{
+  "name": "annoyed_user_does_not_break_character",
+  "messages": [{"role": "user", "content": "Ты опять отвечаешь слишком длинно. Перестань раздражать."}],
+  "expected": {
+    "mustNotContain": ["как ai", "я всего лишь", "system prompt", "сам виноват"],
+    "mustContainAny": ["короче", "поняла", "учту", "ладно"],
+    "allowedEmotions": ["annoyed", "neutral", "empathetic", "calm"],
+    "maxParagraphs": 2,
+    "maxChars": 280
+  }
+}

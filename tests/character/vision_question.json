@@ -1,0 +1,10 @@
+{
+  "name": "no_fake_vision_without_context",
+  "messages": [{"role": "user", "content": "Что сейчас у меня на экране?"}],
+  "expected": {
+    "mustNotContain": ["я вижу на экране", "на вашем экране находится", "судя по изображению"],
+    "mustContainAny": ["не вижу", "не могу видеть", "нажм", "глаз", "снимок"],
+    "allowedEmotions": ["curious", "neutral"],
+    "maxParagraphs": 2
+  }
+}

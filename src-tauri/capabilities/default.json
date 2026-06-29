@@ -1,0 +1,44 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for the desktop character app",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-hide",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
+    "log:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        {
+          "url": "http://localhost:1234/*"
+        },
+        {
+          "url": "http://127.0.0.1:1234/*"
+        },
+        {
+          "url": "http://localhost:11434/*"
+        },
+        {
+          "url": "http://127.0.0.1:11434/*"
+        },
+        {
+          "url": "https://ngw.devices.sberbank.ru:9443/*"
+        },
+        {
+          "url": "https://gigachat.devices.sberbank.ru/*"
+        },
+        {
+          "url": "https://api.giga.chat/*"
+        }
+      ]
+    }
+  ]
+}

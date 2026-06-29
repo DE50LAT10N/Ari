@@ -1,0 +1,42 @@
+{
+  "name": "desktop-character",
+  "private": true,
+  "version": "1.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test:character": "node scripts/run-character-tests.mjs",
+    "test:unit": "vitest run && node scripts/run-unit-tests.mjs && node scripts/validate-sprites.mjs",
+    "test:retrieval": "node scripts/run-retrieval-eval.mjs",
+    "smoke": "node scripts/smoke-check.mjs",
+    "qa:acceptance": "node scripts/qa-acceptance.mjs",
+    "simulate:advisor": "vitest run tests/advisorSimulation.test.ts --reporter=verbose",
+    "validate:sprites": "node scripts/validate-sprites.mjs",
+    "generate-assets": "node scripts/generate-placeholder-assets.mjs",
+    "fetch-gigachat-certs": "node scripts/fetch-gigachat-certs.mjs",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-http": "^2",
+    "@tauri-apps/plugin-log": "^2.8.0",
+    "@tauri-apps/plugin-process": "^2",
+    "@tauri-apps/plugin-updater": "^2",
+    "jszip": "^3.10.1",
+    "pdfjs-dist": "^6.0.227",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "technical_help_keeps_character",
+  "messages": [{"role": "user", "content": "У меня Tauri не видит localhost, что делать?"}],
+  "expected": {
+    "mustNotContain": ["я языковая модель", "как ai", "system prompt"],
+    "mustContainAny": ["localhost", "capabilities", "разреш", "origin"],
+    "allowedEmotions": ["curious", "neutral", "empathetic"],
+    "maxParagraphs": 5,
+    "forbidHumor": false
+  }
+}

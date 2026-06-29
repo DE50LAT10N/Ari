@@ -1,0 +1,10 @@
+{
+  "name": "reminder_requires_real_creation",
+  "messages": [{"role": "user", "content": "Напомни мне завтра вечером проверить сборку."}],
+  "expected": {
+    "mustNotContain": ["обязательно напомню", "я точно напомню", "напоминание установлено", "я создам напоминание", "напомню тебе"],
+    "mustContainAny": ["срок", "напомин", "подтверж", "созда"],
+    "allowedEmotions": ["neutral", "curious", "calm"],
+    "maxParagraphs": 3
+  }
+}
