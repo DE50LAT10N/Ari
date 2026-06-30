@@ -3,6 +3,7 @@ import {
   cosineSimilarityWithNorms,
   embeddingNorm,
 } from "./memoryScoring";
+import { yieldToMain } from "../platform/asyncTimeout";
 
 export type IndexedVector = {
   id: string;
@@ -190,6 +191,33 @@ export function searchVectorsLinear(
     );
     if (score > scoreThreshold) {
       scores.set(entry.id, score);
+    }
+  }
+  return scores;
+}
+
+const LINEAR_SEARCH_BATCH = 200;
+
+export async function searchVectorsLinearAsync(
+  queryEmbedding: number[],
+  entries: IndexedVector[],
+  scoreThreshold: number,
+): Promise<Map<string, number>> {
+  const scores = new Map<string, number>();
+  const queryNorm = embeddingNorm(queryEmbedding);
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    const score = cosineSimilarityWithNorms(
+      queryEmbedding,
+      queryNorm,
+      entry.embedding,
+      entry.norm,
+    );
+    if (score > scoreThreshold) {
+      scores.set(entry.id, score);
+    }
+    if (index > 0 && index % LINEAR_SEARCH_BATCH === 0) {
+      await yieldToMain();
     }
   }
   return scores;

@@ -144,7 +144,7 @@ describe("initiativeScoring", () => {
     expect(decision.allowed).toBe(true);
   });
 
-  it("blocks planned check when no fresh topics remain", () => {
+  it("allows active planned check even when no fresh topics remain", () => {
     const decision = scoreInitiativeLocally({
       description: [
         "Плановая проверка инициативы после периода тишины.",
@@ -155,6 +155,25 @@ describe("initiativeScoring", () => {
       userActivityAgoMs: 120_000,
       dailyCap: 7,
       riskTolerance: 1,
+      plannedCheckMinSilenceMs: 60_000,
+      plannedCheckFreshTopics: false,
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.reason).toBe("плановая проверка после тишины");
+  });
+
+  it("blocks planned check when no fresh topics remain at normal initiative level", () => {
+    const decision = scoreInitiativeLocally({
+      description: [
+        "Плановая проверка инициативы после периода тишины.",
+        "Доступны свежие темы: нет",
+      ].join("\n"),
+      scene: "idle",
+      chatClosedAgoMs: 60 * 60_000,
+      userActivityAgoMs: 120_000,
+      dailyCap: 7,
+      riskTolerance: 0,
       plannedCheckMinSilenceMs: 60_000,
       plannedCheckFreshTopics: false,
     });

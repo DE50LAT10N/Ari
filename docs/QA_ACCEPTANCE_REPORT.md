@@ -1,12 +1,12 @@
 # Ari QA acceptance report
 
-Generated: 2026-06-29T05:40:20.591Z
+Generated: 2026-06-29T20:08:31.295Z
 
 ## Automated results
 
 | Check | Status | Note |
 |-------|--------|------|
-| auto-gates | pass | npm run smoke exit 0 |
+| auto-gates | fail | smoke failed: undefined |
 | env-setup | pass | advisor default on |
 | env-setup | pass | clipboard full capture default on |
 | env-setup | pass | activity tracking default on |
@@ -26,7 +26,16 @@ Generated: 2026-06-29T05:40:20.591Z
 | proactive-qa | pass | dynamic check-in topics wired |
 | proactive-qa | pass | local fallback after failed LLM attempt |
 | proactive-qa | pass | checkInitiative does not require LLM for entry |
-| proactive-qa | pass | GigaChat online uses LLM for planned check-in |
+| proactive-qa | pass | generic check-in passes conversation topics |
+| proactive-qa | pass | rich proactive context module wired in initiativeContext |
+| proactive-qa | pass | proactive signal summary passed to generateReply |
+| proactive-qa | pass | LLM bundle synthesis wired in proactive package prep |
+| proactive-qa | pass | Proactive Lab + LLM engine + command tail parser present |
+| proactive-qa | pass | assistant moves playbook + topic link graph wired |
+| proactive-qa | pass | RAG prefetch wired into proactive synthesis prep |
+| proactive-qa | pass | immersed session uses companion silence for generic check-in |
+| proactive-qa | pass | failed advice backs off instead of hard return |
+| proactive-qa | pass | planned check-in uses LLM proactive package |
 | proactive-qa | pass | planned check-in uses rich proactive package |
 | proactive-qa | pass | planned anchor does not force window title fallback |
 | proactive-qa | pass | proactive grace period on enable |
@@ -41,7 +50,7 @@ Generated: 2026-06-29T05:40:20.591Z
 
 ## Release gate (plan §7)
 
-**Automated gate: PASS** (unit tests + smoke). Manual tauri scenarios still required.
+**Automated gate: FAIL** (1 checks) — fix before ship.
 
 ### Ship-ready (automated)
 

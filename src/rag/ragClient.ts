@@ -15,7 +15,9 @@ import {
 import { createGigaChatEmbeddings } from "../llm/gigaChatClient";
 import { formatOllamaError } from "../llm/ollamaErrors";
 import { embeddingNorm, cosineSimilarityWithNorms } from "../memory/memoryScoring";
+import { yieldToMain } from "../platform/asyncTimeout";
 import { embedQueryCached } from "../llm/embeddingCache";
+import { withTimeout } from "../platform/asyncTimeout";
 import { searchIvfIndex, type IvfIndex } from "../memory/ivfIndex";
 import { clearStoredIvfIndex, resolveIvfIndex } from "../memory/ivfStore";
 import type { RetrievalSearchMode } from "../memory/retrievalTelemetry";
@@ -110,15 +112,19 @@ export async function embedTexts(
   if (source === "gigachat") {
     return createGigaChatEmbeddings(input, settings);
   }
-  const response = await fetch(`${settings.ollamaBaseUrl}/api/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: resolveEmbeddingModel(settings),
-      input,
-      truncate: true,
+  const response = await withTimeout(
+    fetch(`${settings.ollamaBaseUrl}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: resolveEmbeddingModel(settings),
+        input,
+        truncate: true,
+      }),
     }),
-  });
+    25_000,
+    "Ollama embeddings",
+  );
   const raw = await response.text();
   const body = (() => {
     try {
@@ -190,6 +196,22 @@ export async function searchRag(
   query: string,
   settings: AppSettings,
 ): Promise<RagMatch[]> {
+  try {
+    return await withTimeout(
+      searchRagInner(query, settings),
+      45_000,
+      "RAG поиск",
+    );
+  } catch (error) {
+    console.warn("RAG search failed:", error);
+    return [];
+  }
+}
+
+async function searchRagInner(
+  query: string,
+  settings: AppSettings,
+): Promise<RagMatch[]> {
   if (!settings.ragEnabled || !query.trim()) {
     return [];
   }
@@ -203,7 +225,16 @@ export async function searchRag(
   }
 
   const threshold = settings.ragScoreThreshold ?? 0.2;
-  const queryEmbedding = await embedQueryCached(query, settings);
+  let queryEmbedding: number[];
+  try {
+    queryEmbedding = await embedQueryCached(query, settings);
+  } catch (error) {
+    const model = resolveEmbeddingModel(settings);
+    const detail =
+      error instanceof Error ? error.message : "неизвестная ошибка embeddings";
+    console.warn(`RAG embedding failed (${model}):`, detail);
+    return [];
+  }
   const queryNorm = embeddingNorm(queryEmbedding);
   const chunkNorms = getRagChunkNorms();
   const ivf = await buildRagVectorIndex(chunks, settings);
@@ -224,23 +255,50 @@ export async function searchRag(
   }
 
   lastRagSearchMode = "linear";
-  return chunks
-    .map((chunk) => {
-      const chunkNorm =
-        chunkNorms?.get(chunk.id) ?? embeddingNorm(chunk.embedding);
-      return {
+  return searchRagLinear(
+    chunks,
+    queryEmbedding,
+    queryNorm,
+    chunkNorms,
+    threshold,
+    settings.ragTopK,
+  );
+}
+
+const RAG_LINEAR_BATCH = 150;
+
+async function searchRagLinear(
+  chunks: RagChunk[],
+  queryEmbedding: number[],
+  queryNorm: number,
+  chunkNorms: Map<string, number> | null,
+  threshold: number,
+  topK: number,
+): Promise<RagMatch[]> {
+  const scored: RagMatch[] = [];
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index]!;
+    const chunkNorm =
+      chunkNorms?.get(chunk.id) ?? embeddingNorm(chunk.embedding);
+    const score = cosineSimilarityWithNorms(
+      queryEmbedding,
+      queryNorm,
+      chunk.embedding,
+      chunkNorm,
+    );
+    if (score > threshold) {
+      scored.push({
         id: chunk.id,
         source: chunk.source,
         text: chunk.text,
-        score: cosineSimilarityWithNorms(
-          queryEmbedding,
-          queryNorm,
-          chunk.embedding,
-          chunkNorm,
-        ),
-      };
-    })
-    .filter(({ score }) => score > threshold)
+        score,
+      });
+    }
+    if (index > 0 && index % RAG_LINEAR_BATCH === 0) {
+      await yieldToMain();
+    }
+  }
+  return scored
     .sort((left, right) => right.score - left.score)
-    .slice(0, settings.ragTopK);
+    .slice(0, topK);
 }

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { deriveInterruptibility } from "../src/character/interruptibility";
+import {
+  canEmitProactiveReply,
+  deriveInterruptibility,
+} from "../src/character/interruptibility";
 import {
   getRecentIgnoredInitiativeCount,
   markInitiativeSent,
@@ -65,6 +68,21 @@ describe("initiativeFlow", () => {
       recentIgnoredInitiatives: 0,
     });
     expect(tier).toBe("normal");
+  });
+
+  it("blocks local companion lines during pomodoro focus", () => {
+    const tier = deriveInterruptibility({
+      lifecycle: "awake",
+      focusSessionActive: true,
+      bodyDoubling: false,
+      pomodoroPhase: "focus",
+      chatOpen: false,
+      generationInProgress: false,
+      quietModeActive: false,
+      typingIdleSeconds: 120,
+      recentIgnoredInitiatives: 0,
+    });
+    expect(canEmitProactiveReply(tier, "check_in")).toBe(false);
   });
 
   it("adds a task from natural chat phrasing", () => {

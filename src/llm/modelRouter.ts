@@ -8,6 +8,7 @@ export type ModelTask =
   | "validator"
   | "memoryExtraction"
   | "initiativeGate"
+  | "initiativeSynthesis"
   | "vision"
   | "embedding"
   | "summarization";
@@ -30,6 +31,7 @@ export function resolveModel(
     case "chat":
       return isGigaChat ? settings.gigaChatModel : settings.model;
     case "initiativeGate":
+    case "initiativeSynthesis":
     case "validator":
     case "json":
       if (isGigaChat) {

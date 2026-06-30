@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildAdvisorAngleIntent,
   buildConversationTopics,
+  buildFallbackInitiativeTopics,
   hasActionableAdvisorSignals,
+  hasUsableProactiveContext,
   pickPlannedInitiativeAnchor,
   selectAdvisorAngle,
   topicOverlapsRecent,
@@ -151,5 +153,18 @@ describe("advisorEngine", () => {
     expect(topicOverlapsRecent(anchor ?? "", ["PixAI art generator"])).toBe(
       false,
     );
+  });
+
+  it("keeps proactive context when planned topics are banned but signals remain", () => {
+    rememberProactiveTopic("как идёт ChatPanel.tsx");
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 12,
+      windowMinutes: 12,
+    });
+    const banned = ["как идёт ChatPanel.tsx"];
+    expect(bundle.hasActionableSignals).toBe(true);
+    expect(hasUsableProactiveContext(bundle, [], banned)).toBe(true);
   });
 });

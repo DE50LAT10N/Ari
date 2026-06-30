@@ -1,14 +1,14 @@
 # Ari advisor simulation report
 
-Generated: 2026-06-29T05:40:15.289Z
+Generated: 2026-06-30T02:49:51.212Z
 
 | Scenario | Expected | Actual | Initiative | Value/Risk | Flags | Topics |
 |----------|----------|--------|------------|------------|-------|--------|
-| long_session_rest | rest | rest | allowed | medium/low | breakDue | как идёт ChatPanel.tsx; короткий перерыв после долгой сессии |
-| repeated_stacktrace_debug | debug_help | debug_help | allowed | high/low | stuck=0.70 | как идёт ChatPanel.tsx; получилось ли разобраться с ошибкой из буфера |
-| rapid_switch_refocus | refocus | refocus | allowed | low/low | contextThrash | как идёт state.ts |
-| many_open_tasks_scope | scope | scope | allowed | low/low | scopeCreep, taskLink? | уточнить связь активности с задачей «Open task 7»; как идёт roadmap.md |
-| recent_topic_check_in | topic | topic | allowed | medium/low | none | как идёт activeWindow.ts; что нашёл по «Tauri active window permissions»; ещё актуально «Tauri active window permissions» |
+| long_session_rest | rest | rest | allowed | medium/low | breakDue | ChatPanel.tsx; короткий перерыв после долгой сессии |
+| repeated_stacktrace_debug | debug_help | debug_help | allowed | high/low | stuck=0.70 | ChatPanel.tsx |
+| rapid_switch_refocus | refocus | refocus | allowed | low/low | contextThrash | state.ts |
+| many_open_tasks_scope | scope | scope | allowed | low/low | scopeCreep | roadmap.md |
+| recent_topic_check_in | topic | topic | allowed | medium/low | none | activeWindow.ts; Tauri active window permissions |
 
 ## Prompt previews
 
@@ -45,5 +45,5 @@ Generated: 2026-06-29T05:40:15.289Z
 
 | Check | Result | Topics | Reason |
 |-------|--------|--------|--------|
-| planned_check_uses_recent_topics | pass | как идёт activeWindow.ts; что нашёл по «Tauri active window permissions»; ещё актуально «Tauri active window permissions» | плановая проверка после тишины |
-| repeat_guard_rotates_to_file_topic | pass | как идёт activeWindow.ts; что нашёл по «Tauri active window permissions»; ещё актуально «Tauri active window permissions» | плановая проверка после тишины |
+| planned_check_uses_recent_topics | pass | activeWindow.ts; Tauri active window permissions | плановая проверка после тишины |
+| repeat_guard_rotates_to_file_topic | pass | activeWindow.ts; Tauri active window permissions | плановая проверка после тишины |

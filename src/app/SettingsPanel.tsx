@@ -37,6 +37,12 @@ import {
 } from "../character/proactiveState";
 import { proactiveIntervalMs } from "../character/initiativeConfig";
 import { isQuietHours } from "../character/reminders";
+import { deriveLifecycleState } from "../character/lifecycle";
+import {
+  allowsInitiativeForKind,
+  deriveInterruptibility,
+  describeInterruptibility,
+} from "../character/interruptibility";
 import {
   clearSafeActionLog,
   loadSafeActionLog,
@@ -89,6 +95,7 @@ const ProjectBinderPanel = lazy(() =>
   })),
 );
 import { AriDiagnosticsSection } from "./AriDiagnosticsSection";
+import { ProactiveLabSection } from "./ProactiveLabSection";
 import { SettingsCategory } from "./SettingsCategory";
 import {
   loadOpenCategories,
@@ -190,6 +197,7 @@ export function SettingsPanel({
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [projectBinderOpen, setProjectBinderOpen] = useState(false);
   const [diagnosticsExpanded, setDiagnosticsExpanded] = useState(false);
+  const [proactiveLabExpanded, setProactiveLabExpanded] = useState(false);
   const [scenarioPacks, setScenarioPacks] = useState(loadScenarioPacks);
   const [preferenceRules, setPreferenceRules] = useState(loadPreferenceRules);
   const [memoryStats, setMemoryStats] = useState({
@@ -667,6 +675,33 @@ export function SettingsPanel({
         setProactiveStatus("Инициативы сейчас блокируют тихие часы.");
         return;
       }
+      const lifecycle = deriveLifecycleState(
+        0,
+        new Date().getHours(),
+        settings.quietMode,
+        isQuietModeActive(settings, activeWindow),
+        settings.nightBehavior,
+      );
+      const interruptibility = deriveInterruptibility({
+        lifecycle,
+        focusSessionActive: false,
+        bodyDoubling: false,
+        pomodoroPhase: "idle",
+        chatOpen: false,
+        generationInProgress: false,
+        quietModeActive: isQuietModeActive(settings, activeWindow),
+        typingIdleSeconds: 999,
+        recentIgnoredInitiatives: 0,
+      });
+      if (!allowsInitiativeForKind(interruptibility, "check_in")) {
+        setProactiveStatus(
+          `Check-in блокирует ${describeInterruptibility(interruptibility)} (lifecycle: ${lifecycle}).` +
+            (settings.nightBehavior === "quiet"
+              ? " Ночное поведение = «тихий» — переключи на «обычный», если тестируешь ночью."
+              : " Проверь фокус-сессию или помодоро."),
+        );
+        return;
+      }
 
       const intervalMs = proactiveIntervalMs(settings);
       const remaining = Math.max(
@@ -709,6 +744,7 @@ export function SettingsPanel({
     settings.quietMode,
     settings.quietModeUntil,
     settings.quietModeProcess,
+    settings.nightBehavior,
     activeWindow,
     providerReady,
   ]);
@@ -2095,6 +2131,15 @@ export function SettingsPanel({
           onChange={(event) => void importKnowledge(event.currentTarget.files)}
         />
         {ragMessage && <span className="settings-note">{ragMessage}</span>}
+        {settings.ragEnabled &&
+          ragStats.chunks > 0 &&
+          !ragEmbeddingReady && (
+            <span className="settings-note settings-error">
+              В индексе {ragStats.chunks} фрагментов, но embedding-провайдер
+              недоступен — поиск по документам в чате не работает. Запусти
+              Ollama/GigaChat или переиндексируй после восстановления связи.
+            </span>
+          )}
         <span className="settings-note">
           После смены источника или модели embeddings очисти и заново
           проиндексируй документы: векторы разных моделей несовместимы.
@@ -2495,6 +2540,26 @@ export function SettingsPanel({
           </button>
         </div>
         {diagnosticsExpanded && <AriDiagnosticsSection />}
+      </div>
+
+      <div className="settings-section-card">
+        <div className="settings-section-heading">
+          <div>
+            <strong>Proactive Lab</strong>
+            <span>
+              Preview LLM synthesis, adviceSteps, usefulness score и тестовый
+              fire проактивной инициативы.
+            </span>
+          </div>
+          <button
+            type="button"
+            className="settings-action-button"
+            onClick={() => setProactiveLabExpanded((value) => !value)}
+          >
+            {proactiveLabExpanded ? "Скрыть" : "Показать"}
+          </button>
+        </div>
+        {proactiveLabExpanded && <ProactiveLabSection settings={settings} />}
       </div>
 
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseDuckDuckGoResults,
+  needsExplicitLiveToolPlanner,
   shouldConsiderLiveTools,
   stripHtmlToText,
 } from "../src/tools/liveTools";
@@ -29,7 +30,20 @@ describe("liveTools", () => {
     expect(shouldConsiderLiveTools("найди в интернете курс доллара")).toBe(
       true,
     );
+    expect(shouldConsiderLiveTools("подскажи про Rust")).toBe(true);
     expect(shouldConsiderLiveTools("привет, как дела?")).toBe(false);
+  });
+
+  it("needsExplicitLiveToolPlanner matches only datetime, weather, and URLs", () => {
+    expect(needsExplicitLiveToolPlanner("который сейчас час")).toBe(true);
+    expect(needsExplicitLiveToolPlanner("какая погода в Москве")).toBe(true);
+    expect(needsExplicitLiveToolPlanner("смотри https://example.com")).toBe(
+      true,
+    );
+    expect(needsExplicitLiveToolPlanner("подскажи про Rust")).toBe(false);
+    expect(needsExplicitLiveToolPlanner("найди в интернете курс доллара")).toBe(
+      false,
+    );
   });
 });
 

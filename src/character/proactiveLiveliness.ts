@@ -1,7 +1,20 @@
 import type { InitiativeKind } from "./initiativeKinds";
+import type { ProactiveReplyTone } from "./proactiveTone";
 
 export const PROACTIVE_CHARACTER_RULE =
   "Практическая польза не отменяет характер Ari: ирония, ритм, тепло и наблюдательность в формулировках; без канцелярита и тона «виртуального помощника».";
+
+export const PROACTIVE_SMALLTALK_RULE =
+  "Смолток: живая реплика рядом — ирония, тепло, наблюдение; без чеклиста, без непрошеного совета и next step, если человек не застрял.";
+
+export const PROACTIVE_ADVICE_RULE =
+  "Совет: конструктивный шаг от Ari за плечом — факт, команда или проверка внутри характера; не лекция и не список.";
+
+export function describeProactiveTone(tone: ProactiveReplyTone): string {
+  return tone === "advice"
+    ? [PROACTIVE_CHARACTER_RULE, PROACTIVE_ADVICE_RULE].join(" ")
+    : [PROACTIVE_CHARACTER_RULE, PROACTIVE_SMALLTALK_RULE].join(" ");
+}
 
 export const VN_CHARACTER_RULE =
   "Реплика — как строка из visual novel: один характерный заход, субъективность, лёгкая ирония или тепло; не отчёт и не чеклист; не закрывай реплику вопросом по привычке.";

@@ -157,6 +157,13 @@ export async function applyRetrievalRerank({
   facts: UserMemoryFact[];
   episodes: MemoryEpisode[];
 }> {
+  if (!ragMatches.length && !facts.length && !episodes.length) {
+    return { rag: [], facts: [], episodes: [] };
+  }
+  if (!settings.rerankEnabled) {
+    return { rag: ragMatches, facts, episodes };
+  }
+
   const started = performance.now();
   const ragResult = await rerankRagMatches(query, ragMatches, settings);
   const factsResult = await rerankMemoryFacts(query, facts, settings, 6);

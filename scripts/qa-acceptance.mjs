@@ -159,7 +159,10 @@ if (
   fail("proactive-qa", "proactiveBridge migration incomplete");
 }
 
-if (chatPanel.includes("buildConversationTopics")) {
+if (
+  chatPanel.includes("buildConversationTopics") ||
+  chatPanel.includes("planSignalDrivenAdvice")
+) {
   pass("proactive-qa", "dynamic check-in topics wired");
 } else {
   fail("proactive-qa", "conversation topics not wired");
@@ -181,10 +184,110 @@ if (
   fail("proactive-qa", "checkInitiative still gates entire loop on LLM online");
 }
 
-if (chatPanel.includes("useGigaChatInitiative")) {
-  pass("proactive-qa", "GigaChat online uses LLM for planned check-in");
+if (
+  chatPanel.includes("tryGenericCompanionInitiative") &&
+  chatPanel.includes("buildConversationTopics")
+) {
+  pass("proactive-qa", "generic check-in passes conversation topics");
 } else {
-  fail("proactive-qa", "missing GigaChat-first planned check-in path");
+  fail("proactive-qa", "generic check-in missing buildConversationTopics");
+}
+
+const initiativeContext = fs.readFileSync(
+  path.join(root, "src/character/initiativeContext.ts"),
+  "utf8",
+);
+if (
+  initiativeContext.includes("buildRichProactiveContext") &&
+  initiativeContext.includes("buildAdviceBrief")
+) {
+  pass("proactive-qa", "rich proactive context module wired in initiativeContext");
+} else {
+  fail("proactive-qa", "missing buildRichProactiveContext in initiativeContext");
+}
+
+if (chatPanel.includes("proactiveSignalSummary")) {
+  pass("proactive-qa", "proactive signal summary passed to generateReply");
+} else {
+  fail("proactive-qa", "missing proactiveSignalSummary wiring");
+}
+
+if (
+  chatPanel.includes("prepareProactivePackage") &&
+  chatPanel.includes("synthesizeProactiveBundle")
+) {
+  pass("proactive-qa", "LLM bundle synthesis wired in proactive package prep");
+} else {
+  fail("proactive-qa", "missing synthesizeProactiveBundle / prepareProactivePackage");
+}
+
+if (
+  fs.existsSync(path.join(root, "src/app/ProactiveLabSection.tsx")) &&
+  fs.existsSync(path.join(root, "src/character/proactiveLlmEngine.ts")) &&
+  fs.existsSync(path.join(root, "src/chat/commandTailParser.ts"))
+) {
+  pass("proactive-qa", "Proactive Lab + LLM engine + command tail parser present");
+} else {
+  fail("proactive-qa", "missing ProactiveLabSection / proactiveLlmEngine / parseCommandTail");
+}
+
+const playbookPath = path.join(root, "src/character/proactiveInitiativePlaybook.ts");
+const linkerPath = path.join(root, "src/character/proactiveTopicLinker.ts");
+const playbookSrc = fs.existsSync(playbookPath) ? fs.readFileSync(playbookPath, "utf8") : "";
+const linkerSrc = fs.existsSync(linkerPath) ? fs.readFileSync(linkerPath, "utf8") : "";
+const llmEngineSrc = fs.readFileSync(
+  path.join(root, "src/character/proactiveLlmEngine.ts"),
+  "utf8",
+);
+
+if (
+  fs.existsSync(playbookPath) &&
+  fs.existsSync(linkerPath) &&
+  playbookSrc.includes("inferInitiativeMoves") &&
+  linkerSrc.includes("buildFactLinkGraph") &&
+  linkerSrc.includes("inferTopicChains") &&
+  llmEngineSrc.includes("topicLinks")
+) {
+  pass("proactive-qa", "assistant moves playbook + topic link graph wired");
+} else {
+  fail("proactive-qa", "missing proactiveInitiativePlaybook / proactiveTopicLinker / topicLinks");
+}
+
+if (
+  chatPanel.includes("ragSnippets") &&
+  chatPanel.includes("prepareProactivePackage")
+) {
+  pass("proactive-qa", "RAG prefetch wired into proactive synthesis prep");
+} else {
+  fail("proactive-qa", "missing RAG prefetch in prepareProactivePackage");
+}
+
+if (
+  chatPanel.includes("tryGenericCompanionInitiative") &&
+  chatPanel.includes("immersedCompanion") &&
+  chatPanel.includes("companionSilenceMs")
+) {
+  pass("proactive-qa", "immersed session uses companion silence for generic check-in");
+} else {
+  fail("proactive-qa", "missing immersed companion silence gate in generic path");
+}
+
+if (
+  chatPanel.includes("afterAdviceAttempt") &&
+  chatPanel.includes("retry_advice_later")
+) {
+  pass("proactive-qa", "failed advice backs off instead of hard return");
+} else {
+  fail("proactive-qa", "missing advice failure backoff in checkInitiative");
+}
+
+if (
+  chatPanel.includes("launchProactiveInitiative") &&
+  chatPanel.includes("tryGenericCompanionInitiative")
+) {
+  pass("proactive-qa", "planned check-in uses LLM proactive package");
+} else {
+  fail("proactive-qa", "missing LLM-first planned check-in path");
 }
 
 if (chatPanel.includes("buildProactiveInitiativePackage")) {

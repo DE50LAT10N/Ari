@@ -6,6 +6,8 @@ const RECENT_PROACTIVE_TOPICS_KEY =
   "desktop-character.recent-proactive-topics.v1";
 const PROACTIVE_SUBJECT_COOLDOWN_KEY =
   "desktop-character.proactive-subject-cooldown.v1";
+const LAST_ADVICE_SUBJECT_KEY =
+  "desktop-character.last-advice-subject.v1";
 
 export const PROACTIVE_SUBJECT_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 
@@ -27,8 +29,10 @@ export function resetProactiveStateForTests(): void {
   lastAttemptCache = null;
   localStorage.removeItem(RECENT_PROACTIVE_TOPICS_KEY);
   localStorage.removeItem(PROACTIVE_SUBJECT_COOLDOWN_KEY);
+  localStorage.removeItem(LAST_ADVICE_SUBJECT_KEY);
   localStorage.removeItem(LAST_PROACTIVE_MESSAGE_KEY);
   localStorage.removeItem(LAST_PROACTIVE_ATTEMPT_KEY);
+  localStorage.removeItem("desktop-character.idle-lines-recent.v1");
 }
 
 export function normalizeProactiveSubject(text: string): string {
@@ -92,7 +96,7 @@ export function isProactiveSubjectOnCooldown(
       .split(/\s+/)
       .filter((word) => word.length > 3);
     const overlap = words.filter((word) => cooledWords.includes(word)).length;
-    return overlap >= 1 && cooledWords.length >= 1;
+    return overlap >= 2 || (overlap >= 1 && words.length === 1 && words[0].length >= 8);
   });
 }
 
@@ -112,6 +116,45 @@ export function rememberProactiveSubject(
     PROACTIVE_SUBJECT_COOLDOWN_KEY,
     JSON.stringify(entries),
   );
+}
+
+type AdviceSubjectState = { subject: string; at: number };
+
+export function rememberAdviceSubject(subject: string, at = Date.now()): void {
+  const key = normalizeProactiveSubject(subject);
+  if (!key) {
+    return;
+  }
+  localStorage.setItem(
+    LAST_ADVICE_SUBJECT_KEY,
+    JSON.stringify({ subject: key, at }),
+  );
+  rememberProactiveSubject(subject, at);
+}
+
+export function isAdviceSubjectRecentlyAdvised(
+  subject: string,
+  minGapMs: number,
+  now = Date.now(),
+): boolean {
+  const key = normalizeProactiveSubject(subject);
+  if (!key) {
+    return false;
+  }
+  if (isProactiveSubjectOnCooldown(subject, minGapMs, now)) {
+    return true;
+  }
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(LAST_ADVICE_SUBJECT_KEY) ?? "null",
+    ) as AdviceSubjectState | null;
+    if (!stored || stored.subject !== key) {
+      return false;
+    }
+    return now - stored.at < minGapMs;
+  } catch {
+    return false;
+  }
 }
 
 export function getLastProactiveMessageAt(): number {

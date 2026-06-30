@@ -1,7 +1,18 @@
+import { isTooSimilarToRecent } from "./replySimilarity";
+import type { ProactiveReplyTone } from "./proactiveTone";
+import type { ResponseMode } from "./responseModes";
+
 export type ReplyValidationContext = {
   hasVision: boolean;
   hasMemory: boolean;
   hasRag: boolean;
+  hasLiveTool?: boolean;
+  proactive?: boolean;
+  proactiveReplyTone?: ProactiveReplyTone;
+  hasDebugSignals?: boolean;
+  responseMode?: ResponseMode;
+  userAskedQuestion?: boolean;
+  recentAssistantReplies?: string[];
 };
 
 export type OocValidationResult = {
@@ -23,6 +34,12 @@ const ASSISTANT_TONE_PATTERN =
 
 const HABITUAL_TRAILING_QUESTION_PATTERN =
   /(?:хоч(?:ешь|ешь ли|ете)[^?]{0,90}|могу\s+(?:ещ[её]\s+)?(?:помочь|показать|разобрать|сделать)[^?]{0,60}|что\s+думаешь|как\s+тебе|продолжим|ид[её]м\s+дальше|расскажешь|окей|ок)\s*\?$/iu;
+
+const EVASIVE_REPLY_PATTERN =
+  /(?:лучше самому разобраться|сам(?:ому|а) разбер(?:ё|е)шься|если что-то конкретное интересует|не могу сказать точно|не уверена, что знаю|попробуй сам|я не эксперт)/i;
+
+const CONCRETE_ADVICE_PATTERN =
+  /(?:`|«|»|"|'|\d|npm |cargo |tsc |grep |git |try |проверь|запусти|открой|добавь|убери|измени|ошибк|команд|флаг|файл)/i;
 
 export function validateCharacterReply(
   reply: string,
@@ -74,11 +91,49 @@ export function validateCharacterReply(
     issues.push("assistant tone");
   }
   const questionMarks = (reply.match(/\?/g) ?? []).length;
-  if (questionMarks >= 2) {
+  const questionSpamLimit =
+    context.responseMode === "emotional_support" ||
+    context.responseMode === "casual" ||
+    context.responseMode === "teasing" ||
+    context.responseMode === "return_reaction" ||
+    context.responseMode === "idle_initiative"
+      ? 3
+      : 2;
+  if (questionMarks >= questionSpamLimit) {
     issues.push("question spam");
   }
   if (HABITUAL_TRAILING_QUESTION_PATTERN.test(reply.trim())) {
     issues.push("habitual trailing question");
+  }
+  if (
+    context.userAskedQuestion &&
+    EVASIVE_REPLY_PATTERN.test(reply) &&
+    reply.trim().length < 220 &&
+    !context.hasLiveTool &&
+    !context.hasRag &&
+    context.proactiveReplyTone !== "advice"
+  ) {
+    issues.push("evasive reply");
+  }
+  if (
+    context.proactive &&
+    context.proactiveReplyTone === "advice" &&
+    context.hasDebugSignals &&
+    reply.trim().length < 180 &&
+    !CONCRETE_ADVICE_PATTERN.test(reply)
+  ) {
+    issues.push("shallow advice");
+  }
+  const recent = context.recentAssistantReplies ?? [];
+  if (
+    recent.length > 0 &&
+    isTooSimilarToRecent(
+      reply,
+      recent,
+      context.proactive ? 0.72 : 0.85,
+    )
+  ) {
+    issues.push(context.proactive ? "duplicate proactive reply" : "duplicate reply");
   }
   return { valid: issues.length === 0, issues };
 }

@@ -8,6 +8,7 @@ export type ProactiveBridgeRequest = {
   eventHint: string;
   options?: ProactivePackageOptions;
   scenario?: Scenario;
+  lab?: boolean;
 };
 
 let queue: ProactiveBridgeRequest[] = [];
@@ -18,6 +19,7 @@ export function enqueueProactiveRequest(input: {
   eventHint: string;
   options?: ProactivePackageOptions;
   scenario?: Scenario;
+  lab?: boolean;
 }): number {
   const id = Date.now();
   queue.push({
@@ -26,6 +28,7 @@ export function enqueueProactiveRequest(input: {
     eventHint: input.eventHint,
     options: input.options,
     scenario: input.scenario,
+    lab: input.lab,
   });
   for (const listener of listeners) {
     listener();

@@ -44,10 +44,15 @@ const MIGRATION_KEY = "desktop-character.user-memory-idb-migrated.v1";
 let lastConflictDescription = "—";
 let factsCache: UserMemoryFact[] | null = null;
 let summariesCache: UserMemorySummary[] | null = null;
+let factsLoadPromise: Promise<UserMemoryFact[]> | null = null;
+let summariesLoadPromise: Promise<UserMemorySummary[]> | null = null;
+let initializePromise: Promise<void> | null = null;
 
 function invalidateUserMemoryCache(): void {
   factsCache = null;
   summariesCache = null;
+  factsLoadPromise = null;
+  summariesLoadPromise = null;
 }
 
 if (typeof window !== "undefined") {
@@ -65,6 +70,11 @@ function openDatabase(): Promise<IDBDatabase> {
       if (!database.objectStoreNames.contains(SUMMARIES_STORE)) {
         database.createObjectStore(SUMMARIES_STORE, { keyPath: "id" });
       }
+    };
+    request.onblocked = () => {
+      console.warn(
+        "[ari-memory] IndexedDB upgrade blocked by another connection",
+      );
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -117,69 +127,84 @@ function comparable(text: string): string {
 }
 
 export async function initializeUserMemory(): Promise<void> {
-  await openDatabase().then((database) => database.close());
-  if (localStorage.getItem(MIGRATION_KEY)) return;
+  if (!initializePromise) {
+    initializePromise = (async () => {
+      await openDatabase().then((database) => database.close());
+      if (localStorage.getItem(MIGRATION_KEY)) return;
 
-  try {
-    const legacy = JSON.parse(
-      localStorage.getItem(LEGACY_MEMORY_KEY) ?? "[]",
-    ) as unknown;
-    if (Array.isArray(legacy)) {
-      const now = Date.now();
-      const facts = legacy.flatMap((value): UserMemoryFact[] => {
-        if (!value || typeof value !== "object") return [];
-        const candidate = value as Partial<UserMemoryFact>;
-        if (typeof candidate.text !== "string" || !candidate.text.trim()) {
-          return [];
+      try {
+        const legacy = JSON.parse(
+          localStorage.getItem(LEGACY_MEMORY_KEY) ?? "[]",
+        ) as unknown;
+        if (Array.isArray(legacy)) {
+          const now = Date.now();
+          const facts = legacy.flatMap((value): UserMemoryFact[] => {
+            if (!value || typeof value !== "object") return [];
+            const candidate = value as Partial<UserMemoryFact>;
+            if (typeof candidate.text !== "string" || !candidate.text.trim()) {
+              return [];
+            }
+            return [{
+              id:
+                typeof candidate.id === "string"
+                  ? candidate.id
+                  : crypto.randomUUID(),
+              text: candidate.text.trim().slice(0, 500),
+              source: candidate.source === "manual" ? "manual" : "automatic",
+              importance: candidate.importance ?? "useful",
+              confidence:
+                typeof candidate.confidence === "number"
+                  ? candidate.confidence
+                  : candidate.source === "manual" ? 1 : 0.7,
+              lastSeenAt:
+                typeof candidate.lastSeenAt === "number"
+                  ? candidate.lastSeenAt
+                  : now,
+              createdAt:
+                typeof candidate.createdAt === "number"
+                  ? candidate.createdAt
+                  : now,
+              updatedAt:
+                typeof candidate.updatedAt === "number"
+                  ? candidate.updatedAt
+                  : now,
+            }];
+          });
+          await putMany(FACTS_STORE, facts);
         }
-        return [{
-          id:
-            typeof candidate.id === "string"
-              ? candidate.id
-              : crypto.randomUUID(),
-          text: candidate.text.trim().slice(0, 500),
-          source: candidate.source === "manual" ? "manual" : "automatic",
-          importance: candidate.importance ?? "useful",
-          confidence:
-            typeof candidate.confidence === "number"
-              ? candidate.confidence
-              : candidate.source === "manual" ? 1 : 0.7,
-          lastSeenAt:
-            typeof candidate.lastSeenAt === "number"
-              ? candidate.lastSeenAt
-              : now,
-          createdAt:
-            typeof candidate.createdAt === "number"
-              ? candidate.createdAt
-              : now,
-          updatedAt:
-            typeof candidate.updatedAt === "number"
-              ? candidate.updatedAt
-              : now,
-        }];
-      });
-      await putMany(FACTS_STORE, facts);
-    }
-  } finally {
-    localStorage.setItem(MIGRATION_KEY, "1");
-    localStorage.removeItem(LEGACY_MEMORY_KEY);
+      } finally {
+        localStorage.setItem(MIGRATION_KEY, "1");
+        localStorage.removeItem(LEGACY_MEMORY_KEY);
+      }
+    })().finally(() => {
+      initializePromise = null;
+    });
   }
+  return initializePromise;
 }
 
 export async function loadUserMemory(): Promise<UserMemoryFact[]> {
   if (factsCache) {
     return factsCache;
   }
-  await initializeUserMemory();
-  factsCache = (await getAll<UserMemoryFact>(FACTS_STORE)).map((fact) => ({
-    ...fact,
-    importance: fact.importance ?? "useful",
-    confidence: fact.confidence ?? (fact.source === "manual" ? 1 : 0.7),
-    lastSeenAt: fact.lastSeenAt ?? fact.updatedAt,
-  })).sort(
-    (left, right) => right.updatedAt - left.updatedAt,
-  );
-  return factsCache;
+  if (!factsLoadPromise) {
+    factsLoadPromise = (async () => {
+      await initializeUserMemory();
+      const facts = (await getAll<UserMemoryFact>(FACTS_STORE))
+        .map((fact) => ({
+          ...fact,
+          importance: fact.importance ?? "useful",
+          confidence: fact.confidence ?? (fact.source === "manual" ? 1 : 0.7),
+          lastSeenAt: fact.lastSeenAt ?? fact.updatedAt,
+        }))
+        .sort((left, right) => right.updatedAt - left.updatedAt);
+      factsCache = facts;
+      return facts;
+    })().finally(() => {
+      factsLoadPromise = null;
+    });
+  }
+  return factsLoadPromise;
 }
 
 export async function loadUserMemorySummaries(): Promise<
@@ -188,11 +213,19 @@ export async function loadUserMemorySummaries(): Promise<
   if (summariesCache) {
     return summariesCache;
   }
-  await initializeUserMemory();
-  summariesCache = (await getAll<UserMemorySummary>(SUMMARIES_STORE)).sort(
-    (left, right) => right.updatedAt - left.updatedAt,
-  );
-  return summariesCache;
+  if (!summariesLoadPromise) {
+    summariesLoadPromise = (async () => {
+      await initializeUserMemory();
+      const summaries = (await getAll<UserMemorySummary>(SUMMARIES_STORE)).sort(
+        (left, right) => right.updatedAt - left.updatedAt,
+      );
+      summariesCache = summaries;
+      return summaries;
+    })().finally(() => {
+      summariesLoadPromise = null;
+    });
+  }
+  return summariesLoadPromise;
 }
 
 export async function importMemorySummaries(

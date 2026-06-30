@@ -6,7 +6,6 @@ import { importanceRank } from "../memory/userMemory";
 import {
   computeHistoryBudget,
   estimateMessagesTokens,
-  estimateTextTokens,
   fitHistoryToTokenBudget,
   measurePromptOverhead,
 } from "./contextBudget";
@@ -98,6 +97,10 @@ export function buildTrimmedPromptContext(
   settings: AppSettings,
 ): TrimmedContext {
   const trimNotes: string[] = [];
+  const preservedProactiveEvent = runtimeContext.eventDescription;
+  const preservedProactiveSummary = runtimeContext.proactiveSignalSummary;
+  const preservedLinkNarrative = runtimeContext.proactiveLinkNarrative;
+  const preservedPracticalHook = runtimeContext.proactivePracticalHook;
   let context = cloneContext(runtimeContext);
   let fittedHistory = fitHistoryToContextPass(baseHistory, context, settings);
   const queryWords = queryWordSet(lastUserQuery(baseHistory));
@@ -155,23 +158,49 @@ export function buildTrimmedPromptContext(
   }
 
   while (tokens > limit && (context.memory?.length ?? 0) > 0) {
-    context.memory = dropLowestScored(context.memory ?? [], (fragment, index) =>
-      overlapScore(fragment.text, queryWords) * 10 + 1 / (index + 1),
-    );
+    const ragFragments = context.memory ?? [];
+    if (ragFragments.length <= 1) {
+      context.memory = [];
+    } else {
+      context.memory = dropLowestScored(ragFragments, (fragment, index) =>
+        overlapScore(fragment.text, queryWords) * 10 + 1 / (index + 1),
+      );
+    }
     trimNotes.push("урезан RAG");
     tokens = totalTokens(fittedHistory, context);
   }
 
+  let historyTrimPasses = 0;
   while (tokens > limit && fittedHistory.length > 2) {
+    historyTrimPasses += 1;
+    if (historyTrimPasses > fittedHistory.length + 4) {
+      break;
+    }
+    fittedHistory = fittedHistory.slice(1);
     fittedHistory = fitHistoryToTokenBudget(
-      fittedHistory.slice(1),
+      fittedHistory,
       computeHistoryBudget(
         settings,
-        measurePromptOverhead(fittedHistory.slice(1), context),
-      ) - estimateTextTokens(fittedHistory[0]?.content ?? ""),
+        measurePromptOverhead(fittedHistory, context),
+      ),
     );
     trimNotes.push("урезана история");
     tokens = totalTokens(fittedHistory, context);
+  }
+
+  if (context.proactive) {
+    if (preservedProactiveEvent) {
+      context.eventDescription = preservedProactiveEvent;
+    }
+    if (preservedProactiveSummary) {
+      context.proactiveSignalSummary = preservedProactiveSummary;
+    }
+    if (preservedLinkNarrative) {
+      context.proactiveLinkNarrative = preservedLinkNarrative;
+    }
+    if (preservedPracticalHook) {
+      context.proactivePracticalHook = preservedPracticalHook;
+    }
   }
 
   return { runtimeContext: context, fittedHistory, trimNotes };

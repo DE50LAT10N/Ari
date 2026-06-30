@@ -6,12 +6,13 @@ import { embeddingNorm } from "./memoryScoring";
 import {
   buildIvfIndex,
   searchIvfIndex,
-  searchVectorsLinear,
+  searchVectorsLinearAsync,
   type IndexedVector,
   type IvfIndex,
 } from "./ivfIndex";
 import { clearStoredIvfIndex, resolveIvfIndex } from "./ivfStore";
 import type { RetrievalSearchMode } from "./retrievalTelemetry";
+import { yieldToMain } from "../platform/asyncTimeout";
 
 export type MemoryEmbeddingKind = "fact" | "episode";
 
@@ -32,6 +33,12 @@ let databasePromise: Promise<IDBDatabase> | null = null;
 let entriesCache: MemoryEmbeddingEntry[] | null = null;
 let vectorCache: IndexedVector[] | null = null;
 let ivfIndex: IvfIndex | null = null;
+let vectorIndexReady = false;
+let vectorIndexPromise: Promise<{
+  vectors: IndexedVector[];
+  ivf: IvfIndex | null;
+  searchMode: RetrievalSearchMode;
+}> | null = null;
 let lastMemorySearchMode: RetrievalSearchMode = "none";
 
 export function getMemorySemanticSearchMode(): RetrievalSearchMode {
@@ -59,6 +66,8 @@ function invalidateCache(): void {
   entriesCache = null;
   vectorCache = null;
   ivfIndex = null;
+  vectorIndexReady = false;
+  vectorIndexPromise = null;
   lastMemorySearchMode = "none";
 }
 
@@ -85,6 +94,48 @@ async function loadAllEntries(): Promise<MemoryEmbeddingEntry[]> {
   return entriesCache;
 }
 
+async function loadVectorIndex(
+  settings?: AppSettings,
+): Promise<{
+  vectors: IndexedVector[];
+  ivf: IvfIndex | null;
+  searchMode: RetrievalSearchMode;
+}> {
+  const entries = await loadAllEntries();
+  const vectors = entries.map(toIndexedVector);
+  const entryPayload = entries.map((entry) => ({
+    id: entry.id,
+    embedding: entry.embedding,
+  }));
+
+  if (settings && entryPayload.length > 0) {
+    await yieldToMain();
+    const resolved = await resolveIvfIndex("memory", settings, entryPayload);
+    vectorCache = vectors;
+    ivfIndex = resolved.index;
+    lastMemorySearchMode = resolved.searchMode;
+    vectorIndexReady = true;
+    return {
+      vectors,
+      ivf: resolved.index,
+      searchMode: resolved.searchMode,
+    };
+  }
+
+  await yieldToMain();
+  const built = buildIvfIndex(entryPayload);
+  const searchMode: RetrievalSearchMode = built
+    ? "ivf"
+    : entryPayload.length
+      ? "linear"
+      : "none";
+  vectorCache = vectors;
+  ivfIndex = built;
+  lastMemorySearchMode = searchMode;
+  vectorIndexReady = true;
+  return { vectors, ivf: built, searchMode };
+}
+
 async function getVectorIndex(
   settings?: AppSettings,
 ): Promise<{
@@ -92,24 +143,19 @@ async function getVectorIndex(
   ivf: IvfIndex | null;
   searchMode: RetrievalSearchMode;
 }> {
-  if (vectorCache && ivfIndex) {
-    return { vectors: vectorCache, ivf: ivfIndex, searchMode: lastMemorySearchMode };
+  if (vectorIndexReady && vectorCache) {
+    return {
+      vectors: vectorCache,
+      ivf: ivfIndex,
+      searchMode: lastMemorySearchMode,
+    };
   }
-  const entries = await loadAllEntries();
-  vectorCache = entries.map(toIndexedVector);
-  const entryPayload = entries.map((entry) => ({
-    id: entry.id,
-    embedding: entry.embedding,
-  }));
-  if (settings && entryPayload.length > 0) {
-    const resolved = await resolveIvfIndex("memory", settings, entryPayload);
-    ivfIndex = resolved.index;
-    lastMemorySearchMode = resolved.searchMode;
-  } else {
-    ivfIndex = buildIvfIndex(entryPayload);
-    lastMemorySearchMode = ivfIndex ? "ivf" : "linear";
+  if (!vectorIndexPromise) {
+    vectorIndexPromise = loadVectorIndex(settings).finally(() => {
+      vectorIndexPromise = null;
+    });
   }
-  return { vectors: vectorCache, ivf: ivfIndex, searchMode: lastMemorySearchMode };
+  return vectorIndexPromise;
 }
 
 async function putEntry(entry: MemoryEmbeddingEntry): Promise<void> {
@@ -174,7 +220,11 @@ export async function scoreMemorySemantic(
 
     const rawScores = ivf
       ? searchIvfIndex(queryEmbedding, ivf, SEMANTIC_THRESHOLD)
-      : searchVectorsLinear(queryEmbedding, filtered, SEMANTIC_THRESHOLD);
+      : await searchVectorsLinearAsync(
+          queryEmbedding,
+          filtered,
+          SEMANTIC_THRESHOLD,
+        );
     lastMemorySearchMode = ivf ? "ivf" : filtered.length ? "linear" : "none";
 
     for (const item of items) {

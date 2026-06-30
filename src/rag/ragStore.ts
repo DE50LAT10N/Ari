@@ -1,3 +1,6 @@
+import { embeddingNorm } from "../memory/memoryScoring";
+import { yieldToMain } from "../platform/asyncTimeout";
+
 export type RagChunk = {
   id: string;
   source: string;
@@ -9,27 +12,31 @@ export type RagChunk = {
 const DATABASE_NAME = "ari-rag";
 const STORE_NAME = "chunks";
 const DATABASE_VERSION = 1;
+const IDB_OPEN_TIMEOUT_MS = 12_000;
 
 let ragChunksCache: RagChunk[] | null = null;
 let ragChunkNorms: Map<string, number> | null = null;
+let ragChunksLoadPromise: Promise<RagChunk[]> | null = null;
 
 export function invalidateRagChunksCache(): void {
   ragChunksCache = null;
   ragChunkNorms = null;
+  ragChunksLoadPromise = null;
 }
 
 export function getRagChunkNorms(): Map<string, number> | null {
   return ragChunkNorms;
 }
 
-function buildChunkNorms(chunks: RagChunk[]): Map<string, number> {
+async function buildChunkNormsAsync(chunks: RagChunk[]): Promise<Map<string, number>> {
   const norms = new Map<string, number>();
-  for (const chunk of chunks) {
-    let sum = 0;
-    for (const value of chunk.embedding) {
-      sum += value * value;
+  const batchSize = 200;
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index]!;
+    norms.set(chunk.id, embeddingNorm(chunk.embedding));
+    if (index > 0 && index % batchSize === 0) {
+      await yieldToMain();
     }
-    norms.set(chunk.id, Math.sqrt(sum) || 0);
   }
   return norms;
 }
@@ -37,6 +44,14 @@ function buildChunkNorms(chunks: RagChunk[]): Map<string, number> {
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(new Error("ari-rag: превышено время открытия IndexedDB"));
+    }, IDB_OPEN_TIMEOUT_MS);
 
     request.onupgradeneeded = () => {
       const database = request.result;
@@ -44,8 +59,25 @@ function openDatabase(): Promise<IDBDatabase> {
         database.createObjectStore(STORE_NAME, { keyPath: "id" });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onblocked = () => {
+      console.warn("[ari-rag] IndexedDB upgrade blocked by another connection");
+    };
+    request.onsuccess = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timer);
+      resolve(request.result);
+    };
+    request.onerror = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timer);
+      reject(request.error);
+    };
   });
 }
 
@@ -71,27 +103,36 @@ export async function saveRagChunks(chunks: RagChunk[]): Promise<void> {
   invalidateRagChunksCache();
 }
 
+async function loadRagChunksInner(): Promise<RagChunk[]> {
+  const database = await openDatabase();
+
+  const chunks = await new Promise<RagChunk[]>((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, "readonly");
+    const request = transaction.objectStore(STORE_NAME).getAll();
+    request.onsuccess = () => {
+      resolve(request.result as RagChunk[]);
+    };
+    request.onerror = () => {
+      reject(request.error);
+    };
+  });
+  database.close();
+
+  ragChunksCache = chunks;
+  ragChunkNorms = await buildChunkNormsAsync(chunks);
+  return chunks;
+}
+
 export async function loadRagChunks(): Promise<RagChunk[]> {
   if (ragChunksCache) {
     return ragChunksCache;
   }
-
-  const database = await openDatabase();
-
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, "readonly");
-    const request = transaction.objectStore(STORE_NAME).getAll();
-    request.onsuccess = () => {
-      database.close();
-      ragChunksCache = request.result as RagChunk[];
-      ragChunkNorms = buildChunkNorms(ragChunksCache);
-      resolve(ragChunksCache);
-    };
-    request.onerror = () => {
-      database.close();
-      reject(request.error);
-    };
-  });
+  if (!ragChunksLoadPromise) {
+    ragChunksLoadPromise = loadRagChunksInner().finally(() => {
+      ragChunksLoadPromise = null;
+    });
+  }
+  return ragChunksLoadPromise;
 }
 
 export async function clearRagChunks(): Promise<void> {

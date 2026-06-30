@@ -150,6 +150,20 @@ export function setCurrentGoal(id: string): Goal | null {
   return selected;
 }
 
+export function ensureGoalForFocus(goalText: string): Goal {
+  const existing = findGoalByTitle(goalText);
+  if (existing && existing.status === "active") {
+    setCurrentGoal(existing.id);
+    updateGoal(existing.id, { lastFocus: `Фокус: ${goalText}`, current: true });
+    return existing;
+  }
+  return addGoal({
+    title: goalText,
+    current: true,
+    notes: "Создано из фокус-сессии Ari.",
+  });
+}
+
 export function updateGoal(
   id: string,
   patch: Partial<Pick<Goal, "title" | "notes" | "status" | "progress" | "lastFocus" | "current">>,

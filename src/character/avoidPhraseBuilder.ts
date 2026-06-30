@@ -14,7 +14,10 @@ export function buildAvoidPhrases(limit = 10): string[] {
   const ranked = new Map<string, number>();
 
   for (const phrase of getRecentPhrases(limit)) {
-    const weight = (CATEGORY_WEIGHT[phrase.category] ?? 1) + Math.min(phrase.count, 3);
+    const weight =
+      (CATEGORY_WEIGHT[phrase.category] ?? 1) +
+      Math.min(phrase.count, 3) +
+      (phrase.category === "initiative" ? 2 : 0);
     ranked.set(
       phrase.originalPhrase,
       Math.max(ranked.get(phrase.originalPhrase) ?? 0, weight),

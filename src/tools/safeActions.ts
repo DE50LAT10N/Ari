@@ -5,7 +5,10 @@ import type { ChatMessage } from "../types/chat";
 import { addUserMemoryFacts } from "../memory/userMemory";
 import { addOpenLoops } from "../memory/episodicMemory";
 import { addTask } from "../tasks/taskStore";
+import { addGoal, findGoalByTitle, setCurrentGoal } from "../tasks/goalLedger";
 import { parseTaskTitleAndDue } from "../chat/taskChatParse";
+import { parsePomodoroStartRequest } from "../chat/productivityChat";
+import type { StartFocusSessionInput } from "../character/focusSession";
 import {
   classifyUserIntent,
   isHighConfidenceIntent,
@@ -30,11 +33,24 @@ export type SafeActionType =
   | "create_note"
   | "create_reminder"
   | "create_task"
+  | "create_goal"
+  | "set_current_goal"
+  | "start_pomodoro"
+  | "stop_pomodoro"
+  | "pause_pomodoro"
+  | "resume_pomodoro"
   | "create_memory_fact"
   | "create_open_thread"
   | "add_file_to_rag"
   | "open_settings_page"
   | "export_note";
+
+export type ProductivityActionHandlers = {
+  startFocus?: (input: StartFocusSessionInput) => void;
+  stopFocus?: () => void;
+  pausePomodoro?: () => void;
+  resumePomodoro?: () => void;
+};
 
 export type SafeActionProposal = {
   id: string;
@@ -77,6 +93,12 @@ function isActionType(value: unknown): value is SafeActionType {
     value === "create_note" ||
     value === "create_reminder" ||
     value === "create_task" ||
+    value === "create_goal" ||
+    value === "set_current_goal" ||
+    value === "start_pomodoro" ||
+    value === "stop_pomodoro" ||
+    value === "pause_pomodoro" ||
+    value === "resume_pomodoro" ||
     value === "create_memory_fact" ||
     value === "create_open_thread" ||
     value === "add_file_to_rag" ||
@@ -102,6 +124,47 @@ export function isSafeActionProposal(
   );
 }
 
+export function describeSafeActionDetail(action: SafeActionProposal): string {
+  switch (action.type) {
+    case "open_url":
+    case "open_path":
+      return action.target ?? "";
+    case "copy_text":
+      return `Скопировать: ${action.content?.slice(0, 120) ?? ""}`;
+    case "create_task":
+      return `Задача: ${action.content?.slice(0, 120) ?? action.target ?? ""}`;
+    case "create_goal":
+      return `Цель: ${action.content?.slice(0, 120) ?? action.target ?? ""}`;
+    case "set_current_goal":
+      return `Текущая цель: ${action.content?.slice(0, 120) ?? action.target ?? ""}`;
+    case "start_pomodoro":
+      return `Помодоро: ${action.content?.slice(0, 120) ?? action.target ?? "фокус"}`;
+    case "stop_pomodoro":
+      return "Остановить помодоро и фокус";
+    case "pause_pomodoro":
+      return "Пауза помодоро";
+    case "resume_pomodoro":
+      return "Продолжить помодоро";
+    case "create_memory_fact":
+      return `Запомнить: ${action.content?.slice(0, 120) ?? ""}`;
+    case "create_reminder":
+      return `Напоминание: ${action.content?.slice(0, 120) ?? ""}`;
+    case "create_open_thread":
+      return `Ветка: ${action.content?.slice(0, 120) ?? ""}`;
+    case "add_file_to_rag":
+      return action.target ?? action.content?.slice(0, 100) ?? "файл в RAG";
+    case "open_settings_page":
+      return "Открыть настройки";
+    default:
+      return (
+        action.filename ||
+        action.content?.slice(0, 100) ||
+        action.target ||
+        action.title
+      );
+  }
+}
+
 export async function extractSafeAction(
   userMessage: string,
   assistantReply: string,
@@ -122,7 +185,7 @@ export async function extractSafeAction(
   }
 
   if (
-    !/(открой|открыть|запусти|скопируй|копировать|создай|запиши|напомни|задач|дела|память|ветк|rag|журнал|настройк|open |copy |clipboard|create|remind|memory|thread|journal|settings|task|https?:\/\/|[a-zа-я]:\\)/i.test(
+    !/(открой|открыть|запусти|скопируй|копировать|создай|запиши|напомни|задач|дела|цель|помодоро|фокус|таймер|память|запомни|привычк|предпочита|ветк|rag|журнал|настройк|open |copy |clipboard|create|remind|memory|thread|journal|settings|task|goal|pomodoro|https?:\/\/|[a-zа-я]:\\)/i.test(
       userMessage,
     )
   ) {
@@ -134,9 +197,12 @@ export async function extractSafeAction(
       {
         role: "system",
         content: [
-          "Определи, явно ли пользователь попросил выполнить одно безопасное действие.",
-          "Допустимы: open_url, open_path, copy_text, create_note, create_reminder, create_task, create_memory_fact, create_open_thread, add_file_to_rag, open_settings_page, export_note.",
-          "Не предлагай действие по собственной инициативе.",
+          "Определи, явно ли пользователь попросил выполнить одно безопасное действие (или Ari в ответе согласилась это сделать после просьбы).",
+          "Допустимы: open_url, open_path, copy_text, create_note, create_reminder, create_task, create_goal, set_current_goal, start_pomodoro, stop_pomodoro, pause_pomodoro, resume_pomodoro, create_memory_fact, create_open_thread, add_file_to_rag, open_settings_page, export_note.",
+          "create_goal — новая долгосрочная цель; set_current_goal — переключить текущую цель.",
+          "start_pomodoro — запуск таймера фокуса; в content укажи цель/тему и при необходимости «25 мин».",
+          "create_memory_fact — устойчивый факт о пользователе (привычка, предпочтение, особенность).",
+          "Не предлагай действие по собственной инициативе без явной просьбы в диалоге.",
           'Верни {"action":null}, если явной просьбы нет.',
           'Иначе верни {"action":{"type":"...","title":"...","target":"...","content":"...","filename":"...","dueAt":"ISO8601"}}.',
         ].join("\n"),
@@ -187,6 +253,9 @@ export async function extractSafeAction(
       candidate.type === "create_open_thread" ||
       candidate.type === "create_reminder" ||
       candidate.type === "create_task" ||
+      candidate.type === "create_goal" ||
+      candidate.type === "set_current_goal" ||
+      candidate.type === "start_pomodoro" ||
       candidate.type === "add_file_to_rag") &&
     !content &&
     !target
@@ -212,8 +281,79 @@ export async function extractSafeAction(
 export async function executeSafeAction(
   action: SafeActionProposal,
   settings: AppSettings,
+  handlers?: ProductivityActionHandlers,
 ): Promise<string> {
   const text = actionText(action);
+
+  if (action.type === "create_goal") {
+    if (!text) {
+      throw new Error("Укажи название цели.");
+    }
+    const goal = addGoal({
+      title: text.slice(0, 200),
+      current: true,
+      notes: "Создано из диалога с подтверждением.",
+    });
+    const result = `Цель «${goal.title}» добавлена и взята в фокус.`;
+    appendActionLog(action, "approved", result);
+    return result;
+  }
+
+  if (action.type === "set_current_goal") {
+    if (!text) {
+      throw new Error("Укажи цель для фокуса.");
+    }
+    const goal = findGoalByTitle(text);
+    if (!goal || goal.status !== "active") {
+      throw new Error(`Не нашла активную цель «${text}».`);
+    }
+    setCurrentGoal(goal.id);
+    const result = `Текущая цель: «${goal.title}».`;
+    appendActionLog(action, "approved", result);
+    return result;
+  }
+
+  if (action.type === "start_pomodoro") {
+    if (!settings.pomodoroEnabled) {
+      throw new Error("Помодоро выключено в настройках.");
+    }
+    if (!handlers?.startFocus) {
+      throw new Error("Запуск помодоро недоступен в этом контексте.");
+    }
+    const { goal, minutes } = parsePomodoroStartRequest(
+      text ?? action.title,
+      settings.pomodoroFocusMinutes,
+    );
+    handlers.startFocus({
+      goal,
+      plannedMinutes: minutes,
+      breakMinutes: settings.pomodoroBreakMinutes,
+    });
+    const result = `Помодоро запущен: ${minutes} мин, «${goal}».`;
+    appendActionLog(action, "approved", result);
+    return result;
+  }
+
+  if (action.type === "stop_pomodoro") {
+    handlers?.stopFocus?.();
+    const result = "Помодоро и фокус остановлены.";
+    appendActionLog(action, "approved", result);
+    return result;
+  }
+
+  if (action.type === "pause_pomodoro") {
+    handlers?.pausePomodoro?.();
+    const result = "Помодоро на паузе.";
+    appendActionLog(action, "approved", result);
+    return result;
+  }
+
+  if (action.type === "resume_pomodoro") {
+    handlers?.resumePomodoro?.();
+    const result = "Помодоро продолжен.";
+    appendActionLog(action, "approved", result);
+    return result;
+  }
 
   if (action.type === "create_memory_fact") {
     if (!text) {

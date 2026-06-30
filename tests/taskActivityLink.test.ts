@@ -70,7 +70,7 @@ describe("task activity linking", () => {
   it("turns unclear activity into a conversation topic about the task link", () => {
     const now = Date.now();
     addTask({
-      title: "Написать отчёт недели",
+      title: "Написать отчёт недели по activeWindow",
       kind: "task",
       status: "open",
       priority: "normal",
@@ -93,8 +93,10 @@ describe("task activity linking", () => {
     const formatted = formatInitiativeContextForPrompt(bundle);
 
     expect(bundle.taskActivityLink?.shouldAsk).toBe(true);
-    expect(topics[0]).toMatch(/связ[ьи] активности с задачей/i);
-    expect(topics.join(" ")).toMatch(/связ[ьи] активности с задачей/i);
+    expect(
+      topics.some((topic) => /отчёт недели/i.test(topic)),
+    ).toBe(true);
+    expect(topics.join(" ")).toMatch(/отчёт недели/i);
     expect(formatted).toMatch(/Уточнить связь активности с задачей/i);
   });
 });

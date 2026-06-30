@@ -95,6 +95,13 @@ export function allowsInitiativeForKind(
   return false;
 }
 
+export function canEmitProactiveReply(
+  tier: Interruptibility,
+  kind: InitiativeKind = "check_in",
+): boolean {
+  return allowsInitiativeForKind(tier, kind);
+}
+
 export function allowsReminder(tier: Interruptibility): boolean {
   return tier === "normal" || tier === "urgent_only";
 }

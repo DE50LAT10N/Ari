@@ -3525,6 +3525,19 @@ button {
   margin-top: 8px;
 }
 
+.ari-lab-json {
+  margin-top: 8px;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow: auto;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

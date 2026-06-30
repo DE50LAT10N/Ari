@@ -481,7 +481,11 @@ export function scoreInitiativeLocally({
   const minUserSilenceMs = plannedCheckReady
     ? Math.min(60_000, plannedCheckMinSilenceMs)
     : 60_000;
-  if (dailyCount >= dailyCap || recentlyIgnored || userActivityAgoMs < minUserSilenceMs) {
+  if (
+    (dailyCap < 9999 && dailyCount >= dailyCap) ||
+    recentlyIgnored ||
+    userActivityAgoMs < minUserSilenceMs
+  ) {
     risk = "high";
   }
 
@@ -497,7 +501,7 @@ export function scoreInitiativeLocally({
     value = "medium";
   }
   if (repeated) value = "low";
-  if (plannedCheckReady && !freshTopicsAvailable && riskTolerance >= 0) {
+  if (plannedCheckReady && !freshTopicsAvailable && riskTolerance < 1) {
     return {
       allowed: false,
       reason: "нет свежих тем для инициативы",

@@ -38,7 +38,7 @@ export function pickMemorySnippet(
     .filter((entry) => !entry.supersededAt && entry.text.length >= 8)
     .map((fact) => ({ fact, score: scoreText(fact.text) }))
     .sort((left, right) => right.score - left.score);
-  if (rankedFacts[0]?.score > 0 || rankedFacts[0]) {
+  if (rankedFacts[0]?.score > 0) {
     const best = rankedFacts[0];
     if (best) {
       return { text: best.fact.text, kind: "fact" };
@@ -51,7 +51,7 @@ export function pickMemorySnippet(
       score: scoreText(`${episode.title} ${episode.text}`),
     }))
     .sort((left, right) => right.score - left.score);
-  if (rankedEpisodes[0]) {
+  if (rankedEpisodes[0]?.score > 0) {
     const best = rankedEpisodes[0];
     return {
       text: `${best.episode.title}: ${best.episode.text}`.slice(0, 240),

@@ -28,6 +28,8 @@ import {
   getLastProactiveAttemptAt,
   getLastProactiveMessageAt,
 } from "../character/proactiveState";
+import { getLastAdviceUrgency } from "../character/adviceUrgency";
+import { getLastProactiveLlmBundle } from "../character/proactiveLlmEngine";
 import {
   dailyInitiativeCap,
   proactiveIntervalMs,
@@ -48,10 +50,20 @@ type DeskSnapshot = {
 type ProactiveDebug = {
   providerLabel: string;
   providerOnline: boolean;
+  advisorEnabled: boolean;
+  adviceSlotActive: boolean;
   initiativesToday: number;
   dailyCap: number;
   nextCheckInSec: number;
   lastSuppressions: string[];
+  adviceUrgencyLevel: string;
+  adviceUrgencyScore: number;
+  adviceUrgencyReasons: string[];
+  adviceEffectiveIntervalMin: number;
+  lastBundleScore: number | null;
+  lastBundleShouldSend: boolean | null;
+  lastInitiativeMove: string | null;
+  lastPrimaryChain: string | null;
 };
 
 function buildSnapshot(): DeskSnapshot {
@@ -74,16 +86,35 @@ function buildProactiveDebug(): ProactiveDebug {
   const health = getMemoryHealthSnapshot();
   const isGigaChat = settings.llmProvider === "gigachat";
   const providerOnline = isLlmProviderOnline(settings, null);
+  const urgency = getLastAdviceUrgency();
+  const lastBundle = getLastProactiveLlmBundle();
 
   return {
     providerLabel: isGigaChat ? "GigaChat" : "Ollama",
-    providerOnline: isGigaChat ? providerOnline : false,
+    providerOnline,
+    advisorEnabled: settings.advisorEnabled,
+    adviceSlotActive:
+      settings.advisorEnabled &&
+      providerOnline &&
+      urgency !== null &&
+      urgency.level !== "none",
     initiativesToday: getDailyInitiativeCount(),
     dailyCap: dailyInitiativeCap(settings),
     nextCheckInSec,
     lastSuppressions: health.lastSuppressions
       .slice(-3)
       .map((entry) => entry.reason),
+    adviceUrgencyLevel: urgency?.level ?? "—",
+    adviceUrgencyScore: urgency?.score ?? 0,
+    adviceUrgencyReasons: urgency?.reasons ?? [],
+    adviceEffectiveIntervalMin: urgency
+      ? Math.ceil(urgency.effectiveIntervalMs / 60_000)
+      : Math.ceil(intervalMs / 60_000),
+    lastBundleScore: lastBundle?.usefulnessScore ?? null,
+    lastBundleShouldSend: lastBundle ? lastBundle.shouldSend : null,
+    lastInitiativeMove: lastBundle?.initiativeMove ?? null,
+    lastPrimaryChain:
+      lastBundle?.primaryChainSummary ?? lastBundle?.narrativeBrief ?? null,
   };
 }
 
@@ -209,6 +240,17 @@ export function AriDiagnosticsSection() {
               </dd>
             </div>
             <div>
+              <dt>Слот совета</dt>
+              <dd>
+                {proactiveDebug.advisorEnabled ? "советник вкл" : "советник выкл"}{" "}
+                · LLM{" "}
+                {proactiveDebug.providerOnline ? "online" : "offline"} ·{" "}
+                {proactiveDebug.adviceSlotActive
+                  ? "есть сигналы"
+                  : "только presence"}
+              </dd>
+            </div>
+            <div>
               <dt>LLM ({proactiveDebug.providerLabel})</dt>
               <dd>
                 {settings.llmProvider === "gigachat"
@@ -230,6 +272,42 @@ export function AriDiagnosticsSection() {
                   : "—"}
               </dd>
             </div>
+            <div>
+              <dt>Срочность совета</dt>
+              <dd>
+                {proactiveDebug.adviceUrgencyLevel} · score{" "}
+                {proactiveDebug.adviceUrgencyScore} · интервал{" "}
+                {proactiveDebug.adviceEffectiveIntervalMin} мин
+              </dd>
+            </div>
+            {proactiveDebug.adviceUrgencyReasons.length > 0 && (
+              <div>
+                <dt>Сигналы совета</dt>
+                <dd>{proactiveDebug.adviceUrgencyReasons.join(" · ")}</dd>
+              </div>
+            )}
+            <div>
+              <dt>Последний bundle</dt>
+              <dd>
+                {proactiveDebug.lastBundleScore !== null
+                  ? `score ${proactiveDebug.lastBundleScore.toFixed(2)} · shouldSend ${
+                      proactiveDebug.lastBundleShouldSend ? "да" : "нет"
+                    }`
+                  : "ещё не было"}
+              </dd>
+            </div>
+            {proactiveDebug.lastInitiativeMove && (
+              <div>
+                <dt>Последний move</dt>
+                <dd>{proactiveDebug.lastInitiativeMove}</dd>
+              </div>
+            )}
+            {proactiveDebug.lastPrimaryChain && (
+              <div>
+                <dt>Primary chain</dt>
+                <dd>{proactiveDebug.lastPrimaryChain}</dd>
+              </div>
+            )}
             <div>
               <dt>Последняя инициатива</dt>
               <dd>

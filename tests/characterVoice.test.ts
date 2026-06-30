@@ -38,12 +38,27 @@ describe("characterVoice", () => {
     expect(shouldRetryReply(result)).toBe(true);
   });
 
-  it("allows necessary single clarification questions", () => {
+  it("allows two caring questions in emotional support", () => {
     const result = validateCharacterReply(
-      "Уточни, пожалуйста: речь про dev-сборку или установленный билд?",
-      emptyContext,
+      "Может, чайку горячего? Или расскажу анекдот, чтобы поднять настроение?",
+      { ...emptyContext, responseMode: "emotional_support" },
     );
-    expect(result.issues).not.toContain("habitual trailing question");
     expect(result.issues).not.toContain("question spam");
+  });
+
+  it("flags three questions as spam even in emotional support", () => {
+    const result = validateCharacterReply(
+      "Как ты? Что болит? Может, отдохнёшь?",
+      { ...emptyContext, responseMode: "emotional_support" },
+    );
+    expect(result.issues).toContain("question spam");
+  });
+
+  it("builds correction for proactive quality issues", () => {
+    const message = buildCorrectionUserMessage(["proactive quality"]);
+    expect(message).toMatch(/конкретн/i);
+    expect(shouldRetryReply({ valid: false, issues: ["proactive quality"] })).toBe(
+      true,
+    );
   });
 });

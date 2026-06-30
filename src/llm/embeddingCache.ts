@@ -4,6 +4,7 @@ import {
   resolveEmbeddingModel,
 } from "./embeddingConfig";
 import { embedTexts } from "../rag/ragClient";
+import { withTimeout } from "../platform/asyncTimeout";
 
 const MAX_ENTRIES = 32;
 
@@ -68,17 +69,19 @@ export async function embedQueryCached(
     return pending;
   }
 
-  const promise = embedTexts([trimmed], settings)
-    .then(([embedding]) => {
+  const promise = withTimeout(
+    embedTexts([trimmed], settings).then(([embedding]) => {
       cache.set(key, { embedding, at: Date.now() });
       inFlight.delete(key);
       trimCache();
       return embedding;
-    })
-    .catch((error) => {
-      inFlight.delete(key);
-      throw error;
-    });
+    }),
+    30_000,
+    "Embedding запроса",
+  ).catch((error) => {
+    inFlight.delete(key);
+    throw error;
+  });
 
   inFlight.set(key, promise);
   return promise;

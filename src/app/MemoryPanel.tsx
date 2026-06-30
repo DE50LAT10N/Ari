@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   addUserMemoryFacts,
   clearUserMemory,
-  getUserMemoryStats,
   loadUserMemory,
   loadUserMemorySummaries,
   removeUserMemoryFact,
@@ -42,25 +41,41 @@ export function MemoryPanel({ onBack }: MemoryPanelProps) {
   const [episodes, setEpisodes] = useState<MemoryEpisode[]>([]);
   const [inbox, setInbox] = useState<AriInboxItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function refresh() {
-    const [nextFacts, nextSummaries, nextStats, nextEpisodes] =
-      await Promise.all([
+    setLoadError(null);
+    try {
+      const [nextFacts, nextSummaries, nextEpisodes] = await Promise.all([
         loadUserMemory(),
         loadUserMemorySummaries(),
-        getUserMemoryStats(),
         loadEpisodes(),
       ]);
-    setFacts(nextFacts);
-    setSummaries(nextSummaries);
-    setStats(nextStats);
-    setEpisodes(nextEpisodes);
-    setInbox(
-      loadAriInbox().filter(
-        (item) => item.kind === "memory" || item.kind === "memory_conflict",
-      ),
-    );
-    setLoading(false);
+      setFacts(nextFacts);
+      setSummaries(nextSummaries);
+      setStats({
+        facts: nextFacts.length,
+        activeFacts: nextFacts.filter(
+          ({ consolidatedAt, supersededAt }) => !consolidatedAt && !supersededAt,
+        ).length,
+        summaries: nextSummaries.length,
+      });
+      setEpisodes(nextEpisodes);
+      setInbox(
+        loadAriInbox().filter(
+          (item) => item.kind === "memory" || item.kind === "memory_conflict",
+        ),
+      );
+    } catch (error) {
+      console.error("Failed to load Ari memory", error);
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось загрузить память Ari.",
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -121,6 +136,25 @@ export function MemoryPanel({ onBack }: MemoryPanelProps) {
         aria-label="Память Ari"
       >
         Загрузка памяти…
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div
+        className="memory-panel loading"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Память Ari"
+      >
+        <p>{loadError}</p>
+        <button type="button" onClick={() => void refresh()}>
+          Повторить
+        </button>
+        <button type="button" onClick={onBack}>
+          Назад
+        </button>
       </div>
     );
   }

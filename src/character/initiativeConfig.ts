@@ -1,6 +1,46 @@
 import type { AppSettings } from "../settings/appSettings";
 import type { InitiativeKind } from "./initiativeKinds";
 
+export const URGENT_ADVICE_MIN_MS = 5 * 60_000;
+export const MEDIUM_ADVICE_CAP_MS = 10 * 60_000;
+
+export function allowsGenericCompanionInitiative(
+  activityAgoMs: number,
+  plannedSilenceMs: number,
+  options: {
+    immersedCompanion?: boolean;
+    companionSilenceMs?: number;
+    companionSilenceMinMs?: number;
+  } = {},
+): boolean {
+  if (
+    options.immersedCompanion &&
+    options.companionSilenceMs !== undefined &&
+    options.companionSilenceMinMs !== undefined
+  ) {
+    return options.companionSilenceMs >= options.companionSilenceMinMs;
+  }
+  return activityAgoMs >= plannedSilenceMs;
+}
+
+export function prefersLocalCompanionLines(
+  _settings: AppSettings,
+  _intervalMs: number,
+  options: { practicalContext?: boolean; llmOffline?: boolean } = {},
+): boolean {
+  if (!options.llmOffline) {
+    return false;
+  }
+  return !options.practicalContext;
+}
+
+export function shouldUseIdleLineFallback(
+  settings: AppSettings,
+  llmOnline: boolean,
+): boolean {
+  return prefersLocalCompanionLines(settings, 0, { llmOffline: !llmOnline });
+}
+
 export function proactiveIntervalMs(settings: AppSettings): number {
   const baseMinutes = Math.max(1, settings.proactiveIntervalMinutes);
   switch (settings.initiativeLevel) {
@@ -30,6 +70,7 @@ export function idleLineProbability(settings: AppSettings): number {
 
 const UNLIMITED_DAILY = 9999;
 
+/** Telemetry-only; no practical daily limit on initiatives. */
 export function dailyInitiativeCap(_settings: AppSettings): number {
   return UNLIMITED_DAILY;
 }

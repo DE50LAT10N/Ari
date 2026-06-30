@@ -9,10 +9,6 @@ import {
   updateGoal,
 } from "../tasks/goalLedger";
 import {
-  classifyUserIntent,
-  isHighConfidenceIntent,
-} from "../character/userIntent";
-import {
   addTask,
   completeTask,
   completeTaskWithGoalInference,
@@ -23,9 +19,24 @@ import {
   updateTask,
   type Task,
 } from "../tasks/taskStore";
+import {
+  classifyUserIntent,
+  isHighConfidenceIntent,
+} from "../character/userIntent";
 import type { AppSettings } from "../settings/appSettings";
 import type { CharacterEmotion } from "../types/character";
+import type { CharacterMood } from "../character/mood";
 import { wrapCommandReply } from "./commandCharacterWrap";
+import { addUserMemoryFacts } from "../memory/userMemory";
+import { tryHandleProductivityChatCommand } from "./productivityChat";
+import {
+  buildMoodRefusalReply,
+  deriveMoodArchetype,
+  moodRefusalKindForCommand,
+  shouldMoodRefuseRequest,
+} from "../character/moodBehavior";
+import { parseCommandTail } from "./commandTailParser";
+import { isLlmProviderOnline } from "../llm/providerOnline";
 
 type TaskCommandOutcome =
   | { handled: false }
@@ -114,16 +125,45 @@ function findOpenTaskByTitle(fragment: string): Task | null {
   );
 }
 
-function addTaskFromText(
-  rawTitle: string,
+function moodCommandBlock(
+  command: string,
+  mood?: CharacterMood,
+): TaskCommandOutcome | null {
+  if (!mood) {
+    return null;
+  }
+  const kind = moodRefusalKindForCommand(command);
+  if (!shouldMoodRefuseRequest(mood, kind)) {
+    return null;
+  }
+  const archetype = deriveMoodArchetype(mood);
+  const wrapped = wrapCommandReply(
+    "mood-refusal",
+    buildMoodRefusalReply(mood, kind),
+  );
+  return {
+    handled: true,
+    command: "mood-refusal",
+    reply: wrapped.reply,
+    emotion: archetype === "irritated" ? "annoyed" : "sleepy",
+  };
+}
+
+function addTaskFromParsed(
+  title: string,
+  dueAt: number | undefined,
   sourceMessage: string,
+  mood?: CharacterMood,
 ): TaskCommandOutcome {
-  const { title, dueAt } = parseTaskTitleAndDue(rawTitle);
-  if (!title) {
+  const blocked = moodCommandBlock("task-add", mood);
+  if (blocked) {
+    return blocked;
+  }
+  if (!title.trim()) {
     return handled("task-add", "Напиши, что добавить: «добавь задачу …».");
   }
   const task = addTask({
-    title,
+    title: title.trim(),
     kind: dueAt ? "reminder" : "task",
     status: "open",
     priority: "normal",
@@ -142,22 +182,18 @@ function addTaskFromText(
   );
 }
 
-export function ensureGoalForFocus(goalText: string): ReturnType<typeof addGoal> {
-  const existing = findGoalByTitle(goalText);
-  if (existing && existing.status === "active") {
-    setCurrentGoal(existing.id);
-    updateGoal(existing.id, { lastFocus: `Фокус: ${goalText}`, current: true });
-    return existing;
-  }
-  return addGoal({
-    title: goalText,
-    current: true,
-    notes: "Создано из фокус-сессии Ari.",
-  });
+function addTaskFromText(
+  rawTitle: string,
+  sourceMessage: string,
+  mood?: CharacterMood,
+): TaskCommandOutcome {
+  const { title, dueAt } = parseTaskTitleAndDue(rawTitle);
+  return addTaskFromParsed(title, dueAt, sourceMessage, mood);
 }
 
 export function tryHandleTaskChatCommand(
   rawInput: string,
+  mood?: CharacterMood,
 ): TaskCommandOutcome {
   const input = rawInput.trim();
   const lower = input.toLowerCase().replace(/\s+/g, " ");
@@ -166,6 +202,8 @@ export function tryHandleTaskChatCommand(
   const addGoalMatch =
     input.match(/^добавь\s+цель\s+(.+)$/i) ??
     input.match(/^создай\s+цель\s+(.+)$/i) ??
+    input.match(/^новая\s+цель\s*[:\-]?\s*(.+)$/i) ??
+    input.match(/^поставь\s+цель\s+(.+)$/i) ??
     input.match(/^цель[:\s]+(.+)$/i);
   if (addGoalMatch?.[1]) {
     const raw = addGoalMatch[1].trim();
@@ -173,6 +211,10 @@ export function tryHandleTaskChatCommand(
     const title = progressMatch ? raw.slice(0, progressMatch.index).trim() : raw;
     if (!title) {
       return handled("goal-add", "Напиши цель после команды.");
+    }
+    const blocked = moodCommandBlock("goal-add", mood);
+    if (blocked) {
+      return blocked;
     }
     const goal = addGoal({
       title,
@@ -266,11 +308,15 @@ export function tryHandleTaskChatCommand(
     intent.intent === "task_command" &&
     !/^(?:добавь|напомни|создай|запиши|список|сделано|отложи)/i.test(lower)
   ) {
-    return addTaskFromText(input, input);
+    return addTaskFromText(input, input, mood);
   }
 
   const tomorrowAdd = input.match(/^запиши\s+на\s+завтра\s+(.+)$/i);
   if (tomorrowAdd?.[1]) {
+    const blocked = moodCommandBlock("task-add", mood);
+    if (blocked) {
+      return blocked;
+    }
     const { title, dueAt } = parseTaskTitleAndDue(
       `завтра 9:00 ${tomorrowAdd[1]}`,
     );
@@ -310,7 +356,7 @@ export function tryHandleTaskChatCommand(
   for (const pattern of addMatchers) {
     const match = input.match(pattern);
     if (match?.[1]) {
-      return addTaskFromText(match[1], input);
+      return addTaskFromText(match[1], input, mood);
     }
   }
 
@@ -323,7 +369,7 @@ export function tryHandleTaskChatCommand(
   for (const pattern of reminderMatchers) {
     const match = input.match(pattern);
     if (match?.[1]) {
-      return addTaskFromText(match[1], input);
+      return addTaskFromText(match[1], input, mood);
     }
   }
 
@@ -430,8 +476,137 @@ const completeMatchers = [
 export async function tryHandleTaskChatCommandAsync(
   rawInput: string,
   settings: AppSettings,
+  mood?: CharacterMood,
+  ollamaOnline: boolean | null = null,
 ): Promise<TaskCommandOutcome> {
   const input = rawInput.trim();
+  if (!input) return { handled: false };
+
+  const productivity = tryHandleProductivityChatCommand(input, settings, mood);
+  if (productivity.handled) {
+    return productivity;
+  }
+
+  const rememberMatch =
+    input.match(/^(?:запомни|сохрани в память|запомни что|не забудь)[:\s]+(.+)$/isu) ??
+    input.match(/^я\s+(?:обычно|всегда|часто|редко)\s+(.+)$/isu);
+  if (rememberMatch?.[1]) {
+    const fact = rememberMatch[1].trim();
+    if (fact.length >= 4) {
+      const blocked = moodCommandBlock("memory-remember", mood);
+      if (blocked) {
+        return blocked;
+      }
+      const result = await addUserMemoryFacts([fact], "manual");
+      const body = result.changed
+        ? `Запомнила: «${fact.slice(0, 160)}». Это в памяти о тебе.`
+        : `Уже помню: «${fact.slice(0, 160)}».`;
+      return handled("memory-remember", body);
+    }
+  }
+
+  if (isLlmProviderOnline(settings, ollamaOnline)) {
+    const addGoalMatch =
+      input.match(/^добавь\s+цель\s+(.+)$/i) ??
+      input.match(/^создай\s+цель\s+(.+)$/i) ??
+      input.match(/^новая\s+цель\s*[:\-]?\s*(.+)$/i) ??
+      input.match(/^поставь\s+цель\s+(.+)$/i) ??
+      input.match(/^цель[:\s]+(.+)$/i);
+    if (addGoalMatch?.[1]) {
+      const parsed = await parseCommandTail(
+        settings,
+        "goal-add",
+        addGoalMatch[1],
+        input,
+        ollamaOnline,
+      );
+      if (!parsed.execute) {
+        return { handled: false };
+      }
+      const raw = parsed.title ?? addGoalMatch[1].trim();
+      const progressMatch = raw.match(/\s+(\d{1,3})%\s*$/);
+      const title = progressMatch ? raw.slice(0, progressMatch.index).trim() : raw;
+      if (!title) {
+        return handled("goal-add", "Напиши цель после команды.");
+      }
+      const blocked = moodCommandBlock("goal-add", mood);
+      if (blocked) {
+        return blocked;
+      }
+      const goal = addGoal({
+        title,
+        progress: progressMatch ? Number(progressMatch[1]) : 0,
+        current: true,
+      });
+      return handled(
+        "goal-add",
+        `Цель добавлена и взята в фокус: «${goal.title}» (${goal.progress}%).`,
+      );
+    }
+
+    const addMatchers = [
+      /^добавь\s+задач[уеаи]?\s+(.+)$/i,
+      /^добавить\s+задач[уеаи]?\s+(.+)$/i,
+      /^добавь\s+в\s+дела\s+(.+)$/i,
+      /^положи\s+в\s+дела\s+(.+)$/i,
+      /^внеси\s+в\s+дела\s+(.+)$/i,
+      /^запиши\s+задач[уеаи]?\s+(.+)$/i,
+      /^запиши\s+в\s+дела\s+(.+)$/i,
+      /^создай\s+задач[уеаи]?\s+(.+)$/i,
+      /^новая\s+задач[аеи]?\s*[:\-]?\s*(.+)$/i,
+      /^(?:можешь\s+)?добав(?:ь|ить)\s+(?:мне\s+)?задач[уеаи]?\s+(.+)$/i,
+    ];
+    for (const pattern of addMatchers) {
+      const match = input.match(pattern);
+      if (match?.[1]) {
+        const parsed = await parseCommandTail(
+          settings,
+          "task-add",
+          match[1],
+          input,
+          ollamaOnline,
+        );
+        if (!parsed.execute) {
+          return { handled: false };
+        }
+        return addTaskFromParsed(
+          parsed.title ?? match[1],
+          parsed.dueAt,
+          input,
+          mood,
+        );
+      }
+    }
+
+    const reminderMatchers = [
+      /^напомни(?:\s+мне)?\s+(?:о|об|про)?\s*(.+)$/i,
+      /^создай\s+напоминание\s+(.+)$/i,
+      /^поставь\s+напоминание\s+(.+)$/i,
+      /^напоминание\s+(.+)$/i,
+    ];
+    for (const pattern of reminderMatchers) {
+      const match = input.match(pattern);
+      if (match?.[1]) {
+        const parsed = await parseCommandTail(
+          settings,
+          "reminder",
+          match[1],
+          input,
+          ollamaOnline,
+        );
+        if (!parsed.execute) {
+          return { handled: false };
+        }
+        return addTaskFromParsed(
+          parsed.title ?? match[1],
+          parsed.dueAt,
+          input,
+          mood,
+        );
+      }
+    }
+  }
+
   const completeMatchers = [
     /^заверш(?:и|ить)\s+задач[уеаи]?\s+(.+)$/i,
     /^отметь\s+выполненным\s+(.+)$/i,
@@ -461,5 +636,5 @@ export async function tryHandleTaskChatCommandAsync(
     );
   }
 
-  return tryHandleTaskChatCommand(rawInput);
+  return tryHandleTaskChatCommand(rawInput, mood);
 }

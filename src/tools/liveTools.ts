@@ -2,6 +2,7 @@ import type { AppSettings } from "../settings/appSettings";
 import type { ChatMessage } from "../types/chat";
 import { completeLlmJson } from "../llm/llmClient";
 import { sanitizeUntrusted, wrapUntrusted } from "../character/promptSafety";
+import { withTimeout } from "../platform/asyncTimeout";
 import { httpFetch } from "../platform/webTools";
 
 export type LiveToolKind = "web_search" | "web_fetch" | "datetime";
@@ -19,10 +20,58 @@ type LiveToolPlanResponse = {
 };
 
 const LIVE_TOOL_KEYWORDS =
-  /(?:который час|сколько времени|сейчас час|какое время|какая дата|какой день|сегодня число|что сейчас|погод|найди|поиск|загугли|погугли|в интернете|актуальн|новост|курс|цена|когда вышел|что такое|кто такой|https?:\/\/|www\.)/i;
+  /(?:который час|сколько времени|сейчас час|какое время|какая дата|какой день|сегодня число|что сейчас|погод|найди|поиск|загугли|погугли|в интернете|актуальн|новост|курс|цена|когда вышел|что такое|кто такой|подскажи|объясни|расскажи|что значит|как сделать|как работает|почему|зачем|https?:\/\/|www\.)/i;
+
+/** Date/time, URL, weather — needs LLM tool picker. Generic questions use direct web fallback. */
+const EXPLICIT_LIVE_TOOL_PLANNER =
+  /(?:который час|сколько времени|сейчас час|какое время|какая дата|какой день|сегодня число|погод|https?:\/\/|www\.)/i;
 
 export function shouldConsiderLiveTools(userMessage: string): boolean {
   return LIVE_TOOL_KEYWORDS.test(userMessage.trim());
+}
+
+export function needsExplicitLiveToolPlanner(userMessage: string): boolean {
+  return EXPLICIT_LIVE_TOOL_PLANNER.test(userMessage.trim());
+}
+
+export function isQuestionLikeMessage(userMessage: string): boolean {
+  const normalized = userMessage.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /(?:подскажи|объясни|расскажи|что такое|как сделать|как работает|почему|зачем|когда|где|кто такой|можешь ли|что значит)/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  return /\?/.test(normalized) && normalized.length >= 12;
+}
+
+const EXTERNAL_WEB_HINT =
+  /(?:в интернете|актуальн|сейчас в|новост|курс|цена|когда вышел|найди|загугли|погугли|погод)/i;
+
+export function shouldAutoWebSearch(
+  userMessage: string,
+  options: {
+    ragEnabled: boolean;
+    ragMatchCount: number;
+  },
+): boolean {
+  const normalized = userMessage.trim();
+  if (normalized.length < 4) {
+    return false;
+  }
+  // RAG runs first; web search is a fallback when documents returned nothing.
+  if (options.ragEnabled) {
+    if (!isQuestionLikeMessage(userMessage)) {
+      return false;
+    }
+    return options.ragMatchCount === 0;
+  }
+  // RAG off: only fetch the web for clearly external / live data questions.
+  return EXTERNAL_WEB_HINT.test(normalized);
 }
 
 export function getDateTime(): string {
@@ -114,15 +163,16 @@ export async function webSearch(
   _settings: AppSettings,
 ): Promise<string> {
   const encoded = encodeURIComponent(query.trim().slice(0, 200));
-  const response = await httpFetch(
-    `https://html.duckduckgo.com/html/?q=${encoded}`,
-    {
+  const response = await withTimeout(
+    httpFetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: `q=${encoded}`,
-    },
+    }),
+    25_000,
+    "Веб-поиск",
   );
 
   if (response.status < 200 || response.status >= 300) {
@@ -161,11 +211,12 @@ export async function planLiveToolUse(
   userMessage: string,
   settings: AppSettings,
 ): Promise<LiveToolPlan | null> {
-  if (!settings.webToolsEnabled || !shouldConsiderLiveTools(userMessage)) {
+  if (!settings.webToolsEnabled || !needsExplicitLiveToolPlanner(userMessage)) {
     return null;
   }
 
-  const response = await completeLlmJson<LiveToolPlanResponse>(
+  const response = await withTimeout(
+    completeLlmJson<LiveToolPlanResponse>(
     [
       {
         role: "system",
@@ -188,6 +239,9 @@ export async function planLiveToolUse(
     settings,
     180,
     "validator",
+    ),
+    20_000,
+    "Выбор live-инструмента",
   );
 
   if (

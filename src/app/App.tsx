@@ -214,6 +214,7 @@ export function App() {
     new Date().getHours(),
     settings.quietMode,
     quietModeActive,
+    settings.nightBehavior,
   );
   const avatarState: CharacterState =
     characterState === "speaking" && !voiceSpeaking

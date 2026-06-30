@@ -17,6 +17,15 @@ export type ProcessedReply = {
   validation: OocValidationResult;
 };
 
+export type ProcessReplyOptions = {
+  responseMode?: ResponseMode;
+  validationContext: ReplyValidationContext;
+  streamedEmotion?: CharacterEmotion | null;
+  recentAssistantReplies?: string[];
+  proactive?: boolean;
+  userAskedQuestion?: boolean;
+};
+
 export function shouldUseInCharacterFallback(
   validation: OocValidationResult,
 ): boolean {
@@ -38,11 +47,7 @@ export function buildInCharacterFallback(): ProcessedReply {
 
 export function processModelReply(
   raw: string,
-  options: {
-    responseMode?: ResponseMode;
-    validationContext: ReplyValidationContext;
-    streamedEmotion?: CharacterEmotion | null;
-  },
+  options: ProcessReplyOptions,
 ): ProcessedReply {
   const content = stripEmotionMarkup(raw).trim();
   const parsedEmotion = parseEmotionFromContent(raw);
@@ -58,7 +63,13 @@ export function processModelReply(
     }
   }
 
-  const validation = validateCharacterReply(content, options.validationContext);
+  const validation = validateCharacterReply(content, {
+    ...options.validationContext,
+    responseMode: options.responseMode,
+    proactive: options.proactive,
+    userAskedQuestion: options.userAskedQuestion,
+    recentAssistantReplies: options.recentAssistantReplies,
+  });
   const issues = [...validation.issues];
 
   if (!parsedEmotion && !options.streamedEmotion) {
@@ -93,6 +104,11 @@ export function shouldRetryReply(validation: OocValidationResult): boolean {
       "question spam",
       "habitual trailing question",
       "empty reply",
+      "evasive reply",
+      "duplicate reply",
+      "duplicate proactive reply",
+      "shallow advice",
+      "proactive quality",
     ].includes(issue),
   );
 }
@@ -147,6 +163,34 @@ export function buildCorrectionUserMessage(issues: string[]): string {
   }
   if (issues.includes("RAG claim without fragments")) {
     lines.push("Не ссылайся на документы без RAG-фрагментов.");
+  }
+  if (issues.includes("evasive reply")) {
+    lines.push(
+      "Дай прямой содержательный ответ на вопрос. Не отмахивайся и не говори «лучше самому разобраться», если можешь помочь хотя бы частично.",
+    );
+  }
+  if (issues.includes("proactive quality")) {
+    lines.push(
+      "Перепиши реплику: конкретный факт, команда или проверка из контекста; без мета про «сюжет» и «процесс».",
+    );
+  }
+  if (issues.includes("shallow advice")) {
+    lines.push(
+      "Дай один конкретный шаг отладки, команду, проверку или пример в кавычках — в голосе Ari, не общими словами.",
+    );
+  }
+  if (issues.includes("proactive meta commentary")) {
+    lines.push(
+      "Убери мета-комментарии про «сюжет», «процесс» и «результат». Привяжись к конкретному файлу, ошибке, окну или факту из контекста.",
+    );
+  }
+  if (
+    issues.includes("duplicate reply") ||
+    issues.includes("duplicate proactive reply")
+  ) {
+    lines.push(
+      "Переформулируй реплику другими словами. Не повторяй недавние фразы и не зацикливайся на одной теме.",
+    );
   }
   lines.push("Дай только исправленную реплику в требуемом формате.");
   return lines.join("\n");

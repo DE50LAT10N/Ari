@@ -6,6 +6,11 @@ import {
   invalidateProactiveStateCache,
 } from "../src/character/proactiveState";
 import {
+  allowsGenericCompanionInitiative,
+  prefersLocalCompanionLines,
+  proactiveIntervalMs,
+} from "../src/character/initiativeConfig";
+import {
   isPlannedCheckDescription,
   shouldUseLlmInitiativeGate,
   scoreInitiativeLocally,
@@ -122,5 +127,49 @@ describe("proactive loop helpers", () => {
         proactive: true,
       }),
     ).toBe("idle_initiative");
+  });
+
+  it("allows generic companion initiative after planned silence", () => {
+    expect(allowsGenericCompanionInitiative(90_000, 60_000)).toBe(true);
+    expect(allowsGenericCompanionInitiative(30_000, 60_000)).toBe(false);
+  });
+
+  it("prefers LLM companion lines when provider is online", () => {
+    const settings = { ...defaultSettings, initiativeLevel: "active" as const };
+    expect(prefersLocalCompanionLines(settings, 60_000)).toBe(false);
+    expect(
+      prefersLocalCompanionLines(
+        { ...defaultSettings, initiativeLevel: "normal", proactiveIntervalMinutes: 1 },
+        proactiveIntervalMs({
+          ...defaultSettings,
+          initiativeLevel: "normal",
+          proactiveIntervalMinutes: 1,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      prefersLocalCompanionLines(settings, 60_000, { practicalContext: true }),
+    ).toBe(false);
+  });
+
+  it("falls back to local lines only when LLM is offline", () => {
+    expect(
+      prefersLocalCompanionLines(defaultSettings, 20 * 60_000, {
+        llmOffline: true,
+      }),
+    ).toBe(true);
+    expect(prefersLocalCompanionLines(defaultSettings, 20 * 60_000)).toBe(
+      false,
+    );
+  });
+
+  it("allows immersed companion check-in via companion silence gate", () => {
+    expect(
+      allowsGenericCompanionInitiative(45_000, 120_000, {
+        immersedCompanion: true,
+        companionSilenceMs: 13 * 60_000,
+        companionSilenceMinMs: 12 * 60_000,
+      }),
+    ).toBe(true);
   });
 });

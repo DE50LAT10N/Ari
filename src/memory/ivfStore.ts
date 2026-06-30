@@ -2,10 +2,12 @@ import { resolveEmbeddingModel } from "../llm/embeddingConfig";
 import type { AppSettings } from "../settings/appSettings";
 import {
   buildIvfIndex,
+  IVF_BUILD_THRESHOLD,
   type IndexedVector,
   type IvfBucket,
   type IvfIndex,
 } from "./ivfIndex";
+import { yieldToMain } from "../platform/asyncTimeout";
 
 export type IvfStoreKind = "memory" | "rag";
 
@@ -145,13 +147,19 @@ export async function resolveIvfIndex(
   settings: AppSettings,
   entries: Array<{ id: string; embedding: number[] }>,
 ): Promise<{ index: IvfIndex | null; searchMode: "linear" | "ivf" }> {
-  const built = buildIvfIndex(entries);
-  if (!built) {
+  if (entries.length < IVF_BUILD_THRESHOLD) {
     return { index: null, searchMode: "linear" };
   }
+
   const stored = await loadStoredIvfIndex(kind, settings, entries.length);
   if (stored) {
     return { index: stored, searchMode: "ivf" };
+  }
+
+  await yieldToMain();
+  const built = buildIvfIndex(entries);
+  if (!built) {
+    return { index: null, searchMode: "linear" };
   }
   void saveStoredIvfIndex(kind, settings, entries.length, built);
   return { index: built, searchMode: "ivf" };

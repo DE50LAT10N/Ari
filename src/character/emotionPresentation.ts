@@ -178,6 +178,7 @@ export function inferEmotionFromReply(
     case "serious_warning":
       return "determined";
     case "technical_help":
+    case "direct_answer":
       return "curious";
     case "reminder":
       return "calm";

@@ -43,6 +43,12 @@ function backlogPriority(p: AriBacklogItem["priority"]): TaskPriority {
 async function loadLegacyOpenLoops(): Promise<OpenLoop[]> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("ari-episodes", 1);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains("open-loops")) {
+        database.createObjectStore("open-loops", { keyPath: "id" });
+      }
+    };
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
       const database = request.result;

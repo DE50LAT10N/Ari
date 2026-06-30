@@ -48,11 +48,16 @@ function classify(text: string, proactive: boolean): PhraseCategory {
 }
 
 export function rememberReplyPhrases(text: string, proactive = false): void {
-  const candidates = text
-    .split(/(?<=[.!?…])\s+|\n+/)
-    .map((part) => part.trim())
-    .filter((part) => part.length >= 8 && part.length <= 100)
-    .slice(0, 4);
+  const stripped = text.replace(/<emotion>[^<]+<\/emotion>/gi, "").trim();
+  const candidates = [
+    ...(proactive && stripped.length >= 12
+      ? [stripped.slice(0, 200)]
+      : []),
+    ...stripped
+      .split(/(?<=[.!?…])\s+|\n+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 8 && part.length <= 100),
+  ].slice(0, proactive ? 5 : 4);
   if (!candidates.length) return;
 
   const now = Date.now();

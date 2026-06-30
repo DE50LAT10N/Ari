@@ -39,13 +39,16 @@ export type NewOpenLoop = {
 };
 
 const DATABASE_NAME = "ari-episodes";
-const DATABASE_VERSION = 1;
+/** v2: repair DBs created at v1 without object stores (task migration race). */
+const DATABASE_VERSION = 2;
 const EPISODES_STORE = "episodes";
 
 let episodesCache: MemoryEpisode[] | null = null;
+let episodesLoadPromise: Promise<MemoryEpisode[]> | null = null;
 
 function invalidateEpisodicCache(): void {
   episodesCache = null;
+  episodesLoadPromise = null;
 }
 
 if (typeof window !== "undefined") {
@@ -61,6 +64,11 @@ function openDatabase(): Promise<IDBDatabase> {
       if (!database.objectStoreNames.contains(EPISODES_STORE)) {
         database.createObjectStore(EPISODES_STORE, { keyPath: "id" });
       }
+    };
+    request.onblocked = () => {
+      console.warn(
+        "[ari-episodes] IndexedDB upgrade blocked by another connection",
+      );
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -139,10 +147,20 @@ export async function loadEpisodes(): Promise<MemoryEpisode[]> {
   if (episodesCache) {
     return episodesCache;
   }
-  episodesCache = (await loadStore<MemoryEpisode>(EPISODES_STORE)).sort(
-    (left, right) => right.updatedAt - left.updatedAt,
-  );
-  return episodesCache;
+  if (!episodesLoadPromise) {
+    episodesLoadPromise = loadStore<MemoryEpisode>(EPISODES_STORE)
+      .then((episodes) =>
+        episodes.sort((left, right) => right.updatedAt - left.updatedAt),
+      )
+      .then((episodes) => {
+        episodesCache = episodes;
+        return episodes;
+      })
+      .finally(() => {
+        episodesLoadPromise = null;
+      });
+  }
+  return episodesLoadPromise;
 }
 
 export async function loadOpenLoops(

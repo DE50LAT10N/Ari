@@ -5,7 +5,9 @@ import {
 } from "./advisorContext";
 import type { ActivitySignal } from "../memory/activitySignals";
 import type { InitiativeSignalBundle } from "./initiativeContext";
+import { isTopicAngleTechnical } from "./proactiveTone";
 import {
+  getProactiveCooldownSubjects,
   isProactiveSubjectOnCooldown,
   normalizeProactiveSubject,
 } from "./proactiveState";
@@ -42,15 +44,53 @@ export function topicOverlapsRecent(topic: string, recent: string[]): boolean {
   });
 }
 
+const FILE_TOPIC_PATTERN =
+  /(?:\.tsx?|\.jsx?|\.rs|\.py|\.go|\.java|\.cs|\.cpp|\.md|\.json)\b/i;
+
+function isLiveFileTopic(topic: string, currentFile?: string): boolean {
+  if (!currentFile?.trim()) {
+    return false;
+  }
+  const fileKey = currentFile.trim().toLowerCase();
+  const topicLower = topic.toLowerCase();
+  return topicLower.includes(fileKey) || FILE_TOPIC_PATTERN.test(topic);
+}
+
+function isSameFileOnCooldown(currentFile: string): boolean {
+  const key = currentFile.trim().toLowerCase();
+  return getProactiveCooldownSubjects().some((subject) =>
+    subject.toLowerCase().includes(key),
+  );
+}
+
+export function buildLiveCodingTopic(
+  bundle: InitiativeSignalBundle,
+): string | undefined {
+  const file = bundle.editorFile ?? bundle.advisor.editorContext.file?.trim();
+  if (!file) {
+    return undefined;
+  }
+  return file.slice(0, 80);
+}
+
 export function isInitiativeTopicAllowed(
   topic: string,
   excludeRecent: string[],
+  options: { currentFile?: string } = {},
 ): boolean {
   if (!topic.trim()) {
     return false;
   }
   if (topicOverlapsRecent(topic, excludeRecent)) {
     return false;
+  }
+  const currentFile = options.currentFile?.trim();
+  if (
+    currentFile &&
+    isLiveFileTopic(topic, currentFile) &&
+    !isSameFileOnCooldown(currentFile)
+  ) {
+    return true;
   }
   if (isProactiveSubjectOnCooldown(topic)) {
     return false;
@@ -108,7 +148,11 @@ export function pickPlannedInitiativeAnchor(
   } = {},
 ): string | undefined {
   const recent = options.recentProactive ?? [];
-  const fresh = topics.filter((topic) => isInitiativeTopicAllowed(topic, recent));
+  const fresh = topics.filter((topic) =>
+    isInitiativeTopicAllowed(topic, recent, {
+      currentFile: options.dominantFile,
+    }),
+  );
 
   const debugTopic = fresh.find((topic) =>
     /ошибк|отлад|буфер|блокер/i.test(topic),
@@ -142,17 +186,109 @@ export function pickPlannedInitiativeAnchor(
 
   if (options.dominantFile) {
     const anchor = `как идёт ${options.dominantFile}`;
-    if (isInitiativeTopicAllowed(anchor, recent)) {
+    if (
+      isInitiativeTopicAllowed(anchor, recent, {
+        currentFile: options.dominantFile,
+      })
+    ) {
       return anchor;
+    }
+    const liveAnchor = `практический следующий шаг по ${options.dominantFile}`;
+    if (
+      isInitiativeTopicAllowed(liveAnchor, recent, {
+        currentFile: options.dominantFile,
+      })
+    ) {
+      return liveAnchor;
     }
   }
 
   const title = options.windowTitle?.trim().slice(0, 120);
-  if (title && isInitiativeTopicAllowed(title, recent)) {
+  if (
+    title &&
+    isInitiativeTopicAllowed(title, recent) &&
+    !recent.some(
+      (topic) =>
+        topic.toLowerCase() === title.toLowerCase() ||
+        topic.toLowerCase().includes(title.toLowerCase()) ||
+        title.toLowerCase().includes(topic.toLowerCase()),
+    )
+  ) {
     return title;
   }
 
   return undefined;
+}
+
+export function buildFallbackInitiativeTopics(
+  bundle: InitiativeSignalBundle,
+  banned: string[] = [],
+): string[] {
+  const candidates: string[] = [];
+  const currentFile = bundle.editorFile ?? bundle.advisor.editorContext.file;
+  const liveTopic = buildLiveCodingTopic(bundle);
+  if (liveTopic) {
+    candidates.push(liveTopic);
+  }
+
+  if (bundle.focusBlockers[0]) {
+    candidates.push(`помочь с блокером: ${bundle.focusBlockers[0].slice(0, 80)}`);
+  }
+  if (bundle.focusStep) {
+    candidates.push(`следующий шаг: ${bundle.focusStep.slice(0, 80)}`);
+  }
+  if (bundle.nextTaskTitle) {
+    candidates.push(
+      `следующий шаг по задаче «${bundle.nextTaskTitle.slice(0, 80)}»`,
+    );
+  }
+  if (bundle.editorFile) {
+    candidates.push(`как идёт ${bundle.editorFile}`);
+  }
+  if (bundle.dailyNextStep && !/не выбран/i.test(bundle.dailyNextStep)) {
+    candidates.push(`мягко напомнить про «${bundle.dailyNextStep.slice(0, 80)}»`);
+  }
+  if (bundle.visionSummary) {
+    candidates.push("короткий практический вывод по последнему взгляду на экран");
+  }
+  for (const clip of bundle.clipboardSnippets.slice(-1)) {
+    if (clip.kind === "stacktrace") {
+      candidates.push("следующий шаг отладки по ошибке из буфера");
+    } else if (clip.kind === "code") {
+      candidates.push("подсказка по фрагменту кода из буфера");
+    }
+  }
+  if (bundle.window?.title) {
+    candidates.push(bundle.window.title.slice(0, 120));
+  }
+  if (bundle.advisor.repeatedErrorSignature) {
+    candidates.push("следующий шаг отладки по повторяющейся ошибке");
+  }
+
+  const seen = new Set<string>();
+  return candidates
+    .map((topic) => topic.trim())
+    .filter((topic) => {
+      if (!topic || seen.has(topic.toLowerCase())) {
+        return false;
+      }
+      seen.add(topic.toLowerCase());
+      return isInitiativeTopicAllowed(topic, banned, { currentFile });
+    })
+    .slice(0, 5);
+}
+
+export function hasUsableProactiveContext(
+  bundle: Pick<InitiativeSignalBundle, "hasActionableSignals">,
+  conversationTopics: string[],
+  banned: string[] = [],
+): boolean {
+  if (bundle.hasActionableSignals) {
+    return true;
+  }
+  return conversationTopics.some((topic) =>
+    isInitiativeTopicAllowed(topic, banned),
+  );
 }
 
 export type AdvisorAngle =
@@ -217,7 +353,10 @@ export function hasActionableAdvisorSignals(ctx: AdvisorContext): boolean {
   );
 }
 
-export function initiativeKindForAngle(angle: AdvisorAngle): InitiativeKind {
+export function initiativeKindForAngle(
+  angle: AdvisorAngle,
+  bundle?: InitiativeSignalBundle,
+): InitiativeKind {
   switch (angle) {
     case "rest":
       return "break_suggestion";
@@ -226,7 +365,11 @@ export function initiativeKindForAngle(angle: AdvisorAngle): InitiativeKind {
     case "scope":
       return "process_advice";
     case "celebrate":
+      return "check_in";
     case "topic":
+      if (bundle && isTopicAngleTechnical(bundle.advisor, bundle)) {
+        return "process_advice";
+      }
       return "check_in";
   }
 }
@@ -352,52 +495,51 @@ export function buildConversationTopics(
 ): string[] {
   const topics: string[] = [];
   const seen = new Set<string>();
+  const currentFile =
+    bundle?.editorFile ?? bundle?.advisor.editorContext.file;
 
   const push = (value?: string) => {
     const trimmed = value?.trim();
     if (!trimmed || seen.has(trimmed.toLowerCase())) {
       return;
     }
-    if (!isInitiativeTopicAllowed(trimmed, excludeRecent)) {
+    if (!isInitiativeTopicAllowed(trimmed, excludeRecent, { currentFile })) {
       return;
     }
     seen.add(trimmed.toLowerCase());
     topics.push(trimmed);
   };
 
+  if (bundle) {
+    push(bundle.editorFile ?? bundle.advisor.editorContext.file);
+    push(buildLiveCodingTopic(bundle));
+  }
+
   if (bundle?.focusBlockers[0]) {
-    push(`помочь с блокером: ${bundle.focusBlockers[0].slice(0, 80)}`);
+    push(bundle.focusBlockers[0].slice(0, 120));
   }
 
   if (bundle?.clipboardSnippets.length) {
     const clip = bundle.clipboardSnippets[bundle.clipboardSnippets.length - 1];
-    if (clip.kind === "stacktrace") {
-      push("следующий шаг отладки по ошибке из буфера");
-    } else if (clip.kind === "code") {
-      push("подсказка по фрагменту кода из буфера");
-    } else if (clip.kind === "url") {
-      push(`что полезного в ссылке из буфера`);
-    }
+    push(clip.text.slice(0, 100));
   }
 
   if (bundle?.visionSummary) {
-    push("короткий практический вывод по последнему взгляду на экран");
+    push(bundle.visionSummary.slice(0, 100));
   }
 
-  if (ctx.taskActivityLink?.shouldAsk) {
-    push(`уточнить связь активности с задачей «${ctx.taskActivityLink.taskTitle?.slice(0, 80)}»`);
-  } else if (ctx.taskActivityLink?.taskTitle) {
-    push(`следующий шаг по связанной задаче «${ctx.taskActivityLink.taskTitle.slice(0, 80)}»`);
+  if (ctx.taskActivityLink?.taskTitle) {
+    push(ctx.taskActivityLink.taskTitle.slice(0, 100));
   }
 
-  push(ctx.dominantFile ? `как идёт ${ctx.dominantFile}` : undefined);
+  push(ctx.dominantFile ? ctx.dominantFile : undefined);
 
   if (bundle?.projectContext) {
     const pinned = bundle.projectContext
       .split("\n")
       .find((line) => line.startsWith("- "));
     if (pinned) {
-      push(`как идёт ${pinned.replace(/^- /, "").slice(0, 80)} в проекте`);
+      push(pinned.replace(/^- /, "").slice(0, 100));
     }
   }
 
@@ -417,35 +559,30 @@ export function buildConversationTopics(
     if (!isQueryThemeFresh(ctx, entry.topic)) {
       continue;
     }
-    push(`что нашёл по «${entry.topic}»`);
+    push(entry.topic.slice(0, 100));
   }
 
   for (const entry of ctx.activitySummary.recentSignals.slice().reverse()) {
     if (topics.length >= limit) {
       break;
     }
-    if (entry.kind === "clipboard" && entry.clipKind === "stacktrace") {
-      push("получилось ли разобраться с ошибкой из буфера");
-    }
-    if (
-      entry.kind === "query_topic" &&
-      entry.source === "browser" &&
-      isQueryThemeFresh(ctx, entry.topic)
-    ) {
-      push(`ещё актуально «${entry.topic}»`);
+    if (entry.kind === "query_topic" && entry.source === "browser") {
+      if (isQueryThemeFresh(ctx, entry.topic)) {
+        push(entry.topic.slice(0, 100));
+      }
     }
   }
 
   if (bundle?.dailyNextStep && !/не выбран/i.test(bundle.dailyNextStep)) {
-    push(`мягко напомнить про «${bundle.dailyNextStep.slice(0, 80)}»`);
+    push(bundle.dailyNextStep.slice(0, 100));
   }
 
   if (bundle?.nextTaskTitle) {
-    push(`следующий шаг по задаче «${bundle.nextTaskTitle.slice(0, 80)}»`);
+    push(bundle.nextTaskTitle.slice(0, 100));
   }
 
   if (ctx.recentCompletions[0]) {
-    push(`как прошло «${ctx.recentCompletions[0]}»`);
+    push(ctx.recentCompletions[0].slice(0, 100));
   }
 
   if (ctx.breakDue) {

@@ -1,4 +1,5 @@
 import type { CharacterEmotion } from "../types/character";
+import { describeMoodBehaviorForPrompt } from "./moodBehavior";
 import { dayKey } from "./datetime";
 
 export type CharacterMood = {
@@ -306,6 +307,7 @@ export function describeMoodForPrompt(mood: CharacterMood): string {
   }
 
   lines.push(
+    describeMoodBehaviorForPrompt(current),
     "Настроение должно быть слышно в каждой реплике — в словах, ритме и выборе эмоции. Не называй настроение напрямую и не объясняй механику.",
   );
 

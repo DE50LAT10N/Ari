@@ -82,6 +82,9 @@ export function inferTaskActivityLink(input: {
   if (!best) {
     return null;
   }
+  if (best.score < 0.6) {
+    return null;
+  }
 
   const goalTitle = best.task.goalId ? getGoalById(best.task.goalId)?.title : undefined;
   const anchor =

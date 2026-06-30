@@ -104,11 +104,15 @@ import {
 } from "../memory/reviewAggregator";
 import { buildCapabilitiesOverview } from "./capabilitiesOverview";
 import { wrapCommandReply } from "./commandCharacterWrap";
+import { tryHandleTaskChatCommandAsync } from "./taskChatParse";
+import { ensureGoalForFocus, getCurrentGoal, updateGoal } from "../tasks/goalLedger";
+import type { CharacterMood } from "../character/mood";
 import {
-  ensureGoalForFocus,
-  tryHandleTaskChatCommandAsync,
-} from "./taskChatParse";
-import { getCurrentGoal, updateGoal } from "../tasks/goalLedger";
+  buildMoodRefusalReply,
+  deriveMoodArchetype,
+  moodRefusalKindForCommand,
+  shouldMoodRefuseRequest,
+} from "../character/moodBehavior";
 
 export type ChatCommandResult = {
   handled: true;
@@ -139,6 +143,7 @@ function normalize(text: string): string {
 export async function tryHandleChatCommand(
   rawInput: string,
   settings?: AppSettings,
+  mood?: CharacterMood,
 ): Promise<ChatCommandOutcome> {
   const input = rawInput.trim();
   const lower = normalize(input);
@@ -162,14 +167,9 @@ export async function tryHandleChatCommand(
   const taskResult = await tryHandleTaskChatCommandAsync(
     input,
     settings ?? defaultSettings,
+    mood,
   );
   if (taskResult.handled) {
-    appendTimelineEvent({
-      kind: "chat_command",
-      summary: taskResult.command,
-      payloadRef: taskResult.reply.slice(0, 120),
-      projectId: getActiveProjectBinder()?.id,
-    });
     return taskResult;
   }
 
@@ -288,6 +288,22 @@ export async function tryHandleChatCommand(
   }
 
   if (/^старт фокуса/i.test(lower) || /^начни фокус/i.test(lower)) {
+    if (
+      mood &&
+      shouldMoodRefuseRequest(mood, moodRefusalKindForCommand("focus-start"))
+    ) {
+      const archetype = deriveMoodArchetype(mood);
+      const wrapped = wrapCommandReply(
+        "mood-refusal",
+        buildMoodRefusalReply(mood, moodRefusalKindForCommand("focus-start")),
+      );
+      return {
+        handled: true,
+        command: "mood-refusal",
+        reply: wrapped.reply,
+        emotion: archetype === "irritated" ? "annoyed" : "sleepy",
+      };
+    }
     const goal = input.replace(/^(старт фокуса|начни фокус)[:\s]*/i, "").trim();
     if (!goal) {
       return handled("focus-start", "Укажи цель фокуса в той же фразе.");

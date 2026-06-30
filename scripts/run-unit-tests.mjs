@@ -15,13 +15,19 @@ function stripEmotionMarkup(content) {
 
 assert.equal(stripEmotionMarkup("emotion neutral\nПривет."), "Привет.");
 
-const AUTO_COMMIT_CONFIDENCE_THRESHOLD = 0.85;
+const AUTO_COMMIT_CONFIDENCE_THRESHOLD = 0.78;
 
 function shouldAutoCommitFact(fact) {
-  return (
-    (fact.importance === "core" || fact.importance === "important") &&
-    fact.confidence >= AUTO_COMMIT_CONFIDENCE_THRESHOLD
-  );
+  if (fact.importance === "core") {
+    return fact.confidence >= 0.72;
+  }
+  if (fact.importance === "important") {
+    return fact.confidence >= AUTO_COMMIT_CONFIDENCE_THRESHOLD;
+  }
+  if (fact.importance === "useful") {
+    return fact.confidence >= 0.82;
+  }
+  return false;
 }
 
 function shouldAutoCommitOpenLoop(loop) {
@@ -36,6 +42,10 @@ assert.equal(
 );
 assert.equal(
   shouldAutoCommitFact({ importance: "useful", confidence: 0.95 }),
+  true,
+);
+assert.equal(
+  shouldAutoCommitFact({ importance: "useful", confidence: 0.7 }),
   false,
 );
 assert.equal(

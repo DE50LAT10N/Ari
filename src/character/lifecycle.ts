@@ -13,6 +13,7 @@ export function deriveLifecycleState(
   hour: number,
   quietMode: AppSettings["quietMode"],
   quietModeActive: boolean,
+  nightBehavior: AppSettings["nightBehavior"] = "normal",
 ): LifecycleState {
   if (quietMode === "manual" || quietModeActive) {
     return "dnd";
@@ -22,12 +23,17 @@ export function deriveLifecycleState(
     return "sleeping";
   }
 
-  if (idleSeconds >= 30 * 60 || hour >= 23 || hour < 6) {
+  if (idleSeconds >= 30 * 60) {
     return "sleepy";
   }
 
-  if (hour >= 22 || hour < 8) {
-    return "quiet";
+  if (nightBehavior === "quiet") {
+    if (hour >= 23 || hour < 6) {
+      return "sleepy";
+    }
+    if (hour >= 22 || hour < 8) {
+      return "quiet";
+    }
   }
 
   if (idleSeconds >= 5 * 60) {

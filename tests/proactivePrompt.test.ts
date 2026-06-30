@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildMessages } from "../src/character/promptBuilder";
+import { PROACTIVE_SMALLTALK_RULE } from "../src/character/proactiveLiveliness";
 
 describe("proactive prompt", () => {
   it("anchors proactive check-ins to the selected recent topic", () => {
@@ -17,5 +18,19 @@ describe("proactive prompt", () => {
     expect(system).toContain("Tauri active window permissions");
     expect(system).toContain("Не задавай общий вопрос");
     expect(finalUser).toContain("Tauri active window permissions");
+  });
+
+  it("includes smalltalk rule for proactive smalltalk tone", () => {
+    const messages = buildMessages([], {
+      proactive: true,
+      proactiveReplyTone: "smalltalk",
+      initiativeKind: "check_in",
+      eventDescription:
+        "Плановая проверка инициативы после периода тишины.\nСвежих тем нет — дай короткую нейтральную реплику.",
+    });
+
+    const system = messages[0]?.content ?? "";
+    expect(system).toContain(PROACTIVE_SMALLTALK_RULE.slice(0, 40));
+    expect(system).not.toContain("Обязательный якорь реплики");
   });
 });

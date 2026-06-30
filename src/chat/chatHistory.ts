@@ -50,6 +50,13 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
       : {}),
     ...(candidate.isCanon !== undefined ? { isCanon: candidate.isCanon } : {}),
     ...(candidate.messageId ? { messageId: candidate.messageId } : {}),
+    ...(candidate.adviceId ? { adviceId: candidate.adviceId } : {}),
+    ...(candidate.adviceFeedback === "useful" ||
+    candidate.adviceFeedback === "not_now" ||
+    candidate.adviceFeedback === "miss" ||
+    candidate.adviceFeedback === "too_generic"
+      ? { adviceFeedback: candidate.adviceFeedback }
+      : {}),
   };
 }
 
