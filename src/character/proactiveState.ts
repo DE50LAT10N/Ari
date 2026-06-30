@@ -2,6 +2,10 @@ const LAST_PROACTIVE_MESSAGE_KEY =
   "desktop-character.last-proactive-message.v1";
 const LAST_PROACTIVE_ATTEMPT_KEY =
   "desktop-character.last-proactive-attempt.v1";
+const LAST_ADVICE_ATTEMPT_KEY =
+  "ari.lastProactiveAdviceAttemptAt";
+const LAST_SMALLTALK_ATTEMPT_KEY =
+  "ari.lastProactiveSmalltalkAttemptAt";
 const RECENT_PROACTIVE_TOPICS_KEY =
   "desktop-character.recent-proactive-topics.v1";
 const PROACTIVE_SUBJECT_COOLDOWN_KEY =
@@ -14,6 +18,8 @@ export const PROACTIVE_SUBJECT_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 let topicsCache: string[] | null = null;
 let lastMessageCache: number | null = null;
 let lastAttemptCache: number | null = null;
+let lastAdviceAttemptCache: number | null = null;
+let lastSmalltalkAttemptCache: number | null = null;
 
 type SubjectCooldownEntry = { subject: string; at: number };
 
@@ -21,17 +27,23 @@ export function invalidateProactiveStateCache(): void {
   topicsCache = null;
   lastMessageCache = null;
   lastAttemptCache = null;
+  lastAdviceAttemptCache = null;
+  lastSmalltalkAttemptCache = null;
 }
 
 export function resetProactiveStateForTests(): void {
   topicsCache = null;
   lastMessageCache = null;
   lastAttemptCache = null;
+  lastAdviceAttemptCache = null;
+  lastSmalltalkAttemptCache = null;
   localStorage.removeItem(RECENT_PROACTIVE_TOPICS_KEY);
   localStorage.removeItem(PROACTIVE_SUBJECT_COOLDOWN_KEY);
   localStorage.removeItem(LAST_ADVICE_SUBJECT_KEY);
   localStorage.removeItem(LAST_PROACTIVE_MESSAGE_KEY);
   localStorage.removeItem(LAST_PROACTIVE_ATTEMPT_KEY);
+  localStorage.removeItem(LAST_ADVICE_ATTEMPT_KEY);
+  localStorage.removeItem(LAST_SMALLTALK_ATTEMPT_KEY);
   localStorage.removeItem("desktop-character.idle-lines-recent.v1");
 }
 
@@ -171,34 +183,74 @@ export function setLastProactiveMessageAt(timestamp = Date.now()): void {
   window.dispatchEvent(new Event("ari-proactive-state-changed"));
 }
 
-export function getLastProactiveAttemptAt(): number {
-  if (lastAttemptCache !== null) {
-    return lastAttemptCache;
+export function getLastAdviceAttemptAt(): number {
+  if (lastAdviceAttemptCache !== null) {
+    return lastAdviceAttemptCache;
   }
-  const stored = localStorage.getItem(LAST_PROACTIVE_ATTEMPT_KEY);
-  lastAttemptCache = stored !== null ? Number(stored) : 0;
-  return lastAttemptCache;
+  const stored = localStorage.getItem(LAST_ADVICE_ATTEMPT_KEY);
+  lastAdviceAttemptCache =
+    stored !== null ? Number(stored) : Number(localStorage.getItem(LAST_PROACTIVE_ATTEMPT_KEY) ?? 0);
+  return lastAdviceAttemptCache;
 }
 
-export function setLastProactiveAttemptAt(timestamp = Date.now()): void {
-  lastAttemptCache = timestamp;
-  localStorage.setItem(LAST_PROACTIVE_ATTEMPT_KEY, String(timestamp));
+export function getLastSmalltalkAttemptAt(): number {
+  if (lastSmalltalkAttemptCache !== null) {
+    return lastSmalltalkAttemptCache;
+  }
+  const stored = localStorage.getItem(LAST_SMALLTALK_ATTEMPT_KEY);
+  lastSmalltalkAttemptCache =
+    stored !== null ? Number(stored) : Number(localStorage.getItem(LAST_PROACTIVE_ATTEMPT_KEY) ?? 0);
+  return lastSmalltalkAttemptCache;
 }
 
-export function armProactiveGracePeriod(intervalMs: number): void {
-  const graceAt = Date.now() - Math.max(intervalMs, 15_000);
-  setLastProactiveAttemptAt(graceAt);
+export function markAdviceAttemptAt(timestamp = Date.now()): void {
+  lastAdviceAttemptCache = timestamp;
+  lastAttemptCache = Math.max(timestamp, getLastSmalltalkAttemptAt());
+  localStorage.setItem(LAST_ADVICE_ATTEMPT_KEY, String(timestamp));
+  localStorage.setItem(LAST_PROACTIVE_ATTEMPT_KEY, String(lastAttemptCache));
+  window.dispatchEvent(new Event("ari-proactive-state-changed"));
+}
+
+export function markSmalltalkAttemptAt(timestamp = Date.now()): void {
+  lastSmalltalkAttemptCache = timestamp;
+  lastAttemptCache = Math.max(timestamp, getLastAdviceAttemptAt());
+  localStorage.setItem(LAST_SMALLTALK_ATTEMPT_KEY, String(timestamp));
+  localStorage.setItem(LAST_PROACTIVE_ATTEMPT_KEY, String(lastAttemptCache));
+  window.dispatchEvent(new Event("ari-proactive-state-changed"));
+}
+
+export function armProactiveGracePeriod(
+  adviceIntervalMs: number,
+  smalltalkIntervalMs = adviceIntervalMs,
+): void {
+  const now = Date.now();
+  const adviceGraceAt = now - Math.max(adviceIntervalMs, 15_000);
+  const smalltalkGraceAt = now - Math.max(smalltalkIntervalMs, 15_000);
+  markAdviceAttemptAt(adviceGraceAt);
+  markSmalltalkAttemptAt(smalltalkGraceAt);
   if (!getLastProactiveMessageAt()) {
-    setLastProactiveMessageAt(graceAt);
+    setLastProactiveMessageAt(Math.max(adviceGraceAt, smalltalkGraceAt));
   }
 }
 
-export function ensureProactiveClockStarted(intervalMs = 20 * 60_000): void {
+export function ensureProactiveClockStarted(
+  adviceIntervalMs = 20 * 60_000,
+  smalltalkIntervalMs = adviceIntervalMs,
+): void {
   if (localStorage.getItem(LAST_PROACTIVE_MESSAGE_KEY) === null) {
-    setLastProactiveMessageAt(Date.now() - intervalMs);
+    setLastProactiveMessageAt(Date.now() - Math.min(adviceIntervalMs, smalltalkIntervalMs));
+  }
+  if (localStorage.getItem(LAST_ADVICE_ATTEMPT_KEY) === null) {
+    markAdviceAttemptAt(Date.now() - adviceIntervalMs);
+  }
+  if (localStorage.getItem(LAST_SMALLTALK_ATTEMPT_KEY) === null) {
+    markSmalltalkAttemptAt(Date.now() - smalltalkIntervalMs);
   }
   if (localStorage.getItem(LAST_PROACTIVE_ATTEMPT_KEY) === null) {
-    setLastProactiveAttemptAt(Date.now() - intervalMs);
+    localStorage.setItem(
+      LAST_PROACTIVE_ATTEMPT_KEY,
+      String(Math.max(getLastAdviceAttemptAt(), getLastSmalltalkAttemptAt())),
+    );
   }
 }
 
@@ -235,13 +287,6 @@ export function rememberProactiveTopic(topic: string): void {
   topicsCache = topics;
   localStorage.setItem(RECENT_PROACTIVE_TOPICS_KEY, JSON.stringify(topics));
   rememberProactiveSubject(normalized);
-}
-
-export function registerLocalLineTopic(line: string): void {
-  const normalized = line.trim().slice(0, 120);
-  if (normalized.length >= 8) {
-    rememberProactiveTopic(normalized);
-  }
 }
 
 export function registerProactiveReplySubject(

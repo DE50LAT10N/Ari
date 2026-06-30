@@ -74,7 +74,7 @@ export function settlingEmotion(
   return settled;
 }
 
-function microReactionTypeForEmotion(
+export function microReactionTypeForEmotion(
   emotion: CharacterEmotion,
 ): MicroReactionType {
   const map: Partial<Record<CharacterEmotion, MicroReactionType>> = {
@@ -99,6 +99,41 @@ function microReactionTypeForEmotion(
   return map[emotion] ?? "thinking";
 }
 
+function microReactionThought(
+  mood: CharacterMood,
+  scene: PresenceScene,
+  activeWindow: ActiveWindowInfo | null,
+): string | undefined {
+  const archetype =
+    mood.irritation > 0.38
+      ? "irritated"
+      : mood.warmth > 0.52
+        ? "warm"
+        : mood.energy < 0.3
+          ? "sleepy"
+          : "observant";
+  const windowBit = activeWindow?.title
+    ? activeWindow.title.split(/[-—|]/)[0]?.trim().slice(0, 40)
+    : undefined;
+  const thoughts: Record<string, string[]> = {
+    irritated: [
+      "Тишина слишком долгая — не буду лезть с советами.",
+      "Лучше помолчу, чем снова читать лекцию.",
+    ],
+    warm: [
+      windowBit ? `Интересно, что там в ${windowBit}…` : "Тихо. Может, просто рядом.",
+      "Похоже, человек в потоке — не мешаю.",
+    ],
+    sleepy: ["*зевает* …ещё немного тишины.", "Ночь тянется."],
+    observant: [
+      windowBit ? `В ${windowBit} что-то происходит.` : "Тишина не всегда плоха.",
+      scene === "focus" ? "Рабочий ритм." : "Момент для наблюдения.",
+    ],
+  };
+  const pool = thoughts[archetype] ?? thoughts.observant;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 export function chooseMicroReaction({
   scene,
   mood,
@@ -115,11 +150,17 @@ export function chooseMicroReaction({
       id: Date.now(),
       type: microReactionTypeForEmotion(preferred),
       emotion: preferred,
+      thought: microReactionThought(mood, scene, activeWindow),
     };
   }
 
   if (mood.irritation > 0.45) {
-    return { id: Date.now(), type: "anger", emotion: "annoyed" };
+    return {
+      id: Date.now(),
+      type: "anger",
+      emotion: "annoyed",
+      thought: microReactionThought(mood, scene, activeWindow),
+    };
   }
   if (mood.energy > 0.62 && random < 0.35) {
     return { id: Date.now(), type: "sparkles", emotion: "excited" };
@@ -148,5 +189,6 @@ export function chooseMicroReaction({
     id: Date.now(),
     type: random > 0.5 ? "sparkles" : "question",
     emotion: random > 0.5 ? "amused" : "curious",
+    thought: microReactionThought(mood, scene, activeWindow),
   };
 }

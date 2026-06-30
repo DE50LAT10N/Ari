@@ -11,6 +11,7 @@ import {
   classifyProactiveReplyTone,
   isPracticalAnchor,
   isProactiveWorkContext,
+  resolveProactiveReplyTone,
   shouldProactiveWebSearch,
 } from "../src/character/proactiveTone";
 import { initiativeKindForAngle } from "../src/character/advisorEngine";
@@ -41,11 +42,21 @@ describe("proactiveTone", () => {
     invalidateActivitySignalsCache();
   });
 
-  it("classifies stacktrace anchor as advice", () => {
+  it("classifies stacktrace anchor as advice with debug bundle", () => {
+    recordClipboardSignal({
+      clipKind: "stacktrace",
+      snippet: "ReferenceError: x at file.ts:1",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "file.ts - Ari - Cursor",
+    });
     expect(
       classifyProactiveReplyTone({
         initiativeKind: "check_in",
         anchor: "следующий шаг отладки по ошибке из буфера",
+        bundle,
+        urgencyLevel: "medium",
       }),
     ).toBe("advice");
     expect(isPracticalAnchor("следующий шаг отладки по ошибке из буфера")).toBe(
@@ -130,7 +141,41 @@ describe("proactiveTone", () => {
     expect(advisorAngleForAdviceSignals(bundle)).toBe("debug_help");
   });
 
-  it("detects work context from IDE session and classifies advice", () => {
+  it("detects work context from IDE session and classifies smalltalk without debug signals", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 8,
+      windowMinutes: 8,
+    });
+    const quietBundle = {
+      ...bundle,
+      clipboardSnippets: [],
+      focusBlockers: [],
+      advisor: {
+        ...bundle.advisor,
+        stuckScore: 0,
+        repeatedErrorSignature: undefined,
+        dominantFile: undefined,
+      },
+    };
+    expect(
+      isProactiveWorkContext({ bundle: quietBundle, sessionMinutes: 8 }),
+    ).toBe(true);
+    expect(
+      classifyProactiveReplyTone({
+        initiativeKind: "check_in",
+        bundle: quietBundle,
+        conversationTopics: [],
+      }),
+    ).toBe("smalltalk");
+  });
+
+  it("classifies check_in as advice with medium urgency and debug signals", () => {
+    recordClipboardSignal({
+      clipKind: "stacktrace",
+      snippet: "ReferenceError: x at ChatPanel.tsx:42",
+    });
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "ChatPanel.tsx - Ari - Cursor",
@@ -138,15 +183,51 @@ describe("proactiveTone", () => {
       windowMinutes: 8,
     });
     expect(
-      isProactiveWorkContext({ bundle, sessionMinutes: 8 }),
-    ).toBe(true);
-    expect(
       classifyProactiveReplyTone({
         initiativeKind: "check_in",
         bundle,
         conversationTopics: [],
+        urgencyLevel: "medium",
       }),
     ).toBe("advice");
+  });
+
+  it("keeps quiet IDE check_in as smalltalk without urgent signals", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 8,
+      windowMinutes: 8,
+    });
+    const quietBundle = {
+      ...bundle,
+      clipboardSnippets: [],
+      focusBlockers: [],
+      advisor: {
+        ...bundle.advisor,
+        stuckScore: 0,
+        repeatedErrorSignature: undefined,
+        dominantFile: "ChatPanel.tsx",
+      },
+    };
+    expect(
+      classifyProactiveReplyTone({
+        initiativeKind: "check_in",
+        bundle: quietBundle,
+        conversationTopics: ["работа над ChatPanel"],
+        urgencyLevel: "low",
+      }),
+    ).toBe("smalltalk");
+  });
+
+  it("resolveProactiveReplyTone clamps LLM advice upgrade on check_in", () => {
+    expect(
+      resolveProactiveReplyTone({
+        initiativeKind: "check_in",
+        conversationTopics: ["как идёт"],
+        llmTone: "advice",
+      }),
+    ).toBe("smalltalk");
   });
 
   it("needs sustained IDE session before window alone counts as work", () => {

@@ -2,6 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CharacterMood } from "../src/character/mood";
 import { buildLiveStatusLine } from "../src/character/liveStatus";
 import {
+  applyInteractionToMood,
+  loadMood,
+  applyRepeatedIgnoreMood,
+  saveMood,
+} from "../src/character/mood";
+import {
   buildMoodRefusalReply,
   deriveMoodArchetype,
   moodStatusLabel,
@@ -44,18 +50,50 @@ function mood(partial: Partial<CharacterMood>): CharacterMood {
 
 describe("moodBehavior", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     setupStorage();
     invalidateTaskCache();
   });
-  it("labels playful and irritated archetypes", () => {
+
+  it("labels mood archetypes without overusing playful", () => {
     expect(
       moodStatusLabel(
-        mood({ warmth: 0.55, energy: 0.65, irritation: 0.05 }),
+        mood({ warmth: 0.38, energy: 0.72, irritation: 0.05 }),
       ),
     ).toBe("озорная");
     expect(
+      moodStatusLabel(mood({ warmth: 0.34, energy: 0.58, irritation: 0.05 })),
+    ).toBe("любопытная");
+    expect(
+      moodStatusLabel(mood({ warmth: 0.55, energy: 0.65, irritation: 0.05 })),
+    ).toBe("тёплая");
+    expect(
       moodStatusLabel(mood({ irritation: 0.5, warmth: 0.1, energy: 0.4 })),
     ).toBe("раздражённая");
+  });
+
+  it("decays cached mood on repeated load", () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date("2026-06-30T10:00:00.000Z");
+      vi.setSystemTime(now);
+      saveMood({
+        warmth: 0.25,
+        energy: 1,
+        irritation: 0,
+        updatedAt: now.getTime(),
+      });
+
+      const first = loadMood();
+      vi.setSystemTime(now.getTime() + 4 * 60 * 60 * 1000);
+      const decayed = loadMood();
+
+      expect(first.energy).toBeGreaterThan(0.95);
+      expect(decayed.energy).toBeLessThan(first.energy - 0.1);
+      expect(decayed.updatedAt).toBe(now.getTime() + 4 * 60 * 60 * 1000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses tasks and pomodoro when irritated", () => {
@@ -76,7 +114,7 @@ describe("moodBehavior", () => {
       mood: mood({ warmth: 0.55, energy: 0.65, irritation: 0.05 }),
     });
     expect(line).toContain("слушает");
-    expect(line).toContain("озорная");
+    expect(line).toContain("тёплая");
   });
 
   it("blocks task add from chat when irritated", () => {
@@ -100,5 +138,23 @@ describe("moodBehavior", () => {
     expect(result.handled).toBe(true);
     if (!result.handled) return;
     expect(result.command).toBe("mood-refusal");
+  });
+
+  it("applies stronger irritation shift when initiative is ignored", () => {
+    const base = mood({ warmth: 0.3, energy: 0.4, irritation: 0.1 });
+    const afterOnce = applyInteractionToMood(base, "ignored_initiative");
+    expect(afterOnce.irritation).toBeGreaterThan(base.irritation + 0.08);
+    expect(afterOnce.warmth).toBeLessThan(base.warmth - 0.05);
+  });
+
+  it("stacks repeated ignore mood shifts with a cap", () => {
+    const base = mood({ warmth: 0.3, energy: 0.4, irritation: 0.1 });
+    const afterThree = applyRepeatedIgnoreMood(base, 3);
+    expect(afterThree.irritation).toBeGreaterThan(
+      applyInteractionToMood(base, "ignored_initiative").irritation,
+    );
+    expect(afterThree.warmth).toBeLessThan(
+      applyInteractionToMood(base, "ignored_initiative").warmth,
+    );
   });
 });

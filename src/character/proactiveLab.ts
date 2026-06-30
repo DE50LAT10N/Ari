@@ -187,13 +187,8 @@ export async function runProactiveLabPreview(
     recentUserMessage: input.recentUserMessage,
 
     conversationTopics:
-
       llmBundle.linkedThemes.length > 0 ? llmBundle.linkedThemes : candidateTopics,
-
     llmBundle,
-
-    linkSynthesis: llmBundle,
-
   };
 
   const pkg = buildProactiveInitiativePackage(settings, "check_in", packageOptions);

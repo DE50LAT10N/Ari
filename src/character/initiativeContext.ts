@@ -27,12 +27,13 @@ import {
 } from "./proactiveContextRich";
 import type { InitiativeKind } from "./initiativeKinds";
 import { describeProactiveLiveliness, VN_CHARACTER_RULE, describeProactiveTone, PROACTIVE_SMALLTALK_RULE } from "./proactiveLiveliness";
-import { classifyProactiveReplyTone, isPracticalAnchor, type ProactiveReplyTone } from "./proactiveTone";
+import { isPracticalAnchor, resolveProactiveReplyTone, type ProactiveReplyTone } from "./proactiveTone";
 import { describeMoodForPrompt, loadMood } from "./mood";
 import {
   buildAdviceTopicKey,
   describeAdviceMemoryForPrompt,
 } from "./adviceLedger";
+import { describeAdviceOutcomesForPrompt } from "./adviceOutcome";
 import {
   getProactiveCooldownSubjects,
   getRecentProactiveTopics,
@@ -55,7 +56,6 @@ export type ProactiveInitiativePackage = {
   proactiveReplyTone?: ProactiveReplyTone;
   advisorAngle?: AdvisorAngle;
   proactiveSignalSummary?: string;
-  linkSynthesis?: ProactiveLlmBundle;
   llmBundle?: ProactiveLlmBundle;
 };
 
@@ -85,7 +85,6 @@ export type ProactivePackageOptions = {
   recentUserMessage?: string;
   urgency?: AdviceUrgency;
   recentChatTurns?: Array<{ role: "user" | "assistant"; content: string }>;
-  linkSynthesis?: ProactiveLlmBundle;
   llmBundle?: ProactiveLlmBundle;
 };
 
@@ -278,21 +277,25 @@ export function formatInitiativeContextForPrompt(
 ): string {
   const lines: string[] = [];
 
-  if (bundle.window) {
-    lines.push(
-      `Активное окно: ${bundle.window.processName} — ${bundle.window.title}`,
-    );
-  }
   if (bundle.editorFile) {
     lines.push(
       `Файл в IDE: ${bundle.editorFile}${bundle.editorRepo ? ` (${bundle.editorRepo})` : ""}`,
     );
   }
+  const recentClips = bundle.clipboardSnippets.slice(-3);
+  if (recentClips.length) {
+    lines.push("Буфер (приоритет):");
+    for (const clip of recentClips) {
+      lines.push(`- (${clip.kind}) ${clip.text}`);
+    }
+  }
+  if (bundle.window) {
+    lines.push(
+      `Активное окно: ${bundle.window.processName} — ${bundle.window.title}`,
+    );
+  }
   if (bundle.projectContext) {
     lines.push(bundle.projectContext);
-  }
-  for (const clip of bundle.clipboardSnippets.slice(-3)) {
-    lines.push(`Буфер (${clip.kind}): ${clip.text}`);
   }
   if (bundle.visionSummary) {
     lines.push(`Последний взгляд на экран: ${bundle.visionSummary}`);
@@ -338,7 +341,7 @@ export function formatInitiativeContextForPrompt(
 function resolveLlmBundle(
   options: ProactivePackageOptions,
 ): ProactiveLlmBundle | undefined {
-  return options.llmBundle ?? options.linkSynthesis;
+  return options.llmBundle;
 }
 
 function buildRichContextInput(
@@ -520,14 +523,15 @@ export function buildProactiveInitiativeContext(input: {
   const options = input.options ?? {};
   const llmBundle = resolveLlmBundle(options);
   const tone =
-    llmBundle?.tone ??
     input.proactiveReplyTone ??
-    classifyProactiveReplyTone({
+    resolveProactiveReplyTone({
       initiativeKind: kind,
       advisorAngle: options.advisorAngle,
       anchor,
       bundle,
       conversationTopics,
+      urgencyLevel: options.urgency?.level,
+      llmTone: llmBundle?.tone,
     });
   const kindIntent = buildKindIntent(kind, bundle, options);
   const liveliness = describeProactiveLiveliness(kind);
@@ -545,18 +549,22 @@ export function buildProactiveInitiativeContext(input: {
     !isAdvice && !synthesis ? buildSmalltalkAngles(bundle, banned) : [];
   const adviceBrief =
     isAdvice && !synthesis ? buildAdviceBrief(options.urgency, bundle) : "";
+  const adviceTopicKey = isAdvice
+    ? buildAdviceTopicKey({
+        anchor,
+        signalSummary:
+          options.urgency?.reasons.join("; ") ??
+          synthesis?.primaryChainSummary ??
+          synthesis?.narrativeBrief,
+        processName: bundle.window?.processName,
+        windowTitle: bundle.window?.title,
+      })
+    : "";
   const adviceMemory = isAdvice
-    ? describeAdviceMemoryForPrompt(
-        buildAdviceTopicKey({
-          anchor,
-          signalSummary:
-            options.urgency?.reasons.join("; ") ??
-            synthesis?.primaryChainSummary ??
-            synthesis?.narrativeBrief,
-          processName: bundle.window?.processName,
-          windowTitle: bundle.window?.title,
-        }),
-      )
+    ? describeAdviceMemoryForPrompt(adviceTopicKey)
+    : "";
+  const adviceOutcomes = isAdvice
+    ? describeAdviceOutcomesForPrompt(adviceTopicKey)
     : "";
 
   const synthesisBlock = synthesis
@@ -596,7 +604,7 @@ export function buildProactiveInitiativeContext(input: {
     bundle.moodPrompt && !synthesis
       ? `Настроение Ari сейчас: ${bundle.moodPrompt}`
       : bundle.moodPrompt
-        ? `Настроение Ari: ${bundle.moodPrompt.slice(0, 80)}`
+        ? `Настроение Ari: ${bundle.moodPrompt.slice(0, 160)}`
         : "",
     kindIntent,
     `Текущее время: ${formatRuDateTime(bundle.advisor.now)}`,
@@ -608,6 +616,7 @@ export function buildProactiveInitiativeContext(input: {
     adviceTypeHint,
     adviceBrief ? `Почему сейчас: ${adviceBrief}` : "",
     adviceMemory,
+    adviceOutcomes,
     richBlock
       ? `${synthesis ? "Сырые факты (grounding):" : "Расширенный контекст:"}\n${richBlock}`
       : "",
@@ -678,15 +687,15 @@ export function buildProactiveInitiativePackage(
   const anchor = resolveInitiativeAnchor(kind, bundle, options, banned);
   const conversationTopics = options.conversationTopics ?? [];
   const llmBundle = resolveLlmBundle(options);
-  const proactiveReplyTone =
-    llmBundle?.tone ??
-    classifyProactiveReplyTone({
-      initiativeKind: kind,
-      advisorAngle: options.advisorAngle,
-      anchor,
-      bundle,
-      conversationTopics,
-    });
+  const proactiveReplyTone = resolveProactiveReplyTone({
+    initiativeKind: kind,
+    advisorAngle: options.advisorAngle,
+    anchor,
+    bundle,
+    conversationTopics,
+    urgencyLevel: options.urgency?.level,
+    llmTone: llmBundle?.tone,
+  });
   const eventDescription = buildProactiveInitiativeContext({
     kind,
     bundle,
@@ -729,7 +738,6 @@ export function buildProactiveInitiativePackage(
     proactiveReplyTone,
     advisorAngle: options.advisorAngle,
     proactiveSignalSummary,
-    linkSynthesis: llmBundle,
     llmBundle,
   };
 }

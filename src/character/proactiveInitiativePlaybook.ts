@@ -14,11 +14,13 @@ export type ProactiveMoveHint = {
   groundFactIds: string[];
   hookSeed: string;
   questionSeed?: string;
+  observationSeed?: string;
   requireQuoteFromFacts: boolean;
 };
 
 function factByKind(facts: ProactiveSignalFact[], kind: ProactiveSignalFact["kind"]): ProactiveSignalFact | undefined {
-  return facts.find((fact) => fact.kind === kind);
+  const matches = facts.filter((fact) => fact.kind === kind);
+  return matches[matches.length - 1];
 }
 
 function isIdeWindow(bundle: InitiativeSignalBundle): boolean {
@@ -41,13 +43,14 @@ export function inferInitiativeMoves(
   const taskNext = factByKind(facts, "task");
 
   if (clip) {
-    const quote = clip.detail.slice(0, 80);
+    const quote = clip.detail.slice(0, 120);
     const fileBit = file ? ` в ${file.detail}` : "";
-    hints.push({
+    hints.unshift({
       move: "clipboard_probe",
       groundFactIds: [clip.id, ...(file ? [file.id] : [])],
       hookSeed: `В буфере «${quote}»${fileBit} — это текущая отладка или просто пример?`,
       questionSeed: "Что именно сейчас пытаешься починить?",
+      observationSeed: `В буфере мелькнуло «${quote}»${fileBit}; похоже, это важный кусок текущего контекста.`,
       requireQuoteFromFacts: true,
     });
   }
@@ -63,6 +66,7 @@ export function inferInitiativeMoves(
       groundFactIds: [file.id],
       hookSeed: `Похоже, застряла на ${file.detail} — расскажи, где именно упираешься?`,
       questionSeed: "На каком шаге всё ломается?",
+      observationSeed: `${file.detail} выглядит как центр текущего фокуса; можно просто держаться за него без лишних переключений.`,
       requireQuoteFromFacts: true,
     });
   }
@@ -73,6 +77,7 @@ export function inferInitiativeMoves(
       groundFactIds: [chat.id, ...(clip ? [clip.id] : file ? [file.id] : [])],
       hookSeed: `Ты спрашивала «${chat.detail.slice(0, 60)}» — получилось продвинуться?`,
       questionSeed: "Что уже пробовала?",
+      observationSeed: `Недавний вопрос «${chat.detail.slice(0, 60)}» всё ещё выглядит связанной нитью.`,
       requireQuoteFromFacts: true,
     });
   }
@@ -84,6 +89,7 @@ export function inferInitiativeMoves(
       groundFactIds: facts.slice(0, 2).map((fact) => fact.id),
       hookSeed: `В твоих материалах было: «${snippet}» — это про текущую задачу?`,
       questionSeed: "Применимо к тому, что сейчас в IDE?",
+      observationSeed: `В материалах есть «${snippet}»; похоже, это может быть рядом с текущей темой.`,
       requireQuoteFromFacts: true,
     });
   }
@@ -94,6 +100,7 @@ export function inferInitiativeMoves(
       move: "task_bridge",
       groundFactIds: [taskFact.id],
       hookSeed: `Это связано с задачей «${taskFact.detail.slice(0, 60)}»?`,
+      observationSeed: `Текущая активность похожа на задачу «${taskFact.detail.slice(0, 60)}».`,
       requireQuoteFromFacts: false,
     });
   }
@@ -103,6 +110,7 @@ export function inferInitiativeMoves(
       move: "concrete_step",
       groundFactIds: [file.id],
       hookSeed: `Следующий проверяемый шаг по ${file.detail}: открыть файл и сверить последнее изменение.`,
+      observationSeed: `${file.detail} сейчас главный ориентир; держать фокус на нём выглядит разумно.`,
       requireQuoteFromFacts: true,
     });
   }

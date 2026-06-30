@@ -14,7 +14,7 @@ import {
 import { buildAdviceBrief } from "../src/character/proactiveContextRich";
 import {
   MEDIUM_ADVICE_CAP_MS,
-  proactiveIntervalMs,
+  proactiveAdviceIntervalMs,
   URGENT_ADVICE_MIN_MS,
 } from "../src/character/initiativeConfig";
 import {
@@ -22,7 +22,6 @@ import {
   rememberAdviceSubject,
   resetProactiveStateForTests,
 } from "../src/character/proactiveState";
-import { prefersLocalCompanionLines } from "../src/character/initiativeConfig";
 
 function setupStorage(): void {
   const storage = new Map<string, string>();
@@ -75,7 +74,7 @@ describe("adviceUrgency", () => {
     expect(urgency.reasons.some((r) => r.includes("буфер"))).toBe(true);
   });
 
-  it("offers low urgency for sustained IDE without strong signals", () => {
+  it("does not offer low urgency for sustained IDE without strong signals", () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "notes.md - Ari - Cursor",
@@ -99,8 +98,8 @@ describe("adviceUrgency", () => {
       sessionMinutes: 4,
       userIntervalMs: 20 * 60_000,
     });
-    expect(urgency.level).toBe("low");
-    expect(urgency.effectiveIntervalMs).toBe(20 * 60_000);
+    expect(urgency.level).toBe("none");
+    expect(shouldOfferLlmAdvice(urgency)).toBe(false);
   });
 
   it("does not offer advice when score is zero", () => {
@@ -135,7 +134,7 @@ describe("adviceUrgency", () => {
       sessionMinutes: 5,
     });
     const urgency = scoreAdviceUrgency(bundle, defaultSettings, {
-      userIntervalMs: proactiveIntervalMs(defaultSettings),
+      userIntervalMs: proactiveAdviceIntervalMs(defaultSettings),
     });
     rememberAdviceSubject("ChatPanel.tsx");
     if (urgency.subjectKey) {
@@ -161,17 +160,6 @@ describe("adviceUrgency", () => {
         topic.includes("adviceUrgency.ts"),
       ),
     ).toBe(true);
-  });
-
-  it("uses local lines only when LLM is offline", () => {
-    expect(
-      prefersLocalCompanionLines(defaultSettings, 20 * 60_000, {
-        llmOffline: true,
-      }),
-    ).toBe(true);
-    expect(prefersLocalCompanionLines(defaultSettings, 20 * 60_000)).toBe(
-      false,
-    );
   });
 
   it("builds advice brief from high urgency stacktrace", () => {

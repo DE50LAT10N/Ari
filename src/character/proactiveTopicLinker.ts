@@ -35,6 +35,20 @@ function sharedTokenCount(a: string, b: string): number {
   return wordsA.filter((word) => wordsB.has(word)).length;
 }
 
+function sharedTokenThreshold(
+  left: ProactiveSignalFact,
+  right: ProactiveSignalFact,
+): number {
+  return left.kind === "clipboard" || right.kind === "clipboard" ? 1 : 2;
+}
+
+function tokensOverlap(left: ProactiveSignalFact, right: ProactiveSignalFact): boolean {
+  return (
+    sharedTokenCount(left.detail, right.detail) >=
+    sharedTokenThreshold(left, right)
+  );
+}
+
 function factById(facts: ProactiveSignalFact[], id: string): ProactiveSignalFact | undefined {
   return facts.find((fact) => fact.id === id);
 }
@@ -63,33 +77,38 @@ export function buildFactLinkGraph(
   };
 
   const fileFact = findFacts(facts, "file")[0];
-  const clipFact = findFacts(facts, "clipboard")[0];
+  const clipFacts = findFacts(facts, "clipboard");
+  const clipFact = clipFacts[clipFacts.length - 1];
   const chatFact = findFacts(facts, "chat")[0];
   const urgencyFact = findFacts(facts, "urgency")[0];
   const taskFacts = findFactsByIdPrefix(facts, "task:");
 
   if (clipFact && fileFact) {
     const fileName = fileFact.detail.toLowerCase();
-    if (fileName && clipFact.detail.toLowerCase().includes(fileName.split(/[/\\]/).pop() ?? fileName)) {
-      push({
-        fromFactId: clipFact.id,
-        toFactId: fileFact.id,
-        relation: "same_file",
-        label: "ошибка или фрагмент из буфера относится к текущему файлу в IDE",
-        strength: 0.9,
-      });
-    }
+    const fileBase = fileName.split(/[/\\]/).pop() ?? fileName;
+    const clipMatchesFile =
+      fileBase.length > 0 &&
+      clipFact.detail.toLowerCase().includes(fileBase);
+    push({
+      fromFactId: clipFact.id,
+      toFactId: fileFact.id,
+      relation: "same_file",
+      label: clipMatchesFile
+        ? "ошибка или фрагмент из буфера относится к текущему файлу в IDE"
+        : "буфер и файл в IDE — общий контекст отладки",
+      strength: clipMatchesFile ? 0.95 : 0.88,
+    });
   }
 
   if (chatFact) {
     for (const target of [clipFact, fileFact, ...findFacts(facts, "query")].filter(Boolean) as ProactiveSignalFact[]) {
-      if (sharedTokenCount(chatFact.detail, target.detail) >= 2) {
+      if (tokensOverlap(chatFact, target)) {
         push({
           fromFactId: chatFact.id,
           toFactId: target.id,
           relation: "answers_question",
           label: `вопрос в чате связан с ${target.label.toLowerCase()}`,
-          strength: 0.85,
+          strength: target.kind === "clipboard" ? 0.92 : 0.85,
         });
       }
     }
@@ -116,14 +135,14 @@ export function buildFactLinkGraph(
     if (!queryFact.id.includes("browser") && !queryFact.detail) {
       continue;
     }
-    for (const target of [fileFact, clipFact].filter(Boolean) as ProactiveSignalFact[]) {
-      if (sharedTokenCount(queryFact.detail, target.detail) >= 1) {
+    for (const target of [clipFact, fileFact].filter(Boolean) as ProactiveSignalFact[]) {
+      if (tokensOverlap(queryFact, target) || sharedTokenCount(queryFact.detail, target.detail) >= 1) {
         push({
           fromFactId: queryFact.id,
           toFactId: target.id,
           relation: "researched",
           label: `поиск «${queryFact.detail.slice(0, 40)}» связан с текущей работой`,
-          strength: 0.75,
+          strength: target.kind === "clipboard" ? 0.82 : 0.75,
         });
       }
     }

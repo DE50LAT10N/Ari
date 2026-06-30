@@ -31,6 +31,7 @@ import { recordEmotion } from "../character/emotionHistory";
 import { isQuietModeActive } from "../character/quietMode";
 import { checkOllamaStatus } from "../llm/localLlmClient";
 import { checkGigaChatStatus } from "../llm/gigaChatClient";
+import { isLlmProviderOnline } from "../llm/providerOnline";
 import { refreshGigaChatAuthCache } from "../llm/gigaChatStatus";
 import { getUserIdleSeconds } from "../platform/userIdle";
 import {
@@ -51,6 +52,7 @@ import type { CharacterEmotion, CharacterState } from "../types/character";
 import {
   applyEmotionToMood,
   applyInteractionToMood,
+  applyRepeatedIgnoreMood,
   decayMood,
   loadMood,
   saveMood,
@@ -58,10 +60,12 @@ import {
   moodPreferredEmotion,
   type CharacterMood,
 } from "../character/mood";
+import { ADVICE_IGNORED_EVENT } from "../character/adviceOutcome";
 import { deriveAttentionState, type AttentionState } from "../character/attention";
 import {
   chooseMicroReaction,
   derivePresenceScene,
+  microReactionTypeForEmotion,
   settlingEmotion,
   type MicroReaction,
 } from "../character/presence";
@@ -107,6 +111,10 @@ import {
 import { pickIdleAction, type IdleActionId } from "./idleActions";
 import { PROXIMITY_COOLDOWN_MS, ARI_USER_TYPING_EVENT } from "./avatarMotion";
 import { checkForAppUpdates } from "../platform/appUpdater";
+import {
+  generateAmbientThought,
+  shouldAttemptAmbientThought,
+} from "../character/ambientThoughts";
 
 const INITIATIVE_EMOTION_COOLDOWN_MS = 15_000;
 const MODEL_EMOTION_COOLDOWN_MS = 4_000;
@@ -137,6 +145,8 @@ export function App() {
   const [mood, setMood] = useState<CharacterMood>(loadMood);
   const [microReaction, setMicroReaction] = useState<MicroReaction | null>(null);
   const [ambientBubble, setAmbientBubble] = useState<string | null>(null);
+  const [ambientBubbleSession, setAmbientBubbleSession] = useState(0);
+  const ambientBubbleTextRef = useRef<string | null>(null);
   const [idleAction, setIdleAction] = useState<IdleActionId | null>(null);
   const [windowDragging, setWindowDragging] = useState(false);
   const [voiceSpeaking, setVoiceSpeaking] = useState(false);
@@ -177,6 +187,8 @@ export function App() {
   const lastTypingPerkAtRef = useRef(0);
   const lastBaseEmotionChangeAtRef = useRef(0);
   const ambientTimerRef = useRef<number | null>(null);
+  const ambientThoughtBusyRef = useRef(false);
+  const lastAmbientThoughtAtRef = useRef(0);
   const microReactionTimerRef = useRef<number | null>(null);
   const emotionSettleTimerRef = useRef<number | null>(null);
   const emotionTransitionTimerRef = useRef<number | null>(null);
@@ -276,7 +288,20 @@ export function App() {
     }
 
     if (reason === "model" || reason === "initiative") {
-      setEmotion(softened);
+      const path = emotionTransitionPath(current, softened);
+      if (
+        reason === "model" &&
+        path.length > 1 &&
+        path[0] !== path[1] &&
+        (current === "annoyed" || softened === "happy" || softened === "excited")
+      ) {
+        setEmotion(path[0]);
+        emotionTransitionTimerRef.current = window.setTimeout(() => {
+          setEmotion(path[1]!);
+        }, EMOTION_BRIDGE_MS);
+      } else {
+        setEmotion(softened);
+      }
     } else if (softened === "neutral") {
       setEmotion("neutral");
     } else {
@@ -298,10 +323,13 @@ export function App() {
     setChatOpen(true);
   }, []);
   const handleCollapseChat = useCallback(() => setChatOpen(false), []);
-  const handleAmbientBubble = useCallback(
-    (text: string | null) => setAmbientBubble(text),
-    [],
-  );
+  const handleAmbientBubble = useCallback((text: string | null) => {
+    if (text && !ambientBubbleTextRef.current) {
+      setAmbientBubbleSession((current) => current + 1);
+    }
+    ambientBubbleTextRef.current = text;
+    setAmbientBubble(text);
+  }, []);
   const lastProactiveMicroAtRef = useRef(0);
   const handleProactiveEmitted = useCallback(
     (emotion: CharacterEmotion) => {
@@ -315,7 +343,7 @@ export function App() {
       lastProactiveMicroAtRef.current = now;
       showMicroReactionRef.current?.({
         id: now,
-        type: "thinking",
+        type: microReactionTypeForEmotion(emotion),
         emotion,
         durationMs: 2800,
       });
@@ -737,6 +765,17 @@ export function App() {
   }, [chatOpen, characterState, userIdleSeconds]);
 
   useEffect(() => {
+    const handleAdviceIgnored = (event: Event) => {
+      const count =
+        (event as CustomEvent<{ count?: number }>).detail?.count ?? 1;
+      setMood((current) => applyRepeatedIgnoreMood(current, count));
+    };
+    window.addEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
+    return () =>
+      window.removeEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
+  }, []);
+
+  useEffect(() => {
     if (!settings.pomodoroEnabled) return;
 
     const handleTick = () => {
@@ -887,7 +926,10 @@ export function App() {
 
   useEffect(() => {
     if (!ambientBubble) return;
-    const timer = window.setTimeout(() => setAmbientBubble(null), 12_000);
+    const timer = window.setTimeout(() => {
+      ambientBubbleTextRef.current = null;
+      setAmbientBubble(null);
+    }, 12_000);
     return () => window.clearTimeout(timer);
   }, [ambientBubble]);
 
@@ -1004,6 +1046,93 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    let timer: number;
+    let cancelled = false;
+
+    const schedule = () => {
+      const delay = 35_000 + Math.random() * 55_000;
+      timer = window.setTimeout(() => {
+        const run = async () => {
+          const context = presenceContextRef.current;
+          const now = Date.now();
+          const companionSilenceMs = getCompanionSilenceMs();
+          const providerOnline = isLlmProviderOnline(settings, ollamaOnline);
+          const canThink =
+            context &&
+            shouldAttemptAmbientThought({
+              providerOnline,
+              avatarLivelinessEnabled: context.avatarLivelinessEnabled,
+              chatOpen: context.chatOpen,
+              characterState: context.characterState,
+              quietModeActive: context.quietModeActive,
+              hasVisibleBubble: Boolean(ambientBubbleTextRef.current),
+              busy: ambientThoughtBusyRef.current,
+              elapsedSinceLastMs: now - lastAmbientThoughtAtRef.current,
+              userIdleSeconds: context.userIdleSeconds,
+              companionSilenceMs,
+              attention: context.attention,
+            });
+
+          if (!canThink || !context) {
+            return;
+          }
+
+          ambientThoughtBusyRef.current = true;
+          try {
+            const thought = await generateAmbientThought(settings, {
+              scene: context.scene,
+              attention: context.attention,
+              mood: context.mood,
+              activeProcess: context.activeWindow?.processName,
+              activeTitle: context.activeWindow?.title,
+              userIdleSeconds: context.userIdleSeconds,
+              companionSilenceMs,
+              pomodoroPhase: pomodoro.phase,
+              focusActive: isFocusSessionActive(),
+              characterState: context.characterState,
+            });
+            if (!thought || cancelled || chatOpenRef.current) {
+              return;
+            }
+            lastAmbientThoughtAtRef.current = Date.now();
+            setAmbientBubbleSession((current) => current + 1);
+            ambientBubbleTextRef.current = thought.text;
+            setAmbientBubble(thought.text);
+            setAmbientEmotion(thought.emotion);
+            showMicroReactionRef.current(
+              {
+                id: Date.now(),
+                type: "thinking",
+                emotion: thought.emotion,
+                durationMs: 3200,
+              },
+              "ambient",
+            );
+          } finally {
+            ambientThoughtBusyRef.current = false;
+          }
+        };
+
+        void run().finally(() => {
+          if (!cancelled) {
+            schedule();
+          }
+        });
+      }, delay);
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    settings,
+    ollamaOnline,
+    pomodoro.phase,
+  ]);
+
+  useEffect(() => {
     const onTyping = () => {
       if (!chatOpenRef.current) return;
       if (characterState !== "listening" && characterState !== "idle") return;
@@ -1099,11 +1228,22 @@ export function App() {
       <NotificationToast />
       <AriTaskBoard
         chatOpen={chatOpen}
-        onSpeakAbout={(text) => setAmbientBubble(text.slice(0, 220))}
+        onSpeakAbout={(text) => handleAmbientBubble(text.slice(0, 220))}
       />
       {ambientBubble && !chatOpen && (
-        <div className="ari-ambient-bubble" role="status" aria-live="polite">
-          <span className="ari-ambient-bubble-text">{ambientBubble}</span>
+        <div
+          key={ambientBubbleSession}
+          className="ari-ambient-bubble"
+          role="status"
+          aria-live="polite"
+        >
+          <span
+            className={`ari-ambient-bubble-text${
+              characterState === "speaking" ? " is-typing" : ""
+            }`}
+          >
+            {ambientBubble}
+          </span>
         </div>
       )}
       <Avatar

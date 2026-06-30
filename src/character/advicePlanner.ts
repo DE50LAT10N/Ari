@@ -1,4 +1,10 @@
 import type { AdviceLedgerEntry } from "./adviceLedger";
+import {
+  adviceTokenOverlap,
+  classifyAdviceArchetype,
+  evaluateAdviceCandidateNovelty,
+} from "./adviceNovelty";
+import type { AdviceOutcomeRecord } from "./adviceOutcome";
 import type { AdviceUrgency } from "./adviceUrgency";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import type { ProactiveSignalFact } from "./proactiveLlmEngine";
@@ -35,7 +41,8 @@ function factByKind(
   facts: ProactiveSignalFact[],
   kind: ProactiveSignalFact["kind"],
 ): ProactiveSignalFact | undefined {
-  return facts.find((fact) => fact.kind === kind);
+  const matches = facts.filter((fact) => fact.kind === kind);
+  return matches[matches.length - 1];
 }
 
 function factsByKind(
@@ -45,13 +52,10 @@ function factsByKind(
   return facts.filter((fact) => fact.kind === kind);
 }
 
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
-
 function feedbackBonus(
   candidate: Omit<AdviceCandidate, "score">,
   feedback: AdviceLedgerEntry[],
+  outcomes: AdviceOutcomeRecord[],
 ): number {
   let bonus = 0;
   for (const entry of feedback) {
@@ -83,26 +87,53 @@ function feedbackBonus(
       bonus -= candidate.kind === "rest" ? 0.2 : 0.65;
     }
   }
+  for (const entry of outcomes) {
+    if (!entry.outcome) continue;
+    const sameKind =
+      entry.candidateKind === candidate.kind ||
+      entry.candidateKind === candidate.id;
+    if (entry.outcome === "helped" || entry.outcome === "resolved") {
+      bonus += sameKind ? 0.28 : 0.08;
+    }
+    if (entry.outcome === "ignored") {
+      bonus -= sameKind ? 0.35 : 0.1;
+      if (candidate.kind === "clarifying_probe") bonus += 0.12;
+    }
+    if (entry.outcome === "stale") {
+      bonus -= sameKind ? 0.32 : 0.08;
+      bonus += candidate.evidenceIds.length >= 2 ? 0.1 : -0.1;
+    }
+    if (entry.outcome === "interrupted") {
+      bonus -= sameKind ? 0.85 : 0.18;
+      if (candidate.interruptionCost <= 0.28) bonus += 0.08;
+    }
+  }
   return bonus;
 }
 
 function scoreCandidate(
   candidate: Omit<AdviceCandidate, "score">,
   feedback: AdviceLedgerEntry[],
+  outcomes: AdviceOutcomeRecord[],
 ): AdviceCandidate {
-  const score =
+  let score =
     candidate.expectedUtility * 1.4 +
     candidate.confidence +
-    feedbackBonus(candidate, feedback) -
+    feedbackBonus(candidate, feedback, outcomes) -
+    recentAdviceRepeatPenalty(candidate, feedback) -
     candidate.interruptionCost;
+  if (candidate.evidenceIds.some((id) => id.startsWith("clip:"))) {
+    score += 0.2;
+  }
   return { ...candidate, score };
 }
 
 function makeCandidate(
   input: Omit<AdviceCandidate, "score">,
   feedback: AdviceLedgerEntry[],
+  outcomes: AdviceOutcomeRecord[],
 ): AdviceCandidate {
-  return scoreCandidate(input, feedback);
+  return scoreCandidate(input, feedback, outcomes);
 }
 
 function firstUsefulFeedback(
@@ -115,16 +146,124 @@ function firstUsefulFeedback(
   );
 }
 
+function recentAdviceRepeatPenalty(
+  candidate: Omit<AdviceCandidate, "score">,
+  history: AdviceLedgerEntry[],
+  now = Date.now(),
+): number {
+  let penalty = 0;
+  let similarCount = 0;
+  const candidateArchetype = classifyAdviceArchetype(
+    candidate.actionText,
+    candidate.kind,
+  );
+  for (const entry of history.slice(0, 8)) {
+    const ageMs = now - entry.at;
+    if (ageMs > 6 * 60 * 60_000) {
+      continue;
+    }
+    const entryText = [
+      entry.practicalHook,
+      entry.replyText,
+      entry.linkNarrative,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const sameKind =
+      entry.adviceCandidateKind === candidate.kind ||
+      entry.initiativeMove === candidate.kind;
+    const sameArchetype =
+      candidateArchetype &&
+      candidateArchetype ===
+        classifyAdviceArchetype(
+          entryText,
+          entry.adviceCandidateKind ?? entry.initiativeMove,
+        );
+    const overlap =
+      Math.max(
+        adviceTokenOverlap(candidate.actionText, entry.practicalHook),
+        adviceTokenOverlap(candidate.actionText, entry.replyText),
+      );
+    if (sameKind || sameArchetype || overlap >= 0.32) {
+      similarCount += 1;
+      penalty += sameKind ? 0.55 : 0.28;
+      if (sameArchetype) penalty += 0.45;
+      if (overlap >= 0.32) penalty += 0.25;
+      if (!entry.feedback) penalty += 0.15;
+    }
+  }
+  if (similarCount >= 2) {
+    penalty += 0.55;
+  }
+  return penalty;
+}
+
+function selectAdviceCandidate(
+  ranked: AdviceCandidate[],
+  facts: ProactiveSignalFact[],
+  history: AdviceLedgerEntry[],
+  outcomes: AdviceOutcomeRecord[],
+): AdviceCandidate | null {
+  const hasEvidence = (candidate: AdviceCandidate) =>
+    candidate.evidenceIds.length > 0 || candidate.kind === "rest";
+  const isNovel = (candidate: AdviceCandidate) =>
+    evaluateAdviceCandidateNovelty({
+      candidate,
+      recentEntries: history,
+    }).length === 0;
+
+  for (const candidate of ranked) {
+    if (candidate.score >= 0.75 && hasEvidence(candidate) && isNovel(candidate)) {
+      return candidate;
+    }
+  }
+  for (const candidate of ranked) {
+    if (candidate.score >= 0.55 && hasEvidence(candidate) && isNovel(candidate)) {
+      return candidate;
+    }
+  }
+
+  const clip = factByKind(facts, "clipboard");
+  if (clip) {
+    const quote = clip.detail.slice(0, 120);
+    return makeCandidate(
+      {
+        id: "clarifying-probe-clipboard",
+        kind: "clarifying_probe",
+        evidenceIds: [clip.id],
+        actionText: `Прямо процитируй буфер «${quote}» и спроси, это текущая отладка или отвлечённый фрагмент.`,
+        expectedUtility: 0.52,
+        interruptionCost: 0.28,
+        confidence: 0.6,
+        reason: "уточняющая привязка к буферу после отклонения повторных советов",
+      },
+      history,
+      outcomes,
+    );
+  }
+
+  return null;
+}
+
 export function planAdvice(input: {
   bundle: InitiativeSignalBundle;
   facts: ProactiveSignalFact[];
   urgency?: AdviceUrgency;
   feedback?: AdviceLedgerEntry[];
+  history?: AdviceLedgerEntry[];
+  outcomes?: AdviceOutcomeRecord[];
   candidateTopics?: string[];
   ragSnippets?: string[];
 }): AdvicePlan {
   const { bundle, facts } = input;
   const feedback = input.feedback ?? [];
+  const history = [
+    ...feedback,
+    ...(input.history ?? []).filter(
+      (entry) => !feedback.some((item) => item.id === entry.id),
+    ),
+  ];
+  const outcomes = input.outcomes ?? [];
   const candidates: AdviceCandidate[] = [];
   const file = factByKind(facts, "file");
   const clip = factByKind(facts, "clipboard");
@@ -132,6 +271,28 @@ export function planAdvice(input: {
   const task = facts.find((fact) => fact.id.startsWith("task:link")) ??
     factByKind(facts, "task");
   const query = factsByKind(facts, "query")[0];
+
+  if (clip) {
+    const quote = clip.detail.slice(0, 120);
+    candidates.push(
+      makeCandidate(
+        {
+          id: "clipboard-probe",
+          kind: "clarifying_probe",
+          evidenceIds: [clip.id, file?.id].filter(Boolean) as string[],
+          actionText: file
+            ? `Процитируй буфер «${quote}» и предложи один проверяемый шаг по ${file.detail}, опираясь на этот фрагмент.`
+            : `Процитируй буфер «${quote}» и спроси, относится ли он к текущей задаче, прежде чем советовать дальше.`,
+          expectedUtility: 0.86,
+          interruptionCost: 0.22,
+          confidence: 0.8,
+          reason: "свежий фрагмент в буфере требует конкретной привязки",
+        },
+        history,
+        outcomes,
+      ),
+    );
+  }
 
   if (
     clip?.detail.match(/error|exception|traceback|panic|failed|ошиб/i) ||
@@ -147,16 +308,17 @@ export function planAdvice(input: {
             Boolean,
           ) as string[],
           actionText: file
-            ? `Проверь ближайшее изменение в ${file.detail}; если ошибка из буфера относится к нему, начни с места, где появляется первый stack frame или импорт.`
+            ? `Проверь ближайшее изменение в ${file.detail}; если ошибка из буфера «${clip?.detail.slice(0, 120) ?? ""}» относится к нему, начни с места, где появляется первый stack frame или импорт.`
             : clip
-              ? `Начни с первой строки ошибки из буфера: выдели тип ошибки и ближайший файл/строку, а не весь stacktrace.`
+              ? `Начни с первой строки ошибки из буфера «${clip.detail.slice(0, 120)}»: выдели тип ошибки и ближайший файл/строку, а не весь stacktrace.`
               : "Сузь отладку до одной гипотезы и проверь её перед новым переключением контекста.",
           expectedUtility: 0.9,
           interruptionCost: 0.25,
           confidence: clip || file ? 0.82 : 0.62,
           reason: "есть свежий debug/stuck сигнал",
         },
-        feedback,
+        history,
+        outcomes,
       ),
     );
   }
@@ -174,7 +336,8 @@ export function planAdvice(input: {
           confidence: 0.78,
           reason: "активность уверенно совпала с открытой задачей",
         },
-        feedback,
+        history,
+        outcomes,
       ),
     );
   }
@@ -192,7 +355,8 @@ export function planAdvice(input: {
           confidence: 0.7,
           reason: "много открытых задач или контекстов",
         },
-        feedback,
+        history,
+        outcomes,
       ),
     );
   }
@@ -210,7 +374,8 @@ export function planAdvice(input: {
           confidence: 0.68,
           reason: "заметны частые переключения контекста",
         },
-        feedback,
+        history,
+        outcomes,
       ),
     );
   }
@@ -228,7 +393,8 @@ export function planAdvice(input: {
           confidence: 0.72,
           reason: "сессия достаточно длинная для паузы",
         },
-        feedback,
+        history,
+        outcomes,
       ),
     );
   }
@@ -248,12 +414,13 @@ export function planAdvice(input: {
           confidence: input.ragSnippets?.length ? 0.72 : 0.58,
           reason: "есть свежий поиск или RAG-фрагмент",
         },
-        feedback,
+        history,
+        outcomes,
       ),
     );
   }
 
-  const useful = firstUsefulFeedback(feedback);
+  const useful = firstUsefulFeedback(history);
   if (useful) {
     candidates.push(
       makeCandidate(
@@ -270,7 +437,8 @@ export function planAdvice(input: {
           confidence: 0.66,
           reason: "по этой теме уже был полезный совет",
         },
-        feedback,
+        history,
+        outcomes,
       ),
     );
   }
@@ -290,17 +458,14 @@ export function planAdvice(input: {
           confidence: 0.58,
           reason: "сигнал есть, но полезный шаг неочевиден",
         },
-        feedback,
+        history,
+        outcomes,
       ),
     );
   }
 
   const ranked = candidates.sort((left, right) => right.score - left.score);
-  const selected = ranked.find(
-    (candidate) =>
-      candidate.score >= 0.75 &&
-      (candidate.evidenceIds.length > 0 || candidate.kind === "rest"),
-  ) ?? null;
+  const selected = selectAdviceCandidate(ranked, facts, history, outcomes);
 
   return {
     selected,

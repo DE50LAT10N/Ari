@@ -53,15 +53,32 @@ All settings persist in `localStorage` key `desktop-character.settings.v1`. Defa
 | Field | Default | Effect |
 |-------|---------|--------|
 | `proactiveEnabled` | true | Master initiative toggle |
-| `proactiveIntervalMinutes` | 20 | Base interval (scaled by level) |
+| `proactiveSmalltalkIntervalMinutes` | 10 | Base interval for smalltalk/check-ins (scaled by level) |
+| `proactiveAdviceIntervalMinutes` | 20 | Base interval for practical advice attempts (scaled by level) |
+| `proactiveIntervalMinutes` | 20 | Legacy alias kept for migration; mirrors advice interval |
 | `proactiveOpenChat` | true | Open chat on proactive message |
-| `initiativeLevel` | `normal` | `silent` / `rare` / `normal` / `active` |
+| `initiativeLevel` | `normal` | `silent` / `rare` / `normal` / `active` — scales frequency; `active` ≠ advice-only |
 | `eventReactionsEnabled` | true | Window/session reactions |
 | `remindersEnabled` | true | Due task reminders |
 | `quietHoursStart` | 23 | Quiet hours start (hour) |
 | `quietHoursEnd` | 8 | Quiet hours end |
 | `adaptiveInitiativeEnabled` | false | Online logistic learning |
 | `intentClassifierEnabled` | true | Regex intent for modes/rerank |
+
+### Advice vs smalltalk balance
+
+Advice and smalltalk use independent clocks. A failed advice attempt backs off only advice; it does not consume the smalltalk slot. When both clocks are ready, high-urgency advice can preempt, otherwise smalltalk wins if advice has recently dominated.
+
+Tone is still derived from activity signals:
+
+| Signal | Typical tone |
+|--------|----------------|
+| Stacktrace / stuck / repeated error | Advice |
+| Generic IDE session, no debug signals | Smalltalk check-in |
+| Social / memory / return topics | Smalltalk |
+| Low advice urgency + recent advice | Smalltalk wins tick |
+
+`initiativeLevel: active` increases check-in frequency; it does **not** force advice on every tick. Daily initiative cap in telemetry is informational (`9999`), not a hard user limit — see `docs/METRICS.md`.
 
 ## Memory
 
@@ -151,4 +168,4 @@ One-time migration (`companion-v2` key): if user had all companion flags off, en
 | `vision` | `resolveVisionModel` |
 | `embedding` | `resolveEmbeddingModel` |
 
-Companion preset (onboarding/settings): enables memory, initiative, reminders, activity, event reactions, `initiativeLevel: normal`.
+Companion preset (onboarding/settings): enables memory, initiative, reminders, activity, event reactions, `initiativeLevel: normal`. Copy describes advice on errors/stuck and smalltalk in pauses.

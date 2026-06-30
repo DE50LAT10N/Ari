@@ -1,6 +1,6 @@
 # Ari advisor simulation report
 
-Generated: 2026-06-30T02:49:51.212Z
+Generated: 2026-06-30T10:45:09.299Z
 
 | Scenario | Expected | Actual | Initiative | Value/Risk | Flags | Topics |
 |----------|----------|--------|------------|------------|-------|--------|
@@ -37,7 +37,7 @@ Generated: 2026-06-30T02:49:51.212Z
 | Level | Configured | Effective interval | First check tick | Starts | Reason |
 |-------|------------|--------------------|------------------|--------|--------|
 | active | 1 min | 39 sec | 45 sec | yes | плановая проверка после тишины |
-| balanced | 1 min | 60 sec | 60 sec | yes | плановая проверка после тишины |
+| normal | 1 min | 60 sec | 60 sec | yes | плановая проверка после тишины |
 | rare | 1 min | 96 sec | 105 sec | yes | плановая проверка после тишины |
 | silent | 1 min | 150 sec | 150 sec | no | нет достаточно конкретного повода |
 

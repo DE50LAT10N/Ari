@@ -126,6 +126,7 @@ export type RuntimeContext = {
   proactiveLinkNarrative?: string;
   proactivePracticalHook?: string;
   proactiveInitiativeMove?: string;
+  proactiveNoveltyGuidance?: string;
   userFactDetails?: Array<{
     text: string;
     importance: "trivial" | "useful" | "important" | "core";
@@ -450,15 +451,24 @@ function createSystemPrompt(context?: RuntimeContext): string {
         isAdvice
           ? `Дай практическую пользу: ${PROACTIVE_ADVICE_RULE}`
           : PROACTIVE_SMALLTALK_RULE,
+        !isAdvice
+          ? "Для смолтока можно уйти в боковую тему: настроение Ari, музыка, игры, еда, маленькая странная мысль, культурный или новостной повод. Не обязательно привязываться к текущему окну. Если упоминаешь новость без live-проверки, не называй её свежим фактом — формулируй как ассоциацию или повод."
+          : "",
+        !isAdvice
+          ? "Смолток должен звучать завершённо. Не заканчивай вопросом, не пиши «как дела?», «чем занимаешься?», «что думаешь?», «расскажешь?», «хочешь, я…?»."
+          : "",
         context.proactiveLinkNarrative
           ? "Опирайся на связанную нить ниже — не выбирай из списка тем и не пересказывай сигналы списком."
           : "",
         context.proactivePracticalHook && isAdvice
-          ? `Дай именно этот заход своими словами Ari: ${sanitizeUntrusted(context.proactivePracticalHook, 220)}.`
+          ? `Используй намерение этого захода, но не копируй его структуру и не повторяй недавние архетипы: ${sanitizeUntrusted(context.proactivePracticalHook, 220)}.`
+          : "",
+        context.proactiveNoveltyGuidance && isAdvice
+          ? context.proactiveNoveltyGuidance
           : "",
         context.proactiveInitiativeMove === "clipboard_probe" ||
         context.proactiveInitiativeMove === "ide_invite"
-          ? "Процитируй фрагмент из буфера или файла в кавычках и задай один конкретный вопрос — как инициативный ассистент, не как меню тем."
+          ? "Процитируй фрагмент из буфера или файла в кавычках и задай один конкретный вопрос — как коллега Ari за плечом, не как меню тем."
           : "",
         context.proactiveInitiativeMove === "followup_probe"
           ? "Сошлись на предыдущий вопрос пользователя и спроси, продвинулся ли он — с конкретной отсылкой."

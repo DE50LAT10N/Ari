@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { chooseIdleLine } from "../src/character/idleLines";
 import { applyInteractionToMood, loadMood, saveMood } from "../src/character/mood";
 import { biasEmotionByMood } from "../src/character/emotionPresentation";
 import {
@@ -53,12 +52,6 @@ describe("character depth", () => {
       expect(outcome.description).toContain("Полуденный");
       expect(outcome.description).toContain("середина дня");
     }
-  });
-
-  it("avoids immediate idle line repeats", () => {
-    const first = chooseIdleLine("focus");
-    const second = chooseIdleLine("focus");
-    expect(second.text).not.toBe(first.text);
   });
 
   it("shifts mood on new interaction types", () => {

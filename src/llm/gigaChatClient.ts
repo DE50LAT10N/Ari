@@ -13,7 +13,11 @@ import {
   setGigaChatAuthKeyPresent,
 } from "./gigaChatStatus";
 import type { ScreenCapture } from "../platform/screenCapture";
-import { resolveModel, type ModelTask } from "./modelRouter";
+import {
+  resolveModel,
+  resolveSynthesisModel,
+  type ModelTask,
+} from "./modelRouter";
 
 const AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
 const API_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1";
@@ -119,7 +123,10 @@ export async function completeGigaChatJson<T>(
   maxTokens = 256,
   task: ModelTask = "json",
 ): Promise<T> {
-  const model = resolveModel(task, settings);
+  const model =
+    task === "initiativeSynthesis" || task === "initiativeGate"
+      ? resolveSynthesisModel(settings)
+      : resolveModel(task, settings);
   const messagesForJson = gigaMessages(messages);
   const systemMessage = messagesForJson.find(
     ({ role }) => role === "system",
@@ -312,7 +319,7 @@ export async function analyzeGigaChatImages(
       method: "POST",
       headers: await apiHeaders(settings),
       body: JSON.stringify({
-        model: settings.gigaChatVisionModel,
+        model: resolveModel("vision", settings),
         messages,
         temperature: 0.1,
         max_tokens: Math.min(settings.maxTokens, 1600),

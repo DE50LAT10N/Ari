@@ -109,6 +109,8 @@ export function shouldRetryReply(validation: OocValidationResult): boolean {
       "duplicate proactive reply",
       "shallow advice",
       "proactive quality",
+      "proactive meta commentary",
+      "advice novelty",
     ].includes(issue),
   );
 }
@@ -130,6 +132,9 @@ export function buildCorrectionUserMessage(issues: string[]): string {
   if (issues.includes("assistant tone")) {
     lines.push(
       "Не начинай как сервисный ассистент («Конечно», «Вот несколько советов»). Звучи как Ari из visual novel.",
+    );
+    lines.push(
+      "Не нумеруй шаги списком 1. 2. 3. — один проверяемый шаг от первого лица, без корпоративного тона.",
     );
   }
   if (issues.includes("masculine self reference")) {
@@ -182,6 +187,11 @@ export function buildCorrectionUserMessage(issues: string[]): string {
   if (issues.includes("proactive meta commentary")) {
     lines.push(
       "Убери мета-комментарии про «сюжет», «процесс» и «результат». Привяжись к конкретному файлу, ошибке, окну или факту из контекста.",
+    );
+  }
+  if (issues.includes("advice novelty")) {
+    lines.push(
+      "Не перефразируй тот же совет. Смени архетип: другой конкретный шаг, другой факт, или не давай совет.",
     );
   }
   if (

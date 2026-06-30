@@ -1,4 +1,5 @@
 import type { AppSettings } from "../settings/appSettings";
+import { resolveGigaChatAuxModel } from "./gigaChatModels";
 
 export type VisionSource = "gigachat" | "ollama";
 
@@ -10,7 +11,11 @@ export function getVisionSource(settings: AppSettings): VisionSource {
 }
 
 export function resolveVisionModel(settings: AppSettings): string {
-  return getVisionSource(settings) === "gigachat"
-    ? settings.gigaChatVisionModel
-    : settings.visionModel;
+  if (getVisionSource(settings) === "gigachat") {
+    return resolveGigaChatAuxModel(
+      settings.gigaChatModel,
+      settings.gigaChatVisionModel,
+    );
+  }
+  return settings.visionModel;
 }

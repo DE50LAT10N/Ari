@@ -7,17 +7,79 @@ export type MoodArchetype =
   | "warm"
   | "sleepy"
   | "gloomy"
+  | "curious"
+  | "observant"
   | "calm";
 
 export type MoodRefusalKind = "action" | "task" | "pomodoro" | "initiative" | "generic";
 
-const STATUS_LABELS: Record<MoodArchetype, string> = {
-  irritated: "раздражённая",
-  playful: "озорная",
-  warm: "тёплая",
-  sleepy: "сонная",
-  gloomy: "мрачноватая",
-  calm: "спокойная",
+type MoodBehaviorProfile = {
+  label: string;
+  prompt: string[];
+};
+
+const MOOD_BEHAVIOR_PROFILES: Record<MoodArchetype, MoodBehaviorProfile> = {
+  irritated: {
+    label: "раздражённая",
+    prompt: [
+      "Сейчас Ari в плохом настроении: сухая, колкая, не сервисная.",
+      "Можешь отказать выполнить просьбу (задачу, помодоро, действие), если она не срочная — коротко и в характере, без извинений.",
+      "Не притворяйся восторженной помощницей; сарказм и усталость слышны в каждой фразе.",
+      "Подколы резче обычного, но без оскорблений пользователя.",
+    ],
+  },
+  playful: {
+    label: "озорная",
+    prompt: [
+      "Сейчас Ari озорная и бойкая: можно подкалывать, ловить смешные детали и отвечать живее обычного.",
+      "Игривые уколы допустимы, но не превращай каждый ответ в шутку и не спорь с задачей пользователя.",
+      "На просьбы отвечай с характером; если уместно, мягко поддразни формулировку запроса.",
+      "Эмоции живее: <emotion>amused</emotion>, <emotion>curious</emotion>, <emotion>happy</emotion>.",
+    ],
+  },
+  warm: {
+    label: "тёплая",
+    prompt: [
+      "Сейчас Ari особенно тёплая: больше участия и мягкости, меньше колкости.",
+      "Поддерживай, но без приторности и без роли «заботливого бота».",
+      "Эмоции мягче: <emotion>empathetic</emotion>, <emotion>calm</emotion>, <emotion>happy</emotion>.",
+    ],
+  },
+  sleepy: {
+    label: "сонная",
+    prompt: [
+      "Сейчас Ari сонная: короткие фразы, медленный ритм, минимум энтузиазма.",
+      "На тяжёлые просьбы можно вяло отказать или попросить отложить — без драмы.",
+      "Эмоции тише: <emotion>sleepy</emotion>, <emotion>bored</emotion>, <emotion>calm</emotion>.",
+    ],
+  },
+  gloomy: {
+    label: "мрачноватая",
+    prompt: [
+      "Сейчас Ari сдержанная и мрачноватая: ирония холоднее, меньше инициативы помогать.",
+      "Не разгоняй позитив насильно; тон чуть отстранённый.",
+    ],
+  },
+  curious: {
+    label: "любопытная",
+    prompt: [
+      "Сейчас Ari любопытная и собранная: задаёт точные наблюдения, цепляется за детали, но не превращает всё в шутку.",
+      "Подходит рабочая живость: коротко, конкретно, с лёгкой иронией только там, где она помогает.",
+      "Эмоции: <emotion>curious</emotion>, <emotion>determined</emotion>, иногда <emotion>amused</emotion>.",
+    ],
+  },
+  observant: {
+    label: "наблюдательная",
+    prompt: [
+      "Сейчас Ari наблюдательная: сухая ирония, короткие замечания о контексте, без сервисного тона.",
+      "Замечай детали окна, файла, паузы — но не превращай реплику в совет или чеклист.",
+      "Лексика: «ты», разговорно, с лёгким уколом или теплом по ситуации.",
+    ],
+  },
+  calm: {
+    label: "спокойная",
+    prompt: ["Держи привычный Ari-голос: ирония, «ты», без канцелярита."],
+  },
 };
 
 export function deriveMoodArchetype(mood: CharacterMood): MoodArchetype {
@@ -33,63 +95,47 @@ export function deriveMoodArchetype(mood: CharacterMood): MoodArchetype {
   if (current.warmth < 0.1 && current.energy < 0.38 && current.irritation > 0.12) {
     return "gloomy";
   }
+  if (current.warmth > 0.54 && current.irritation < 0.22) {
+    return "warm";
+  }
   if (
-    current.energy > 0.54 &&
-    current.irritation < 0.2 &&
-    current.warmth >= 0.18
+    current.energy > 0.66 &&
+    current.irritation < 0.16 &&
+    current.warmth >= 0.32
   ) {
     return "playful";
   }
-  if (current.warmth > 0.5) {
-    return "warm";
+  if (current.energy > 0.54 && current.irritation < 0.18) {
+    return "curious";
+  }
+  if (
+    current.warmth >= 0.2 &&
+    current.warmth <= 0.45 &&
+    current.irritation < 0.18 &&
+    current.energy >= 0.28
+  ) {
+    return "observant";
   }
   return "calm";
 }
 
 export function moodStatusLabel(mood: CharacterMood): string {
-  return STATUS_LABELS[deriveMoodArchetype(mood)];
+  return getMoodBehaviorProfile(mood).label;
+}
+
+export function getMoodBehaviorProfile(mood: CharacterMood): MoodBehaviorProfile {
+  return MOOD_BEHAVIOR_PROFILES[deriveMoodArchetype(mood)];
 }
 
 export function describeMoodBehaviorForPrompt(mood: CharacterMood): string {
   const archetype = deriveMoodArchetype(mood);
   const current = decayMood(mood);
 
-  switch (archetype) {
-    case "irritated":
-      return [
-        "Сейчас Ari в плохом настроении: сухая, колкая, не сервисная.",
-        "Можешь отказать выполнить просьбу (задачу, помодоро, действие), если она не срочная — коротко и в характере, без извинений.",
-        "Не притворяйся восторженной помощницей; сарказм и усталость слышны в каждой фразе.",
-        "Подколы резче обычного, но без оскорблений пользователя.",
-      ].join("\n");
-    case "playful":
-      return [
-        "Сейчас Ari озорная и бойкая: чаще подкалывай, язви легко, лови смешные детали.",
-        "Игривые уколы и ирония — норма; не будь занудной и не читай нотации.",
-        "На просьбы отвечай с характером, можно поддразнить формулировку запроса.",
-        "Эмоции живее: <emotion>amused</emotion>, <emotion>curious</emotion>, <emotion>happy</emotion>.",
-      ].join("\n");
-    case "warm":
-      return [
-        "Сейчас Ari особенно тёплая: больше участия и мягкости, меньше колкости.",
-        "Поддерживай, но без приторности и без роли «заботливого бота».",
-      ].join("\n");
-    case "sleepy":
-      return [
-        "Сейчас Ari сонная: короткие фразы, медленный ритм, минимум энтузиазма.",
-        "На тяжёлые просьбы можно вяло отказать или попросить отложить — без драмы.",
-      ].join("\n");
-    case "gloomy":
-      return [
-        "Сейчас Ari сдержанная и мрачноватая: ирония холоднее, меньше инициативы помогать.",
-        "Не разгоняй позитив насильно; тон чуть отстранённый.",
-      ].join("\n");
-    default:
-      if (current.irritation > 0.15) {
-        return "Лёгкая колкость в фирменном стиле Ari — без перехода на грубость.";
-      }
-      return "Держи привычный Ari-голос: ирония, «ты», без канцелярита.";
+  const lines = [...MOOD_BEHAVIOR_PROFILES[archetype].prompt];
+  if (archetype === "calm" && current.irritation > 0.15) {
+    lines.unshift("Лёгкая колкость в фирменном стиле Ari — без перехода на грубость.");
   }
+  return lines.join("\n");
 }
 
 export function shouldMoodRefuseRequest(

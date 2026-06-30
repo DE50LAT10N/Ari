@@ -31,6 +31,7 @@ export type AdviceLedgerEntry = {
   linkNarrative?: string;
   practicalHook?: string;
   initiativeMove?: string;
+  adviceCandidateKind?: string;
   replyText?: string;
   feedback?: AdviceFeedback;
 };
@@ -167,6 +168,7 @@ export function rememberAdviceSent(
     linkNarrative: input.linkNarrative,
     practicalHook: input.practicalHook,
     initiativeMove: input.initiativeMove,
+    adviceCandidateKind: input.adviceCandidateKind,
     replyText: input.replyText?.slice(0, 700),
   };
   saveAdviceLedger([entry, ...loadAdviceLedger(now)]);
@@ -200,14 +202,46 @@ export function getRecentAdviceFeedback(
   );
 }
 
+export function countRecentAdviceByTone(
+  tone: "advice" | "smalltalk",
+  sinceMs: number,
+  now = Date.now(),
+): number {
+  return loadAdviceLedger(now).filter(
+    (entry) => entry.tone === tone && entry.at >= sinceMs,
+  ).length;
+}
+
+export function countRecentAdviceStreak(now = Date.now()): number {
+  let streak = 0;
+  for (const entry of loadAdviceLedger(now)) {
+    if (entry.tone !== "advice") {
+      break;
+    }
+    streak += 1;
+  }
+  return streak;
+}
+
 export function describeAdviceMemoryForPrompt(
   topicKey?: string,
   now = Date.now(),
 ): string {
-  const entries = getRecentAdviceFeedback(topicKey, now)
+  const recent = getRecentAdviceFeedback(topicKey, now).slice(0, 5);
+  const entries = recent
     .filter((entry) => entry.feedback)
     .slice(0, 4);
-  if (!entries.length) {
+  const recentAdviceLines = recent
+    .filter((entry) => entry.practicalHook || entry.replyText)
+    .slice(0, 3)
+    .map((entry) => {
+      const kind = entry.adviceCandidateKind ?? entry.initiativeMove ?? "совет";
+      const text = (entry.practicalHook ?? entry.replyText ?? "")
+        .replace(/\s+/g, " ")
+        .slice(0, 150);
+      return `- ${kind}: ${text}`;
+    });
+  if (!entries.length && !recentAdviceLines.length) {
     return "";
   }
   const labels: Record<AdviceFeedback, string> = {
@@ -221,10 +255,21 @@ export function describeAdviceMemoryForPrompt(
     return `- ${labels[entry.feedback!]}${anchor}`;
   });
   return [
-    "Недавняя обратная связь на советы по этой теме:",
+    lines.length ? "Недавняя обратная связь на советы по этой теме:" : "",
     ...lines,
-    "Если было «мимо» или «слишком общо», смени ход: меньше общих фраз, один проверяемый шаг, привязанный к свежему факту.",
-    "Если было «не сейчас», снизь напор и не повторяй тот же совет.",
+    recentAdviceLines.length
+      ? "Недавние советы по этой теме, которые нельзя повторять по структуре и формулировке:"
+      : "",
+    ...recentAdviceLines,
+    lines.length
+      ? "Если было «мимо» или «слишком общо», смени ход: меньше общих фраз, один проверяемый шаг, привязанный к свежему факту."
+      : "",
+    lines.length
+      ? "Если было «не сейчас», снизь напор и не повторяй тот же совет."
+      : "",
+    recentAdviceLines.length
+      ? "Не предлагай снова timebox «10-15 минут / один файл / одна проверка», если он уже есть в списке: выбери другой ход или промолчи."
+      : "",
   ].join("\n");
 }
 

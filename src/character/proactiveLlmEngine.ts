@@ -1,14 +1,13 @@
 import { completeLlmJson } from "../llm/llmClient";
 import type { AppSettings } from "../settings/appSettings";
+import { isLiteLlmModel } from "../llm/modelRouter";
 import { redactSecrets } from "../platform/secretRedaction";
 import { pruneWorkingMemory } from "../memory/workingMemory";
 import { formatGoalLedgerForPrompt } from "../tasks/goalLedger";
-import { pickPlannedInitiativeAnchor } from "./advisorEngine";
 import type { AdviceUrgency } from "./adviceUrgency";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import {
   inferInitiativeMoves,
-  pickBestMoveHint,
   type ProactiveInitiativeMove,
   type ProactiveMoveHint,
 } from "./proactiveInitiativePlaybook";
@@ -16,11 +15,14 @@ import {
   formatAdviceCandidateForPrompt,
   type AdviceCandidate,
 } from "./advicePlanner";
+import { evaluateAdviceNovelty } from "./adviceNovelty";
 import {
-  anchorFromChain,
+  VN_CHARACTER_RULE,
+  PROACTIVE_CHARACTER_RULE,
+} from "./proactiveLiveliness";
+import {
   buildFactLinkGraph,
   inferTopicChains,
-  linkedThemesFromChain,
   type ProactiveTopicChain,
   type ProactiveTopicLink,
 } from "./proactiveTopicLinker";
@@ -57,7 +59,7 @@ export type ProactiveLlmBundle = {
   shouldSend: boolean;
   rejectReason?: string;
   overlapsBanned: boolean;
-  source: "llm" | "fallback";
+  source: "llm";
   initiativeMove?: ProactiveInitiativeMove;
   groundFactIds?: string[];
   topicLinks?: ProactiveTopicLink[];
@@ -66,17 +68,10 @@ export type ProactiveLlmBundle = {
   selectedAdviceCandidate?: AdviceCandidate;
 };
 
-/** @deprecated use ProactiveLlmBundle */
-export type ProactiveLinkSynthesis = Omit<
-  ProactiveLlmBundle,
-  | "tone"
-  | "adviceSteps"
-  | "usefulnessScore"
-  | "shouldSend"
-  | "rejectReason"
-  | "overlapsBanned"
-  | "source"
-> & { source: "llm" | "heuristic" };
+type ProactiveLlmSystemRejectReason =
+  | "llm offline"
+  | "llm synthesis failed"
+  | "llm synthesis rejected";
 
 export type ProactiveLlmInput = {
   bundle: InitiativeSignalBundle;
@@ -171,6 +166,31 @@ export function setLastProactiveLlmBundle(
   }
 }
 
+function rememberProactiveLlmBundle(
+  bundle: ProactiveLlmBundle,
+  facts: ProactiveSignalFact[],
+): ProactiveLlmBundle {
+  setLastProactiveLlmBundle(bundle, facts);
+  return bundle;
+}
+
+function createRejectedProactiveLlmBundle(
+  tone: ProactiveReplyTone,
+  reason: ProactiveLlmSystemRejectReason,
+): ProactiveLlmBundle {
+  return {
+    tone,
+    linkedThemes: [],
+    mergedAnchor: "",
+    narrativeBrief: "",
+    usefulnessScore: 0,
+    shouldSend: false,
+    rejectReason: reason,
+    overlapsBanned: false,
+    source: "llm",
+  };
+}
+
 export function collectProactiveSignalFacts(
   input: ProactiveLlmInput,
 ): ProactiveSignalFact[] {
@@ -193,13 +213,16 @@ export function collectProactiveSignalFacts(
     push("file", `file:${bundle.editorFile}`, "Файл в IDE", bundle.editorFile);
   }
 
-  const clip = bundle.clipboardSnippets[bundle.clipboardSnippets.length - 1];
-  if (clip) {
+  const recentClips = bundle.clipboardSnippets.slice(-3);
+  for (let index = 0; index < recentClips.length; index++) {
+    const clip = recentClips[index];
+    const suffix =
+      recentClips.length > 1 ? `:${index}` : "";
     push(
       "clipboard",
-      `clip:${clip.kind}`,
+      `clip:${clip.kind}${suffix}`,
       `Буфер (${clip.kind})`,
-      redactSecrets(clip.text).slice(0, 120),
+      redactSecrets(clip.text).slice(0, 200),
     );
   }
 
@@ -290,14 +313,6 @@ export function collectProactiveSignalFacts(
   }
 
   return facts;
-}
-
-/** @deprecated always true when facts exist; kept for tests */
-export function shouldRunLinkSynthesis(
-  facts: ProactiveSignalFact[],
-  _bannedTopics: string[] = [],
-): boolean {
-  return facts.length >= 1;
 }
 
 function factDetailTokens(fact: ProactiveSignalFact): string[] {
@@ -404,87 +419,13 @@ function parseInitiativeMove(value: unknown): ProactiveInitiativeMove | undefine
   return moves.find((move) => move === value);
 }
 
-function buildFallbackBundle(
-  input: ProactiveLlmInput,
-  facts: ProactiveSignalFact[],
-): ProactiveLlmBundle {
-  const banned = input.bannedTopics ?? [];
-  const graph = buildFactLinkGraph(facts, input.bundle);
-  const chains = input.topicChains ?? inferTopicChains(graph, facts, 2);
-  const primaryChain = chains[0];
-  const moveHints =
-    input.moveHints ??
-    inferInitiativeMoves(input.bundle, facts, input.ragSnippets ?? []);
-  const bestMove = pickBestMoveHint(moveHints);
-
-  const linkedThemes = primaryChain
-    ? linkedThemesFromChain(primaryChain, facts)
-    : input.candidateTopics?.slice(0, 2).filter(Boolean) ??
-      facts.slice(0, 2).map((fact) => fact.detail.slice(0, 80));
-
-  const primaryChainSummary = primaryChain?.summarySeed ?? linkedThemes.join(" · ");
-  const mergedAnchor = primaryChain
-    ? anchorFromChain(primaryChain, facts)
-    : pickPlannedInitiativeAnchor(input.candidateTopics ?? [], {
-        recentProactive: banned,
-        windowTitle: input.bundle.window?.title,
-        dominantFile: input.bundle.editorFile,
-      }) ??
-      facts[0]?.detail ??
-      "короткая реплика по текущему контексту";
-
-  const narrativeBrief = primaryChainSummary.slice(0, 600);
-  const hasActionable =
-    facts.some((fact) =>
-      ["clipboard", "file", "urgency", "chat"].includes(fact.kind),
-    ) || input.tone === "advice";
-  const hasPresenceContext =
-    linkedThemes.length > 0 ||
-    (input.candidateTopics?.length ?? 0) > 0 ||
-    facts.length >= 1;
-
-  const practicalHook =
-    input.tone === "advice"
-      ? input.adviceCandidate?.actionText.slice(0, 220) ??
-        bestMove?.hookSeed.slice(0, 220)
-      : undefined;
-  const adviceSteps =
-    input.tone === "advice"
-      ? input.adviceCandidate
-        ? [input.adviceCandidate.actionText.slice(0, 220)]
-        : bestMove?.questionSeed
-          ? [bestMove.questionSeed]
-          : undefined
-      : undefined;
-
-  return {
-    tone: input.tone,
-    linkedThemes,
-    mergedAnchor: mergedAnchor.slice(0, 180),
-    narrativeBrief,
-    practicalHook,
-    adviceSteps,
-    usefulnessScore: hasActionable ? 0.58 : 0.35,
-    shouldSend:
-      hasPresenceContext &&
-      (hasActionable || input.tone === "smalltalk"),
-    rejectReason:
-      hasActionable || input.tone === "smalltalk"
-        ? undefined
-        : "мало сигналов для fallback",
-    overlapsBanned: false,
-    source: "fallback",
-    initiativeMove: bestMove?.move,
-    groundFactIds: bestMove?.groundFactIds,
-    topicLinks: primaryChain?.links.length ? primaryChain.links : graph.slice(0, 2),
-    primaryChainSummary,
-    linkConfidence: primaryChain?.links[0]?.strength ?? 0.5,
-    selectedAdviceCandidate: input.adviceCandidate ?? undefined,
-  };
-}
-
 function parseTone(value: unknown, fallback: ProactiveReplyTone): ProactiveReplyTone {
-  return value === "advice" || value === "smalltalk" ? value : fallback;
+  const parsed =
+    value === "advice" || value === "smalltalk" ? value : fallback;
+  if (fallback === "smalltalk" && parsed === "advice") {
+    return "smalltalk";
+  }
+  return parsed;
 }
 
 function parseBundleResponse(
@@ -588,14 +529,6 @@ function parseBundleResponse(
     }
   }
 
-  const genericHook =
-    practicalHook &&
-    /^(?:проверь|посмотри|как дела|следующий шаг)/i.test(practicalHook) &&
-    !hookGroundedInFacts(practicalHook, groundFactIds ?? [], facts);
-  if (genericHook && tone === "advice") {
-    resolvedLinkConfidence = Math.min(resolvedLinkConfidence ?? 0.5, 0.3);
-  }
-
   return {
     tone,
     linkedThemes,
@@ -647,17 +580,64 @@ function formatMoveHintsForPrompt(hints: ProactiveMoveHint[]): string {
     .map(
       (hint) =>
         `- ${hint.move} [${hint.groundFactIds.join(", ")}]: ${hint.hookSeed}` +
+        (hint.observationSeed ? ` | наблюдение: ${hint.observationSeed}` : "") +
         (hint.questionSeed ? ` | вопрос: ${hint.questionSeed}` : ""),
     )
     .join("\n");
 }
 
+function formatClipboardFactsForPrompt(facts: ProactiveSignalFact[]): string {
+  const clips = facts.filter((fact) => fact.kind === "clipboard");
+  if (!clips.length) {
+    return "";
+  }
+  return clips
+    .map((fact) => `- [${fact.id}] ${fact.detail}`)
+    .join("\n");
+}
+
+function bundleSynthesisRegenIssues(
+  bundle: ProactiveLlmBundle,
+  facts: ProactiveSignalFact[],
+): string[] {
+  if (bundle.tone !== "advice") {
+    return [];
+  }
+  const issues: string[] = [];
+  const text = [
+    bundle.practicalHook,
+    bundle.narrativeBrief,
+    ...(bundle.adviceSteps ?? []),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  for (const novelty of evaluateAdviceNovelty({
+    text,
+    candidateKind: bundle.selectedAdviceCandidate?.kind,
+  })) {
+    issues.push(novelty.reason);
+  }
+  const clipFacts = facts.filter((fact) => fact.kind === "clipboard");
+  if (
+    clipFacts.length &&
+    bundle.practicalHook &&
+    !clipFacts.some((fact) =>
+      hookGroundedInFacts(bundle.practicalHook!, [fact.id], facts),
+    )
+  ) {
+    issues.push("нет цитаты буфера в practicalHook");
+  }
+  return issues;
+}
+
 function bundleSystemPrompt(isAdvice: boolean, requireHook: boolean): string {
   return [
+    PROACTIVE_CHARACTER_RULE,
+    VN_CHARACTER_RULE,
     "Свяжи сигналы пользователя в одну причинно-следственную нить для проактивной реплики Ari.",
     isAdvice
-      ? "Режим: advice. narrativeBrief — одно предложение «X потому что Y, сейчас Z». practicalHook — инициативный заход ассистента с цитатой из факта (буфер, файл, вопрос). adviceSteps — 1–3 проверяемых шага."
-      : "Режим: smalltalk. Одна наблюдательная нить без советов и next step.",
+      ? "Режим: advice. narrativeBrief — одно предложение «X потому что Y, сейчас Z». practicalHook — заход Ari за плечом с цитатой из факта (буфер, файл, вопрос). adviceSteps — 1–3 проверяемых шага от первого лица, не numbered list."
+      : "Режим: smalltalk. Одна живая нить без советов и next step. Можно выбрать контекстное наблюдение или боковую тему: музыка, игры, еда, настроение, странная бытовая мысль, культурный/новостной повод. Не утверждай конкретную свежую новость без live-проверки. Предпочитай утверждение/наблюдение; не заканчивай вопросом.",
     requireHook
       ? "Обязательно practicalHook с цитатой из fact + initiativeMove + groundFactIds + topicLinks."
       : "Верни initiativeMove, groundFactIds, topicLinks если есть граф связей.",
@@ -676,9 +656,11 @@ async function callSynthesisLlm(
   facts: ProactiveSignalFact[],
   requireHook: boolean,
   primaryChain?: ProactiveTopicChain,
+  correction?: string,
 ): Promise<ProactiveLlmBundle | null> {
   const banned = input.bannedTopics ?? [];
   const isAdvice = input.tone === "advice";
+  const clipBlock = formatClipboardFactsForPrompt(facts);
   const response = await completeLlmJson<BundleResponse>(
     [
       {
@@ -690,6 +672,9 @@ async function callSynthesisLlm(
         content: [
           `Запрошенный tone: ${input.tone}`,
           `Факты:\n${formatFactsForPrompt(facts) || "нет"}`,
+          clipBlock
+            ? `Буфер (приоритет — practicalHook должен цитировать фрагмент):\n${clipBlock}`
+            : "",
           input.topicChains?.length
             ? `Граф связей (объясни причинность, не списком):\n${formatTopicChainsForPrompt(input.topicChains)}`
             : "",
@@ -706,6 +691,9 @@ async function callSynthesisLlm(
             ? `Кандидаты (ярлыки, не копируй дословно):\n${input.candidateTopics.join("\n")}`
             : "",
           banned.length ? `Запрещённые темы:\n${banned.slice(0, 8).join("\n")}` : "",
+          correction
+            ? `Предыдущий ответ отклонён. Исправь: ${correction}`
+            : "",
         ]
           .filter(Boolean)
           .join("\n\n"),
@@ -746,9 +734,10 @@ export async function synthesizeProactiveBundle(
   const llmOnline = enriched.llmOnline !== false;
 
   if (!llmOnline) {
-    const fallback = buildFallbackBundle(enriched, facts);
-    setLastProactiveLlmBundle(fallback, facts);
-    return fallback;
+    return rememberProactiveLlmBundle(
+      createRejectedProactiveLlmBundle(enriched.tone, "llm offline"),
+      facts,
+    );
   }
 
   const fingerprint = factFingerprint(
@@ -759,12 +748,14 @@ export async function synthesizeProactiveBundle(
   );
   const cached = bundleCache.get(fingerprint);
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-    setLastProactiveLlmBundle(cached.value, facts);
-    return cached.value;
+    return rememberProactiveLlmBundle(cached.value, facts);
   }
 
   try {
     let parsed = await callSynthesisLlm(settings, enriched, facts, false, primaryChain);
+    if (!parsed && isLiteLlmModel(settings)) {
+      parsed = await callSynthesisLlm(settings, enriched, facts, true, primaryChain);
+    }
     if (
       !parsed &&
       enriched.tone === "advice" &&
@@ -772,33 +763,41 @@ export async function synthesizeProactiveBundle(
     ) {
       parsed = await callSynthesisLlm(settings, enriched, facts, true, primaryChain);
     }
+    if (parsed && enriched.tone === "advice") {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const regenIssues = bundleSynthesisRegenIssues(parsed, facts);
+        if (!regenIssues.length) {
+          break;
+        }
+        const retry = await callSynthesisLlm(
+          settings,
+          enriched,
+          facts,
+          true,
+          primaryChain,
+          regenIssues.join("; "),
+        );
+        if (!retry) {
+          break;
+        }
+        parsed = retry;
+      }
+    }
     if (parsed) {
       bundleCache.set(fingerprint, { at: Date.now(), value: parsed });
-      setLastProactiveLlmBundle(parsed, facts);
-      return parsed;
+      return rememberProactiveLlmBundle(parsed, facts);
     }
   } catch {
-    // fallback below
+    return rememberProactiveLlmBundle(
+      createRejectedProactiveLlmBundle(enriched.tone, "llm synthesis failed"),
+      facts,
+    );
   }
 
-  const fallback = buildFallbackBundle(enriched, facts);
-  setLastProactiveLlmBundle(fallback, facts);
-  return fallback;
-}
-
-/** @deprecated use synthesizeProactiveBundle */
-export async function synthesizeProactiveLinks(
-  settings: AppSettings,
-  input: ProactiveLlmInput,
-): Promise<ProactiveLinkSynthesis> {
-  const bundle = await synthesizeProactiveBundle(settings, input);
-  return {
-    linkedThemes: bundle.linkedThemes,
-    mergedAnchor: bundle.mergedAnchor,
-    narrativeBrief: bundle.narrativeBrief,
-    practicalHook: bundle.practicalHook,
-    source: bundle.source === "llm" ? "llm" : "heuristic",
-  };
+  return rememberProactiveLlmBundle(
+    createRejectedProactiveLlmBundle(enriched.tone, "llm synthesis rejected"),
+    facts,
+  );
 }
 
 export function buildGateContextFromBundle(bundle: ProactiveLlmBundle): string {
@@ -823,9 +822,6 @@ export function buildGateContextFromBundle(bundle: ProactiveLlmBundle): string {
     .filter(Boolean)
     .join("\n");
 }
-
-/** @deprecated */
-export const buildGateContextFromSynthesis = buildGateContextFromBundle;
 
 export function buildProactiveSummaryFromBundle(
   bundle: ProactiveLlmBundle,
@@ -858,6 +854,10 @@ function localReplyQualityCheck(
   if (!trimmed) {
     return { acceptable: false, reason: "пустая реплика", issues: ["empty"] };
   }
+  const noveltyIssues = evaluateAdviceNovelty({ text: trimmed });
+  if (noveltyIssues.some((issue) => issue.kind === "fallback_meta")) {
+    issues.push("proactive meta commentary");
+  }
 
   if (
     bundle.groundFactIds?.length &&
@@ -884,8 +884,9 @@ function localReplyQualityCheck(
   }
 
   if (
-    bundle.initiativeMove === "clipboard_probe" ||
-    bundle.initiativeMove === "ide_invite"
+    bundle.tone === "advice" &&
+    (bundle.initiativeMove === "clipboard_probe" ||
+      bundle.initiativeMove === "ide_invite")
   ) {
     if (!/[?？]/.test(trimmed) && !/(?:расскаж|опиш|что именно|где именно)/i.test(trimmed)) {
       issues.push("missing question");
@@ -897,22 +898,6 @@ function localReplyQualityCheck(
   }
   return null;
 }
-
-/** @deprecated */
-export const buildProactiveSummaryFromSynthesis = (
-  synthesis: ProactiveLinkSynthesis,
-  tone: ProactiveReplyTone,
-) => buildProactiveSummaryFromBundle({
-  tone,
-  linkedThemes: synthesis.linkedThemes,
-  mergedAnchor: synthesis.mergedAnchor,
-  narrativeBrief: synthesis.narrativeBrief,
-  practicalHook: synthesis.practicalHook,
-  usefulnessScore: 0.5,
-  shouldSend: true,
-  overlapsBanned: false,
-  source: synthesis.source === "llm" ? "llm" : "fallback",
-});
 
 export type ProactiveReplyQualityResult = {
   acceptable: boolean;
@@ -926,9 +911,17 @@ export async function validateProactiveReplyLlm(
   reply: string,
   facts: ProactiveSignalFact[] = [],
 ): Promise<ProactiveReplyQualityResult> {
-  const local = facts.length ? localReplyQualityCheck(bundle, reply, facts) : null;
+  const local = localReplyQualityCheck(bundle, reply, facts);
   if (local && !local.acceptable) {
     return local;
+  }
+
+  if (isLiteLlmModel(settings)) {
+    return {
+      acceptable: true,
+      reason: "lite model — только локальная проверка",
+      issues: [],
+    };
   }
 
   try {
@@ -938,7 +931,7 @@ export async function validateProactiveReplyLlm(
           role: "system",
           content: [
             "Оцени проактивную реплику Ari.",
-            "acceptable=false если: мета про «сюжет/процесс/результат», нет конкретики из bundle, игнор practicalHook/adviceSteps/primaryChainSummary, generic hook без цитаты факта, или пустая вода.",
+            "acceptable=false если: мета про «сюжет/процесс/результат», нет конкретики из bundle, игнор practicalHook/adviceSteps/primaryChainSummary, generic hook без цитаты факта, пустая вода, или тон безличного ассистента/канцелярита вместо Ari.",
             'JSON: {"acceptable":true|false,"reason":"кратко","issues":["..."]}.',
           ].join("\n"),
         },
@@ -981,16 +974,4 @@ export async function validateProactiveReplyLlm(
   } catch {
     return { acceptable: true, reason: "validator offline", issues: [] };
   }
-}
-
-export function llmBundleToLinkSynthesis(
-  bundle: ProactiveLlmBundle,
-): ProactiveLinkSynthesis {
-  return {
-    linkedThemes: bundle.linkedThemes,
-    mergedAnchor: bundle.mergedAnchor,
-    narrativeBrief: bundle.narrativeBrief,
-    practicalHook: bundle.practicalHook,
-    source: bundle.source === "llm" ? "llm" : "heuristic",
-  };
 }

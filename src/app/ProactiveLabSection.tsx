@@ -226,8 +226,6 @@ export function ProactiveLabSection({ settings }: ProactiveLabSectionProps) {
 
         llmBundle: preview.llmBundle,
 
-        linkSynthesis: preview.llmBundle,
-
         recentUserMessage: recentUserMessage.trim() || undefined,
 
         conversationTopics: preview.llmBundle.linkedThemes,
@@ -376,7 +374,7 @@ export function ProactiveLabSection({ settings }: ProactiveLabSectionProps) {
 
           <p className="settings-note">
 
-            score {preview.usefulnessScore.toFixed(2)} · shouldSend{" "}
+            score {preview.usefulnessScore.toFixed(2)} · tone {preview.llmBundle.tone} · shouldSend{" "}
 
             {preview.shouldSend ? "да" : "нет"}
 

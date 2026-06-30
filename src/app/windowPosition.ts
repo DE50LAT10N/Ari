@@ -171,6 +171,3 @@ export async function startWindowResize(
 export async function hideMainWindow(): Promise<void> {
   await getCurrentWindow().hide();
 }
-
-/** @deprecated Use restoreWindowLayout */
-export const restoreWindowPosition = restoreWindowLayout;

@@ -23,6 +23,17 @@ function warn(id, note) {
 }
 
 function run(command, args) {
+  if (command === "npm" && args[0] === "run" && args[1] === "smoke") {
+    return spawnSync(
+      process.execPath,
+      [path.join(root, "scripts", "smoke-check.mjs")],
+      {
+        cwd: root,
+        encoding: "utf8",
+        shell: false,
+      },
+    );
+  }
   if (command === "npm" && process.env.npm_execpath) {
     return spawnSync(process.execPath, [process.env.npm_execpath, ...args], {
       cwd: root,
@@ -53,7 +64,12 @@ const smoke = run("npm", ["run", "smoke"]);
 if (smoke.status === 0) {
   pass("auto-gates", "npm run smoke exit 0");
 } else {
-  fail("auto-gates", `smoke failed: ${smoke.stderr || smoke.stdout}`);
+  const detail =
+    smoke.stderr?.trim() ||
+    smoke.stdout?.trim() ||
+    smoke.error?.message ||
+    `exit ${smoke.status ?? "?"}`;
+  fail("auto-gates", `smoke failed: ${detail}`);
 }
 
 // § env-setup — QA profile constants

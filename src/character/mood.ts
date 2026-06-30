@@ -98,6 +98,7 @@ let moodCache: CharacterMood | null = null;
 
 export function loadMood(): CharacterMood {
   if (moodCache) {
+    moodCache = decayMood(moodCache);
     return moodCache;
   }
   try {
@@ -200,7 +201,7 @@ export function applyInteractionToMood(
           : interaction === "chat_positive"
             ? { warmth: 0.1, energy: 0.06, irritation: -0.05 }
             : interaction === "ignored_initiative"
-              ? { warmth: -0.04, energy: -0.03, irritation: 0.08 }
+              ? { warmth: -0.08, energy: -0.05, irritation: 0.14 }
               : interaction === "long_silence"
                 ? { warmth: -0.02, energy: -0.05, irritation: 0.03 }
                 : { warmth: 0.03, energy: 0.05, irritation: 0.015 };
@@ -211,6 +212,24 @@ export function applyInteractionToMood(
     irritation: current.irritation + shift.irritation,
     updatedAt: Date.now(),
   });
+}
+
+export function applyRepeatedIgnoreMood(
+  mood: CharacterMood,
+  count: number,
+): CharacterMood {
+  const repeats = Math.max(1, Math.min(count, 4));
+  let next = applyInteractionToMood(mood, "ignored_initiative");
+  for (let index = 1; index < repeats; index += 1) {
+    const current = decayMood(next);
+    next = saveMood({
+      warmth: current.warmth - 0.03,
+      energy: current.energy - 0.02,
+      irritation: current.irritation + 0.06,
+      updatedAt: Date.now(),
+    });
+  }
+  return next;
 }
 
 export function moodInitiativeBias(mood: CharacterMood): number {
@@ -236,11 +255,13 @@ export function moodPreferredEmotion(mood: CharacterMood): CharacterEmotion | nu
   const current = decayMood(mood);
   const hour = new Date().getHours();
   if (current.irritation > 0.42) return "annoyed";
-  if (current.warmth > 0.58) return "empathetic";
   if (current.energy < 0.22 || (hour >= 23 || hour < 6)) return "sleepy";
   if (current.energy < 0.28) return "bored";
-  if (current.energy > 0.68) return "excited";
-  if (current.energy > 0.62) return "amused";
+  if (current.warmth > 0.58) return "empathetic";
+  if (current.energy > 0.7 && current.warmth > 0.32 && current.irritation < 0.16) {
+    return "amused";
+  }
+  if (current.energy > 0.66) return "curious";
   if (current.warmth > 0.45 && current.irritation < 0.12) return "happy";
   return null;
 }

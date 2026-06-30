@@ -23,36 +23,43 @@ export function allowsGenericCompanionInitiative(
   return activityAgoMs >= plannedSilenceMs;
 }
 
-export function prefersLocalCompanionLines(
-  _settings: AppSettings,
-  _intervalMs: number,
-  options: { practicalContext?: boolean; llmOffline?: boolean } = {},
-): boolean {
-  if (!options.llmOffline) {
-    return false;
-  }
-  return !options.practicalContext;
-}
-
-export function shouldUseIdleLineFallback(
+function scaleProactiveIntervalMs(
+  baseMinutes: number,
   settings: AppSettings,
-  llmOnline: boolean,
-): boolean {
-  return prefersLocalCompanionLines(settings, 0, { llmOffline: !llmOnline });
-}
-
-export function proactiveIntervalMs(settings: AppSettings): number {
-  const baseMinutes = Math.max(1, settings.proactiveIntervalMinutes);
+): number {
+  const safeBaseMinutes = Math.max(1, baseMinutes);
   switch (settings.initiativeLevel) {
     case "silent":
-      return baseMinutes * 60 * 1000 * 2.5;
+      return safeBaseMinutes * 60 * 1000 * 2.5;
     case "rare":
-      return baseMinutes * 60 * 1000 * 1.6;
+      return safeBaseMinutes * 60 * 1000 * 1.6;
     case "active":
-      return baseMinutes * 60 * 1000 * 0.65;
+      return safeBaseMinutes * 60 * 1000 * 0.65;
     default:
-      return baseMinutes * 60 * 1000;
+      return safeBaseMinutes * 60 * 1000;
   }
+}
+
+export function proactiveSmalltalkIntervalMs(settings: AppSettings): number {
+  return scaleProactiveIntervalMs(
+    settings.proactiveSmalltalkIntervalMinutes ??
+      Math.max(5, Math.round((settings.proactiveIntervalMinutes || 20) * 0.5)),
+    settings,
+  );
+}
+
+export function proactiveAdviceIntervalMs(settings: AppSettings): number {
+  return scaleProactiveIntervalMs(
+    settings.proactiveAdviceIntervalMinutes ??
+      settings.proactiveIntervalMinutes ??
+      20,
+    settings,
+  );
+}
+
+/** @deprecated use proactiveAdviceIntervalMs / proactiveSmalltalkIntervalMs */
+export function proactiveIntervalMs(settings: AppSettings): number {
+  return proactiveAdviceIntervalMs(settings);
 }
 
 export function idleLineProbability(settings: AppSettings): number {

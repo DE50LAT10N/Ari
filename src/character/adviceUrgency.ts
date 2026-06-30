@@ -3,11 +3,13 @@ import type { InitiativeSignalBundle } from "./initiativeContext";
 import { collectBannedProactiveTopics } from "./initiativeContext";
 import {
   MEDIUM_ADVICE_CAP_MS,
-  proactiveIntervalMs,
+  proactiveAdviceIntervalMs,
   URGENT_ADVICE_MIN_MS,
 } from "./initiativeConfig";
 import type { InitiativeKind } from "./initiativeKinds";
 import { isAdviceSubjectRecentlyAdvised } from "./proactiveState";
+import { countRecentAdviceByTone, countRecentAdviceStreak } from "./adviceLedger";
+import { getProactiveToneSnapshot, isAdviceSkewedToday } from "../memory/memoryTelemetry";
 import {
   advisorAngleForAdviceSignals,
   isProactiveWorkContext,
@@ -90,7 +92,7 @@ export function scoreAdviceUrgency(
   const sessionMinutes =
     options.sessionMinutes ?? bundle.advisor.sessionMinutes;
   const userIntervalMs =
-    options.userIntervalMs ?? proactiveIntervalMs(settings);
+    options.userIntervalMs ?? proactiveAdviceIntervalMs(settings);
   let score = 0;
   const reasons: string[] = [];
   let subjectKey: string | undefined;
@@ -146,7 +148,7 @@ export function scoreAdviceUrgency(
     }
   }
 
-  if (sessionMinutes >= 3 && bundle.editorFile) {
+  if (sessionMinutes >= 3 && bundle.editorFile && score >= 2) {
     score += 1;
     reasons.push(`работа в ${bundle.editorFile}`);
     subjectKey = subjectKey ?? bundle.editorFile;
@@ -195,20 +197,40 @@ export function shouldOfferLlmAdvice(urgency: AdviceUrgency): boolean {
 
 export function isAdviceReady(
   urgency: AdviceUrgency,
-  sinceLastAttemptMs: number,
+  sinceAdviceAttemptMs: number,
   now = Date.now(),
+  adviceIntervalMs = urgency.effectiveIntervalMs,
 ): boolean {
   if (!shouldOfferLlmAdvice(urgency)) {
     return false;
   }
-  if (sinceLastAttemptMs < urgency.effectiveIntervalMs) {
+  const effectiveIntervalMs = Math.min(adviceIntervalMs, urgency.effectiveIntervalMs);
+  if (sinceAdviceAttemptMs < effectiveIntervalMs) {
     return false;
+  }
+  if (urgency.level === "low") {
+    const recentAdvice = countRecentAdviceByTone(
+      "advice",
+      now - 25 * 60_000,
+      now,
+    );
+    if (recentAdvice >= 1) {
+      return false;
+    }
+  }
+  if (urgency.level !== "high") {
+    if (countRecentAdviceStreak(now) >= 2) {
+      return false;
+    }
+    if (isAdviceSkewedToday(getProactiveToneSnapshot(now))) {
+      return false;
+    }
   }
   if (
     urgency.subjectKey &&
     isAdviceSubjectRecentlyAdvised(
       urgency.subjectKey,
-      urgency.effectiveIntervalMs,
+      effectiveIntervalMs,
       now,
     )
   ) {

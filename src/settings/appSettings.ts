@@ -29,7 +29,10 @@ export type AppSettings = {
   activityTrackingEnabled: boolean;
   activityAllowlist: string;
   proactiveEnabled: boolean;
+  /** @deprecated use proactiveAdviceIntervalMinutes / proactiveSmalltalkIntervalMinutes */
   proactiveIntervalMinutes: number;
+  proactiveSmalltalkIntervalMinutes: number;
+  proactiveAdviceIntervalMinutes: number;
   proactiveOpenChat: boolean;
   userMemoryEnabled: boolean;
   eventReactionsEnabled: boolean;
@@ -81,6 +84,8 @@ export type AppSettings = {
   embeddingQueryCacheTtlSec: number;
 };
 
+import { migrateGigaChatModelSettings } from "../llm/gigaChatModels";
+
 const SETTINGS_KEY = "desktop-character.settings.v1";
 const COMPANION_PRESENCE_MIGRATION_KEY =
   "desktop-character.settings-migration.companion-v2";
@@ -90,8 +95,8 @@ export const defaultSettings: AppSettings = {
   ollamaBaseUrl: "http://127.0.0.1:11434",
   ollamaModelsDir: "",
   model: "hf.co/Qwen/Qwen3-14B-GGUF:Q5_K_M",
-  gigaChatModel: "GigaChat",
-  gigaChatVisionModel: "GigaChat",
+  gigaChatModel: "GigaChat-2-Pro",
+  gigaChatVisionModel: "GigaChat-2-Pro",
   gigaChatEmbeddingModel: "EmbeddingsGigaR",
   embeddingSource: "gigachat",
   visionSource: "gigachat",
@@ -113,6 +118,8 @@ export const defaultSettings: AppSettings = {
   activityAllowlist: "",
   proactiveEnabled: true,
   proactiveIntervalMinutes: 20,
+  proactiveSmalltalkIntervalMinutes: 10,
+  proactiveAdviceIntervalMinutes: 20,
   proactiveOpenChat: true,
   userMemoryEnabled: true,
   eventReactionsEnabled: true,
@@ -212,8 +219,16 @@ function migrateCompanionPresence(settings: AppSettings): AppSettings {
         proactiveEnabled: true,
         eventReactionsEnabled: true,
         activityTrackingEnabled: true,
-        proactiveIntervalMinutes: Math.min(
-          settings.proactiveIntervalMinutes || 20,
+        proactiveIntervalMinutes: Math.min(settings.proactiveIntervalMinutes || 20, 20),
+        proactiveSmalltalkIntervalMinutes: Math.min(
+          settings.proactiveSmalltalkIntervalMinutes ||
+            Math.max(5, Math.round((settings.proactiveIntervalMinutes || 20) * 0.5)),
+          10,
+        ),
+        proactiveAdviceIntervalMinutes: Math.min(
+          settings.proactiveAdviceIntervalMinutes ||
+            settings.proactiveIntervalMinutes ||
+            20,
           20,
         ),
       };
@@ -236,28 +251,45 @@ export function loadSettings(): AppSettings {
       ttsEnabled?: boolean;
     };
     const migrated = migrateLegacyTts(parsed);
-    return migrateCompanionPresence({
-      ...defaultSettings,
-      ...migrated,
-      onboardingCompleted: migrated.onboardingCompleted ?? true,
-      llmProvider:
-        migrated.llmProvider === "gigachat" ? "gigachat" : "ollama",
-      embeddingSource:
-        migrated.embeddingSource === "ollama" ||
-        migrated.embeddingSource === "none" ||
-        migrated.embeddingSource === "gigachat"
-          ? migrated.embeddingSource
-          : defaultSettings.embeddingSource,
-      visionSource:
-        migrated.visionSource === "ollama" ||
-        migrated.visionSource === "gigachat"
-          ? migrated.visionSource
-          : defaultSettings.visionSource,
-      voiceStyle:
-        migrated.voiceStyle === "off" || migrated.voiceStyle === "blip"
-          ? migrated.voiceStyle
-          : defaultSettings.voiceStyle,
-    });
+    const legacyInterval =
+      typeof migrated.proactiveIntervalMinutes === "number"
+        ? migrated.proactiveIntervalMinutes
+        : defaultSettings.proactiveIntervalMinutes;
+    const proactiveAdviceIntervalMinutes =
+      typeof migrated.proactiveAdviceIntervalMinutes === "number"
+        ? migrated.proactiveAdviceIntervalMinutes
+        : legacyInterval || defaultSettings.proactiveAdviceIntervalMinutes;
+    const proactiveSmalltalkIntervalMinutes =
+      typeof migrated.proactiveSmalltalkIntervalMinutes === "number"
+        ? migrated.proactiveSmalltalkIntervalMinutes
+        : Math.max(5, Math.round((legacyInterval || 20) * 0.5));
+    return migrateGigaChatModelSettings(
+      migrateCompanionPresence({
+        ...defaultSettings,
+        ...migrated,
+        proactiveIntervalMinutes: proactiveAdviceIntervalMinutes,
+        proactiveAdviceIntervalMinutes,
+        proactiveSmalltalkIntervalMinutes,
+        onboardingCompleted: migrated.onboardingCompleted ?? true,
+        llmProvider:
+          migrated.llmProvider === "gigachat" ? "gigachat" : "ollama",
+        embeddingSource:
+          migrated.embeddingSource === "ollama" ||
+          migrated.embeddingSource === "none" ||
+          migrated.embeddingSource === "gigachat"
+            ? migrated.embeddingSource
+            : defaultSettings.embeddingSource,
+        visionSource:
+          migrated.visionSource === "ollama" ||
+          migrated.visionSource === "gigachat"
+            ? migrated.visionSource
+            : defaultSettings.visionSource,
+        voiceStyle:
+          migrated.voiceStyle === "off" || migrated.voiceStyle === "blip"
+            ? migrated.voiceStyle
+            : defaultSettings.voiceStyle,
+      }),
+    );
   } catch {
     return defaultSettings;
   }

@@ -16,7 +16,7 @@
     "generate-assets": "node scripts/generate-placeholder-assets.mjs",
     "fetch-gigachat-certs": "node scripts/fetch-gigachat-certs.mjs",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "node scripts/tauri-cli-with-preflight.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

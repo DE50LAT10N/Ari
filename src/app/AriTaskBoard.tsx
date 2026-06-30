@@ -19,6 +19,8 @@ import {
 } from "../tasks/goalLedger";
 import { resolveAriInboxItem } from "../memory/ariInbox";
 import { formatReminderTime } from "../character/reminders";
+import { loadMood } from "../character/mood";
+import { moodStatusLabel } from "../character/moodBehavior";
 import {
   endFocusSession,
   getActiveFocusSession,
@@ -159,10 +161,11 @@ export function AriTaskBoard({ chatOpen, onSpeakAbout }: AriTaskBoardProps) {
   };
 
   const nudgeAboutTask = (task: Task) => {
+    const moodLabel = moodStatusLabel(loadMood());
     onSpeakAbout?.(
       task.dueAt
-        ? `Напоминание: «${task.title}» — ${formatReminderTime(task.dueAt)}`
-        : `Следующее: «${task.title}»`,
+        ? `*${moodLabel}* «${task.title}» — ${formatReminderTime(task.dueAt)}`
+        : `*${moodLabel}* не забыть про «${task.title}»`,
     );
   };
 

@@ -89,6 +89,7 @@ describe("proactiveContextRich", () => {
     });
     const angles = buildSmalltalkAngles(bundle, []);
     expect(angles.length).toBeGreaterThan(0);
+    expect(angles.join(" ")).toMatch(/новостн|культур|боковая|технолог/i);
     for (const angle of angles) {
       expect(angle.toLowerCase()).not.toMatch(/следующий шаг/);
     }

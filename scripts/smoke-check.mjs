@@ -41,13 +41,35 @@ if (
 console.log(`Smoke: versions aligned at ${packageVersion}`);
 
 function run(command, args) {
-  const executable = command === "npm" && process.env.npm_execpath
-    ? process.execPath
-    : command;
-  const resolvedArgs = command === "npm" && process.env.npm_execpath
-    ? [process.env.npm_execpath, ...args]
-    : args;
-  const result = spawnSync(executable, resolvedArgs, {
+  if (command === "npm" && process.env.npm_execpath) {
+    const result = spawnSync(process.execPath, [process.env.npm_execpath, ...args], {
+      cwd: root,
+      stdio: "inherit",
+      shell: false,
+    });
+    if (result.error) {
+      console.error(result.error.message);
+    }
+    if (result.status !== 0) {
+      process.exit(result.status ?? 1);
+    }
+    return;
+  }
+  if (command === "npm" && args[0] === "run" && args[1]) {
+    const result = spawnSync(`npm run ${args[1]}`, {
+      cwd: root,
+      stdio: "inherit",
+      shell: true,
+    });
+    if (result.error) {
+      console.error(result.error.message);
+    }
+    if (result.status !== 0) {
+      process.exit(result.status ?? 1);
+    }
+    return;
+  }
+  const result = spawnSync(command, args, {
     cwd: root,
     stdio: "inherit",
     shell: false,

@@ -136,54 +136,25 @@ describe("proactiveLlmEngine", () => {
     expect(result.overlapsBanned).toBe(true);
   });
 
-  it("uses fallback with playbook move and chain when LLM offline", async () => {
-    recordClipboardSignal({
-      clipKind: "code",
-      snippet: "export function test() {}",
-    });
+  it("returns rejected LLM bundle instead of fallback when LLM is offline", async () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
-      windowTitle: "link.ts - Ari - Cursor",
+      windowTitle: "ambientThoughts.ts - Ari - Cursor",
       sessionMinutes: 5,
     });
-    const facts = collectProactiveSignalFacts({
-      bundle,
-      tone: "advice",
-      sessionMinutes: 5,
-    });
-    expect(facts.length).toBeGreaterThan(0);
 
-    const result = await synthesizeProactiveBundle(defaultSettings, {
-      bundle,
-      tone: "advice",
-      candidateTopics: ["link.ts"],
-      sessionMinutes: 5,
-      llmOnline: false,
-    });
-
-    expect(result.source).toBe("fallback");
-    expect(result.initiativeMove).toBeTruthy();
-    expect(result.primaryChainSummary).toBeTruthy();
-    expect(completeLlmJson).not.toHaveBeenCalled();
-  });
-
-  it("fallback smalltalk check-in stays sendable with minimal context", async () => {
-    const bundle = buildInitiativeSignalBundle(defaultSettings, {
-      processName: "Spotify.exe",
-      windowTitle: "Discover Weekly",
-      sessionMinutes: 15,
-    });
     const result = await synthesizeProactiveBundle(defaultSettings, {
       bundle,
       tone: "smalltalk",
-      candidateTopics: ["как настроение", "что слушаешь"],
-      sessionMinutes: 15,
+      candidateTopics: ["ambientThoughts.ts"],
+      sessionMinutes: 5,
       llmOnline: false,
     });
 
-    expect(result.source).toBe("fallback");
-    expect(result.shouldSend).toBe(true);
-    expect(result.linkedThemes.length).toBeGreaterThan(0);
+    expect(result.source).toBe("llm");
+    expect(result.shouldSend).toBe(false);
+    expect(result.rejectReason).toBe("llm offline");
+    expect(completeLlmJson).not.toHaveBeenCalled();
   });
 
   it("accepts LLM advice bundle without topicLinks by filling graph edges", async () => {
@@ -221,6 +192,89 @@ describe("proactiveLlmEngine", () => {
     expect(result.source).toBe("llm");
     expect(result.shouldSend).toBe(true);
     expect(result.topicLinks?.length).toBeGreaterThan(0);
+  });
+
+  it("retries synthesis when advice bundle repeats a banned archetype", async () => {
+    recordClipboardSignal({
+      clipKind: "stacktrace",
+      snippet: "ReferenceError: x at ChatPanel.tsx:42",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 10,
+    });
+    const input = {
+      bundle,
+      tone: "advice" as const,
+      candidateTopics: ["ChatPanel.tsx"],
+      recentUserMessage: "почему падает сборка?",
+      sessionMinutes: 10,
+      llmOnline: true,
+    };
+    vi.mocked(completeLlmJson)
+      .mockResolvedValueOnce({
+        tone: "advice",
+        linkedThemes: ["повтор refocus"],
+        mergedAnchor: "Cursor Agents",
+        narrativeBrief:
+          "Предлагаю выделить 10 минут на Cursor Agents: один файл, одна проверка, один результат.",
+        practicalHook:
+          "Попробуй выделить 10 минут на Cursor Agents: погрузись в один файл и реши одну задачу целиком.",
+        usefulnessScore: 0.8,
+        shouldSend: true,
+        overlapsBanned: false,
+      })
+      .mockResolvedValueOnce({
+        tone: "advice",
+        linkedThemes: ["ошибка в буфере"],
+        mergedAnchor: "ChatPanel.tsx",
+        narrativeBrief:
+          "ReferenceError в буфере отвечает на вопрос про сборку и указывает на ChatPanel.tsx.",
+        practicalHook:
+          "ReferenceError: x at ChatPanel.tsx:42 — начни с этой строки и проверь импорт.",
+        usefulnessScore: 0.85,
+        shouldSend: true,
+        overlapsBanned: false,
+      });
+
+    const result = await synthesizeProactiveBundle(defaultSettings, input);
+
+    expect(completeLlmJson).toHaveBeenCalledTimes(2);
+    expect(result.practicalHook).toMatch(/ReferenceError|ChatPanel/i);
+  });
+
+  it("collects up to three clipboard facts", () => {
+    const now = Date.now();
+    recordClipboardSignal({
+      clipKind: "text",
+      snippet: "first clip snippet",
+      at: now - 2_000,
+    });
+    recordClipboardSignal({
+      clipKind: "code",
+      snippet: "export function second() {}",
+      at: now - 1_000,
+    });
+    recordClipboardSignal({
+      clipKind: "stacktrace",
+      snippet: "TypeError: third at file.ts:1",
+      at: now,
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      now,
+      processName: "Cursor.exe",
+      windowTitle: "file.ts - Ari - Cursor",
+      sessionMinutes: 4,
+    });
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "advice",
+      sessionMinutes: 4,
+    });
+    const clips = facts.filter((fact) => fact.kind === "clipboard");
+    expect(clips.length).toBe(3);
+    expect(clips.some((fact) => fact.id.includes(":0"))).toBe(true);
   });
 
   it("validateProactiveReplyLlm flags meta commentary", async () => {

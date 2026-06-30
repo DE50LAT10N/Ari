@@ -1,6 +1,10 @@
 import type { AppSettings } from "../settings/appSettings";
 import { resolveEmbeddingModel } from "./embeddingConfig";
 import { resolveVisionModel } from "./visionConfig";
+import {
+  isLiteGigaChatModelId,
+  resolveGigaChatAuxModel,
+} from "./gigaChatModels";
 
 export type ModelTask =
   | "chat"
@@ -35,13 +39,19 @@ export function resolveModel(
     case "validator":
     case "json":
       if (isGigaChat) {
-        return settings.fastJsonModel || settings.gigaChatModel;
+        return resolveGigaChatAuxModel(
+          settings.gigaChatModel,
+          settings.fastJsonModel,
+        );
       }
       return settings.fastJsonModel || settings.model;
     case "memoryExtraction":
     case "summarization":
       if (isGigaChat) {
-        return settings.memoryModel || settings.gigaChatModel;
+        return resolveGigaChatAuxModel(
+          settings.gigaChatModel,
+          settings.memoryModel,
+        );
       }
       return settings.memoryModel || settings.model;
     case "vision":
@@ -51,4 +61,29 @@ export function resolveModel(
     default:
       return isGigaChat ? settings.gigaChatModel : settings.model;
   }
+}
+
+/** Lite / small models struggle with proactive JSON synthesis and quality gates. */
+export function isLiteLlmModel(settings: AppSettings): boolean {
+  if (settings.llmProvider === "gigachat") {
+    return isLiteGigaChatModelId(resolveModel("json", settings));
+  }
+  const model = settings.fastJsonModel || settings.model;
+  return /lite|mini|1b|3b/i.test(model);
+}
+
+export function resolveSynthesisModel(settings: AppSettings): string {
+  return resolveModel("initiativeSynthesis", settings);
+}
+
+export function resolveEffectiveGigaChatVisionModel(
+  settings: AppSettings,
+): string {
+  if (settings.llmProvider !== "gigachat") {
+    return settings.visionModel;
+  }
+  return resolveGigaChatAuxModel(
+    settings.gigaChatModel,
+    settings.gigaChatVisionModel,
+  );
 }

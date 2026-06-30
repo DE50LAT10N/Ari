@@ -254,7 +254,7 @@ describe("initiativeContext", () => {
     const settings = { ...defaultSettings, advisorEnabled: true };
     const pkg = buildProactiveInitiativePackage(settings, "process_advice", {
       ...bundleOpts,
-      linkSynthesis: {
+      llmBundle: {
         tone: "advice",
         linkedThemes: [
           "ошибка в буфере и вопрос про сборку сходятся на initiativeContext.ts",

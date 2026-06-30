@@ -920,7 +920,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
  "winreg 0.10.1",
 ]
 

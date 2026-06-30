@@ -2,6 +2,7 @@ import type { AppSettings } from "../settings/appSettings";
 import { isBlipVoiceEnabled } from "../settings/appSettings";
 import type { ActiveWindowInfo } from "../platform/activeWindow";
 import type { CharacterEmotion } from "../types/character";
+import { decayMood, loadMood } from "./mood";
 import { isFocusSessionActive } from "./focusSession";
 import { isQuietModeActive } from "./quietMode";
 import { isQuietHours } from "./reminders";
@@ -34,6 +35,10 @@ export type BlipSpeakOptions = {
   test?: boolean;
   technical?: boolean;
   autoSpeak?: boolean;
+  /** Visual typewriter for ambient bubble without full speak gates */
+  revealOnly?: boolean;
+  /** Proactive ambient bubble may use blip audio when chat is closed */
+  ambientWithSound?: boolean;
   activeWindow?: ActiveWindowInfo | null;
   onSpeakingStart?: () => void;
   onSpeakingEnd?: () => void;
@@ -56,6 +61,15 @@ type StreamSession = {
 };
 
 const VOICE_CHANGED_EVENT = "ari-voice-changed";
+
+function moodVoiceScale(): number {
+  const mood = decayMood(loadMood());
+  let scale = 1;
+  scale += (mood.energy - 0.45) * 0.14;
+  scale += mood.irritation * 0.1;
+  scale -= (mood.warmth - 0.35) * 0.04;
+  return Math.max(0.86, Math.min(1.16, scale));
+}
 
 function dispatchVoiceChanged(): void {
   window.dispatchEvent(new Event(VOICE_CHANGED_EVENT));
@@ -91,7 +105,9 @@ function shouldGateSpeech(options: BlipSpeakOptions): boolean {
     return false;
   }
   if (options.initiative && !settings.blipSpeakInitiative && !options.force) {
-    return false;
+    if (!options.ambientWithSound) {
+      return false;
+    }
   }
   if (options.reply && !settings.blipSpeakReplies && !options.force) {
     return false;
@@ -104,6 +120,16 @@ function shouldGateSpeech(options: BlipSpeakOptions): boolean {
 
 export function shouldBlipReveal(options: BlipSpeakOptions): boolean {
   return isBlipVoiceEnabled(options.settings) && shouldGateSpeech(options);
+}
+
+export function shouldAmbientTextReveal(options: BlipSpeakOptions): boolean {
+  if (!isBlipVoiceEnabled(options.settings) && !options.revealOnly) {
+    return false;
+  }
+  if (options.revealOnly) {
+    return true;
+  }
+  return shouldBlipReveal(options);
 }
 
 class BlipVoiceManager {
@@ -144,7 +170,7 @@ class BlipVoiceManager {
   }
 
   beginStream(options: BlipSpeakOptions): boolean {
-    if (!shouldBlipReveal(options)) {
+    if (!shouldAmbientTextReveal(options)) {
       return false;
     }
 
@@ -155,6 +181,7 @@ class BlipVoiceManager {
     const profile = getEmotionVoiceProfile(options.emotion);
     const sessionPitch =
       options.settings.blipPitch *
+      moodVoiceScale() *
       (options.settings.blipEmotionPitch || options.test
         ? samplePitch(profile)
         : 1);
@@ -284,6 +311,21 @@ class BlipVoiceManager {
   }
 
   speak(text: string, options: BlipSpeakOptions): Promise<boolean> {
+    const cleaned = cleanTextForBlip(text);
+    if (!cleaned) {
+      return Promise.resolve(false);
+    }
+    if (
+      options.onDisplayUpdate ||
+      options.revealOnly ||
+      shouldAmbientTextReveal(options)
+    ) {
+      if (this.beginStream(options)) {
+        this.feedStream(cleaned, options.emotion);
+        this.endStream(cleaned);
+        return this.endStreamAsync(cleaned).then(() => true);
+      }
+    }
     return this.playSpeakableText(text, options);
   }
 
@@ -347,6 +389,7 @@ class BlipVoiceManager {
     const profile = getEmotionVoiceProfile(options.emotion);
     const sessionPitch =
       options.settings.blipPitch *
+      moodVoiceScale() *
       (options.settings.blipEmotionPitch || options.test
         ? samplePitch(profile)
         : 1);

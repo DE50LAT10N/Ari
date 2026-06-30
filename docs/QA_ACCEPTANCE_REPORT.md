@@ -1,12 +1,12 @@
 # Ari QA acceptance report
 
-Generated: 2026-06-29T20:08:31.295Z
+Generated: 2026-06-30T05:04:12.488Z
 
 ## Automated results
 
 | Check | Status | Note |
 |-------|--------|------|
-| auto-gates | fail | smoke failed: undefined |
+| auto-gates | pass | npm run smoke exit 0 |
 | env-setup | pass | advisor default on |
 | env-setup | pass | clipboard full capture default on |
 | env-setup | pass | activity tracking default on |
@@ -24,7 +24,7 @@ Generated: 2026-06-29T20:08:31.295Z
 | proactive-qa | pass | unified proactive launch helper wired |
 | proactive-qa | pass | proactiveBridge replaces legacy interactionEvent |
 | proactive-qa | pass | dynamic check-in topics wired |
-| proactive-qa | pass | local fallback after failed LLM attempt |
+| proactive-qa | pass | failed LLM proactive synthesis returns rejected bundle without local text fallback |
 | proactive-qa | pass | checkInitiative does not require LLM for entry |
 | proactive-qa | pass | generic check-in passes conversation topics |
 | proactive-qa | pass | rich proactive context module wired in initiativeContext |
@@ -50,7 +50,7 @@ Generated: 2026-06-29T20:08:31.295Z
 
 ## Release gate (plan §7)
 
-**Automated gate: FAIL** (1 checks) — fix before ship.
+**Automated gate: PASS** (unit tests + smoke). Manual tauri scenarios still required.
 
 ### Ship-ready (automated)
 
@@ -61,11 +61,11 @@ Generated: 2026-06-29T20:08:31.295Z
 
 ### Fix list applied during QA
 
-- `idleLines.ts`: anti-repeat now tracks template keys (fixed flaky characterDepth test)
+- LLM-only ambient thoughts: short-lived anti-repeat memory replaces local idle-line templates.
 
 ### QA profile for manual run
 
-Settings → «Компаньон» + `initiativeLevel: active`, `proactiveIntervalMinutes: 1` (revert after).
+Settings → «Компаньон» + `initiativeLevel: active`, `proactiveSmalltalkIntervalMinutes: 1`, `proactiveAdviceIntervalMinutes: 20` (revert after).
 Ollama or GigaChat online; quiet mode off.
 
 ### Remaining manual (before full ship)

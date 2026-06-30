@@ -97,12 +97,18 @@ Thresholds: candidate ≥ **0.48**; merge ≥ **0.82**; ask_user ≥ **0.55**.
 
 ### Daily caps by initiative level
 
-| Level | Total/day |
-|-------|-----------|
+Telemetry reference only — `dailyInitiativeCap()` returns **9999** (no hard block in runtime).
+
+| Level | Telemetry reference/day |
+|-------|-------------------------|
 | silent | 2 |
 | rare | 3 |
 | normal | 4 |
 | active | 7 |
+
+### Proactive tone balance (Diagnostics)
+
+`memoryTelemetry.getProactiveToneSnapshot()` — counts `advice` vs `smalltalk` initiatives emitted today via `recordProactiveToneEmitted`.
 
 Per-kind caps scale from base in `initiativeConfig.ts` (e.g. `memory_callback`: 1 at normal).
 

@@ -13,6 +13,7 @@ export type ReplyValidationContext = {
   responseMode?: ResponseMode;
   userAskedQuestion?: boolean;
   recentAssistantReplies?: string[];
+  moodArchetype?: string;
 };
 
 export type OocValidationResult = {
@@ -32,14 +33,17 @@ const MASCULINE_SELF_PATTERN =
 const ASSISTANT_TONE_PATTERN =
   /^(?:конечно|безусловно|разумеется|вот несколько советов|вот список|позвольте)/i;
 
+const NUMBERED_LIST_PATTERN =
+  /(?:^|\n)\s*(?:\d+[.)]|[-*])\s+(?:шаг|пункт|провер)/i;
+
+const CORPORATE_ADVICE_PATTERN =
+  /(?:рекомендую выполнить|следующие шаги|вот несколько советов)/i;
+
 const HABITUAL_TRAILING_QUESTION_PATTERN =
   /(?:хоч(?:ешь|ешь ли|ете)[^?]{0,90}|могу\s+(?:ещ[её]\s+)?(?:помочь|показать|разобрать|сделать)[^?]{0,60}|что\s+думаешь|как\s+тебе|продолжим|ид[её]м\s+дальше|расскажешь|окей|ок)\s*\?$/iu;
 
 const EVASIVE_REPLY_PATTERN =
   /(?:лучше самому разобраться|сам(?:ому|а) разбер(?:ё|е)шься|если что-то конкретное интересует|не могу сказать точно|не уверена, что знаю|попробуй сам|я не эксперт)/i;
-
-const CONCRETE_ADVICE_PATTERN =
-  /(?:`|«|»|"|'|\d|npm |cargo |tsc |grep |git |try |проверь|запусти|открой|добавь|убери|измени|ошибк|команд|флаг|файл)/i;
 
 export function validateCharacterReply(
   reply: string,
@@ -90,6 +94,20 @@ export function validateCharacterReply(
   if (ASSISTANT_TONE_PATTERN.test(reply.trim())) {
     issues.push("assistant tone");
   }
+  if (NUMBERED_LIST_PATTERN.test(reply)) {
+    issues.push("assistant tone");
+  }
+  if (CORPORATE_ADVICE_PATTERN.test(reply)) {
+    issues.push("corporate tone");
+  }
+  if (
+    context.moodArchetype === "irritated" &&
+    context.proactive &&
+    reply.trim().length < 220 &&
+    !/(?:хм|ну|ладно|серьёз|ирон|колк|сух)/i.test(reply)
+  ) {
+    issues.push("assistant tone");
+  }
   const questionMarks = (reply.match(/\?/g) ?? []).length;
   const questionSpamLimit =
     context.responseMode === "emotional_support" ||
@@ -106,6 +124,13 @@ export function validateCharacterReply(
     issues.push("habitual trailing question");
   }
   if (
+    context.proactive &&
+    context.proactiveReplyTone === "smalltalk" &&
+    /[?？]\s*$/u.test(reply.trim())
+  ) {
+    issues.push("habitual trailing question");
+  }
+  if (
     context.userAskedQuestion &&
     EVASIVE_REPLY_PATTERN.test(reply) &&
     reply.trim().length < 220 &&
@@ -114,15 +139,6 @@ export function validateCharacterReply(
     context.proactiveReplyTone !== "advice"
   ) {
     issues.push("evasive reply");
-  }
-  if (
-    context.proactive &&
-    context.proactiveReplyTone === "advice" &&
-    context.hasDebugSignals &&
-    reply.trim().length < 180 &&
-    !CONCRETE_ADVICE_PATTERN.test(reply)
-  ) {
-    issues.push("shallow advice");
   }
   const recent = context.recentAssistantReplies ?? [];
   if (

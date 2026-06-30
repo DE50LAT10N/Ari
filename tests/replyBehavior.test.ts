@@ -8,6 +8,7 @@ import {
   isQuestionLikeMessage,
   shouldAutoWebSearch,
 } from "../src/tools/liveTools";
+import { validateCharacterReply } from "../src/character/responseValidation";
 
 describe("replySimilarity", () => {
   it("detects near-duplicate proactive lines", () => {
@@ -58,6 +59,57 @@ describe("proactive reply tone response mode", () => {
         proactiveReplyTone: "smalltalk",
       }),
     ).toBe("idle_initiative");
+  });
+
+  it("flags trailing questions in proactive smalltalk", () => {
+    const result = validateCharacterReply(
+      "В мире технологий сегодня явно пахнет маленькой странностью, заметил?",
+      {
+        hasVision: false,
+        hasMemory: false,
+        hasRag: false,
+        proactive: true,
+        proactiveReplyTone: "smalltalk",
+        recentAssistantReplies: [],
+      },
+    );
+
+    expect(result.issues).toContain("habitual trailing question");
+  });
+
+  it("does not flag proactive advice novelty via post-hoc regex validation", () => {
+    const result = validateCharacterReply(
+      "Давай попробуем так: выбери один файл и пообещай себе следующие 10 минут ни на что не отвлекаться.",
+      {
+        hasVision: false,
+        hasMemory: false,
+        hasRag: false,
+        proactive: true,
+        proactiveReplyTone: "advice",
+        recentAssistantReplies: [
+          "Предлагаю выделить 10 минут на Cursor Agents: один файл, одна проверка, один результат.",
+        ],
+      },
+    );
+
+    expect(result.issues).not.toContain("advice novelty");
+    expect(result.issues).not.toContain("shallow advice");
+  });
+
+  it("flags proactive story fallback locally", () => {
+    const result = validateCharacterReply(
+      "Ха, звучит как начало крутого сюжета! Надеюсь, результат будет не менее захватывающим, чем процесс...",
+      {
+        hasVision: false,
+        hasMemory: false,
+        hasRag: false,
+        proactive: true,
+        proactiveReplyTone: "smalltalk",
+        recentAssistantReplies: [],
+      },
+    );
+
+    expect(result.issues).not.toContain("proactive meta commentary");
   });
 });
 

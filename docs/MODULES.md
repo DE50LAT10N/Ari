@@ -52,7 +52,7 @@ Function-level index for `src/**/*.ts`. Internal-only files marked *(internal)*.
 | `initiativeGate.ts` | `shouldSendInitiative` LLM gate |
 | `scenarioEngine.ts` | `resolveScenario`, scenario definitions |
 | `scenarioPacks.ts` | JSON packs, `pickPackReaction` |
-| `idleLines.ts` | `chooseIdleLine` |
+| `ambientThoughts.ts` | LLM-only ambient micro-thoughts + anti-repeat validation |
 | `dailyRituals.ts` | `getPendingDailyRitual`, `describeRitualTone` |
 | `presence.ts` | `derivePresenceScene`, `MicroReaction` |
 | `attention.ts` | `deriveAttentionState` |
@@ -182,7 +182,9 @@ Function-level index for `src/**/*.ts`. Internal-only files marked *(internal)*.
 | `gigaChatCredentials.ts` | DPAPI key storage |
 | `projectCompanion.ts` | Git read-only commands |
 | `logger.ts` | `ariLog` |
-| `jsonStorage.ts`, `jsonStorageCache.ts` | JSON persistence helpers |
+| `jsonStorage.ts` | JSON persistence helpers |
+| `proactiveLlmEngine.ts`, `proactiveTopicLinker.ts`, `proactiveInitiativePlaybook.ts` | Proactive synthesis, graph, playbook |
+| `advicePlanner.ts`, `adviceUrgency.ts`, `adviceOutcome.ts`, `adviceNovelty.ts` | Advice pipeline |
 | `webTools.ts` | DuckDuckGo fetch |
 | `ollamaEnvironment.ts`, `ollamaProcess.ts` | Ollama lifecycle |
 | `appUpdater.ts`, `appVersion.ts` | Updater/version |

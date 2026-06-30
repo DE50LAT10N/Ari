@@ -31,6 +31,8 @@ describe("proactive prompt", () => {
 
     const system = messages[0]?.content ?? "";
     expect(system).toContain(PROACTIVE_SMALLTALK_RULE.slice(0, 40));
+    expect(system).toContain("боковую тему");
+    expect(system).toContain("Не заканчивай вопросом");
     expect(system).not.toContain("Обязательный якорь реплики");
   });
 });

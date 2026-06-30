@@ -10,6 +10,7 @@ import {
 } from "../character/mood";
 import {
   buildMoodRefusalReply,
+  deriveMoodArchetype,
   shouldMoodRefuseRequest,
 } from "../character/moodBehavior";
 import {
@@ -34,9 +35,11 @@ import { buildLiveStatusLine } from "../character/liveStatus";
 import {
   ensureProactiveClockStarted,
   armProactiveGracePeriod,
-  getLastProactiveAttemptAt,
+  getLastAdviceAttemptAt,
+  getLastSmalltalkAttemptAt,
+  markAdviceAttemptAt,
+  markSmalltalkAttemptAt,
   registerProactiveReplySubject,
-  setLastProactiveAttemptAt,
   setLastProactiveMessageAt,
   rememberAdviceSubject,
 } from "../character/proactiveState";
@@ -56,7 +59,6 @@ import {
   type ProactivePackageOptions,
 } from "../character/initiativeContext";
 import {
-  afterAdviceAttempt,
   evaluateProactiveTick,
 } from "../character/checkInitiativePolicy";
 import {
@@ -161,7 +163,6 @@ import {
   loadAriSelfMemory,
   updateAriSelfMemory,
 } from "../character/selfMemory";
-import { chooseIdleLine } from "../character/idleLines";
 import {
   canUseInitiativeKind,
   classifyInitiativeKind,
@@ -180,7 +181,6 @@ import {
   recordInitiativeOutcome,
   isDailyKindCapReached,
   type InitiativeFeatureVector,
-  type LocalInitiativeDecision,
 } from "../character/initiativeScoring";
 import { classifyUserIntent } from "../character/userIntent";
 import { applyRetrievalRerank } from "../memory/retrievalRerank";
@@ -189,7 +189,6 @@ import { getMemorySemanticSearchMode } from "../memory/memorySemanticIndex";
 import {
   deriveInterruptibility,
   allowsInitiativeForKind,
-  canEmitProactiveReply,
   allowsReminder,
   allowsProactiveChat,
   describeInterruptibility,
@@ -239,15 +238,25 @@ import {
   getLastProactiveSignalFacts,
   synthesizeProactiveBundle,
   validateProactiveReplyLlm,
-} from "../character/proactiveLinkSynthesizer";
+} from "../character/proactiveLlmEngine";
 import {
   buildAdviceTopicKey,
   getRecentAdviceFeedback,
+  loadAdviceLedger,
   refreshAdviceTopicState,
   rememberAdviceSent,
   updateAdviceFeedback,
   type AdviceFeedback,
 } from "../character/adviceLedger";
+import { describeAdviceNoveltyForPrompt } from "../character/adviceNovelty";
+import {
+  ADVICE_IGNORED_EVENT,
+  buildAdviceObservedState,
+  getRecentAdviceOutcomes,
+  reconcilePendingAdviceOutcomes,
+  recordAdviceFeedbackOutcome,
+  startAdviceOutcomeObservation,
+} from "../character/adviceOutcome";
 import { planAdvice } from "../character/advicePlanner";
 import {
   codingSessionMinutes,
@@ -320,12 +329,19 @@ import {
   allowsGenericCompanionInitiative,
   dailyInitiativeCap,
   dailyInitiativeKindCap,
+  idleLineProbability,
   initiativeRiskTolerance,
-  proactiveIntervalMs,
-  shouldUseIdleLineFallback,
+  proactiveAdviceIntervalMs,
+  proactiveSmalltalkIntervalMs,
 } from "../character/initiativeConfig";
 import { describeEmotionAntiRepeat } from "../character/emotionHistory";
-import { recordInitiativeSuppressed } from "../memory/memoryTelemetry";
+import {
+  recordInitiativeSuppressed,
+  recordProactiveToneEmitted,
+  getProactiveToneSnapshot,
+  isAdviceSkewedToday,
+} from "../memory/memoryTelemetry";
+import { countRecentAdviceStreak } from "../character/adviceLedger";
 import {
   isCodingProcess,
   isDistractingProcess,
@@ -583,6 +599,13 @@ function scheduleThrottledStreamUpdate(
   }, delayMs);
 }
 
+function shouldSuppressProactiveReply(issues: string[]): boolean {
+  return issues.some(
+    (issue) =>
+      issue === "duplicate proactive reply" || issue === "proactive quality",
+  );
+}
+
 export function ChatPanel({
   isOpen,
   settings,
@@ -642,7 +665,9 @@ export function ChatPanel({
   const lastTypingDispatchRef = useRef(0);
   const gateBusyRef = useRef(false);
   const proactiveWasEnabledRef = useRef(settings.proactiveEnabled);
-  const lastProactiveIntervalRef = useRef(settings.proactiveIntervalMinutes);
+  const lastProactiveIntervalRef = useRef(
+    `${settings.proactiveAdviceIntervalMinutes}:${settings.proactiveSmalltalkIntervalMinutes}`,
+  );
   const lastEventReactionRef = useRef(0);
   const lastCompanionAmbientRef = useRef(0);
   const observedWindowRef = useRef<{
@@ -1385,6 +1410,8 @@ export function ChatPanel({
       proactiveLinkNarrative?: string;
       proactivePracticalHook?: string;
       proactiveInitiativeMove?: string;
+      proactiveAdviceCandidateKind?: string;
+      proactiveNoveltyGuidance?: string;
     } = {},
   ): Promise<boolean> {
     if (isLoadingRef.current) {
@@ -1431,12 +1458,15 @@ export function ChatPanel({
     onStateChange("thinking");
     await yieldToMain();
 
+    const wantAmbientReveal = !isOpen && Boolean(options.proactive);
     const blipOptions = {
       settings,
       initiative: options.proactive,
       reply: !options.proactive,
       technical: false as boolean,
       activeWindow,
+      revealOnly: wantAmbientReveal,
+      ambientWithSound: wantAmbientReveal && isBlipVoiceEnabled(settings),
       onDisplayUpdate: (displayText: string) => {
         streamedContentRef.current = displayText;
         setHasStreamTokens(displayText.length > 0);
@@ -1447,7 +1477,7 @@ export function ChatPanel({
               : message,
           ),
         );
-        if (!isOpen && options.proactive && displayText.trim()) {
+        if (wantAmbientReveal && displayText.trim()) {
           onAmbientBubble?.(displayText.slice(0, 220));
         }
       },
@@ -1456,11 +1486,23 @@ export function ChatPanel({
       },
       onSpeakingEnd: () => {
         onStateChange(isOpen ? "listening" : "idle");
-        if (!isOpen && options.proactive) {
-          window.setTimeout(() => onAmbientBubble?.(null), 5000);
-        }
       },
     };
+
+    let streamEpoch = 0;
+    function restartAmbientStream(): void {
+      blipVoiceManager.stop();
+      blipStreamActive = blipVoiceManager.beginStream(blipOptions);
+      if (!blipStreamActive) {
+        setStreamingAssistantIndex(assistantIndex);
+        setStreamingContent("");
+      } else {
+        setStreamingAssistantIndex(null);
+        setStreamingContent(null);
+      }
+    }
+
+    restartAmbientStream();
 
     try {
       const lastUserMessage = [...baseHistory]
@@ -1720,6 +1762,7 @@ export function ChatPanel({
         proactive: Boolean(options.proactive),
         proactiveReplyTone,
         responseMode,
+        moodArchetype: deriveMoodArchetype(mood),
         hasDebugSignals:
           Boolean(options.proactive) &&
           proactiveReplyTone === "advice" &&
@@ -1791,6 +1834,7 @@ export function ChatPanel({
         proactiveLinkNarrative: options.proactiveLinkNarrative,
         proactivePracticalHook: options.proactivePracticalHook,
         proactiveInitiativeMove: options.proactiveInitiativeMove,
+        proactiveNoveltyGuidance: options.proactiveNoveltyGuidance,
       };
       const fittedBundle = buildTrimmedPromptContext(
         baseHistory,
@@ -1836,23 +1880,22 @@ export function ChatPanel({
         responseMode,
         lastInitiative: options.eventDescription,
       });
-      blipStreamActive = blipVoiceManager.beginStream(blipOptions);
-      if (!blipStreamActive) {
-        setStreamingAssistantIndex(assistantIndex);
-        setStreamingContent("");
-      } else {
-        setStreamingAssistantIndex(null);
-        setStreamingContent(null);
-      }
 
       async function runStream(
         messages: ReturnType<typeof buildMessages>,
       ): Promise<string> {
+        const epoch = ++streamEpoch;
+        if (epoch > 1 && wantAmbientReveal) {
+          restartAmbientStream();
+        }
         return withTimeout(
           streamLlm(
             messages,
             settings,
             (streamedContent) => {
+              if (epoch !== streamEpoch) {
+                return;
+              }
               streamedContentRef.current = streamedContent;
               if (blipStreamActive) {
                 blipVoiceManager.feedStream(streamedContent, replyEmotion);
@@ -1878,10 +1921,18 @@ export function ChatPanel({
                 streamedContent,
                 streamUiTimerRef,
                 pendingStreamContentRef,
-                (value) => setStreamingContent(value),
+                (value) => {
+                  setStreamingContent(value);
+                  if (wantAmbientReveal && value.trim()) {
+                    onAmbientBubble?.(value.slice(0, 220));
+                  }
+                },
               );
             },
             (emotion) => {
+              if (epoch !== streamEpoch) {
+                return;
+              }
               replyEmotion = emotion;
               setHistory((current) =>
                 current.map((message, index) =>
@@ -1903,14 +1954,22 @@ export function ChatPanel({
 
       if (options.proactive && isLlmProviderOnline(settings, ollamaOnline)) {
         const proactiveBundle = getLastProactiveLlmBundle();
-        if (proactiveBundle && processed.content.trim()) {
+        const proactiveFacts = getLastProactiveSignalFacts();
+        const maxProactiveRegens = 2;
+        for (let attempt = 0; attempt <= maxProactiveRegens; attempt += 1) {
+          if (!proactiveBundle || !processed.content.trim()) {
+            break;
+          }
           const quality = await validateProactiveReplyLlm(
             settings,
             proactiveBundle,
             processed.content,
-            getLastProactiveSignalFacts(),
+            proactiveFacts,
           );
-          if (!quality.acceptable) {
+          if (quality.acceptable) {
+            break;
+          }
+          if (attempt >= maxProactiveRegens) {
             processed = {
               ...processed,
               validation: {
@@ -1923,6 +1982,38 @@ export function ChatPanel({
                 ],
               },
             };
+            break;
+          }
+          const correctionIssues = [
+            ...processed.validation.issues.filter(
+              (issue) => issue !== "proactive quality",
+            ),
+            ...(quality.issues.includes("proactive meta commentary")
+              ? ["proactive meta commentary"]
+              : []),
+            ...(quality.issues.includes("missing fact quote")
+              ? ["proactive quality"]
+              : []),
+            "proactive quality",
+          ];
+          const correctionHistory: ChatMessage[] = [
+            ...fittedHistory,
+            { role: "assistant", content: reply },
+            {
+              role: "user",
+              content: buildCorrectionUserMessage(
+                [...new Set(correctionIssues)],
+              ),
+            },
+          ];
+          try {
+            reply = await runStream(
+              buildMessages(correctionHistory, runtimeContext),
+            );
+            processed = processModelReply(reply, processReplyOptions);
+          } catch (retryError) {
+            logError("Proactive reply regen failed", retryError);
+            break;
           }
         }
       }
@@ -1967,6 +2058,21 @@ export function ChatPanel({
         processed = buildInCharacterFallback();
       }
 
+      if (
+        options.proactive &&
+        shouldSuppressProactiveReply(processed.validation.issues)
+      ) {
+        recordInitiativeSuppressed(
+          `proactive reply novelty: ${processed.validation.issues.join(", ")}`,
+        );
+        failed = true;
+        setHistory(baseHistory);
+        if (wantAmbientReveal) {
+          onAmbientBubble?.(null);
+        }
+        return false;
+      }
+
       if (streamUiTimerRef.current) {
         window.clearTimeout(streamUiTimerRef.current);
         streamUiTimerRef.current = null;
@@ -1992,11 +2098,41 @@ export function ChatPanel({
               linkNarrative: options.proactiveLinkNarrative,
               practicalHook: options.proactivePracticalHook,
               initiativeMove: options.proactiveInitiativeMove,
+              adviceCandidateKind: options.proactiveAdviceCandidateKind,
               replyText: finalReply,
               processName: activeWindow?.processName,
               windowTitle: activeWindow?.title,
             })
           : null;
+      if (adviceEntry) {
+        const observedBundle = buildInitiativeSignalBundle(settings, {
+          processName: activeWindowRef.current?.processName,
+          windowTitle: activeWindowRef.current?.title,
+        });
+        const observedFacts = collectProactiveSignalFacts({
+          bundle: observedBundle,
+          tone: "advice",
+          candidateTopics: options.initiativeAnchor
+            ? [options.initiativeAnchor]
+            : undefined,
+          recentUserMessage: [...baseHistory]
+            .reverse()
+            .find((message) => message.role === "user")
+            ?.content,
+        });
+        startAdviceOutcomeObservation({
+          adviceId: adviceEntry.id,
+          topicKey: adviceEntry.topicKey,
+          candidateKind: options.proactiveAdviceCandidateKind,
+          beforeState: buildAdviceObservedState({
+            topicKey: adviceEntry.topicKey,
+            bundle: observedBundle,
+            facts: observedFacts,
+            processName: activeWindowRef.current?.processName,
+            windowTitle: activeWindowRef.current?.title,
+          }),
+        });
+      }
       setHistory((current) =>
         current.map((message, index) =>
           index === assistantIndex
@@ -2178,6 +2314,9 @@ export function ChatPanel({
         if (options.proactive) {
           logError("Proactive message generation failed", requestError);
           setProactiveNotice("Инициатива не сработала — модель не ответила.");
+          if (wantAmbientReveal) {
+            onAmbientBubble?.(null);
+          }
         } else {
           setError(getErrorMessage(requestError, settings.llmProvider));
           playUiSound("error", settings.soundsEnabled, isQuietHours(settings));
@@ -2204,6 +2343,8 @@ export function ChatPanel({
           onProactiveEmitted?.(replyEmotion);
         }
         onStateChange(isOpen ? "listening" : "idle");
+      } else if (wantAmbientReveal) {
+        onAmbientBubble?.(null);
       }
     }
     return !failed;
@@ -2318,21 +2459,8 @@ export function ChatPanel({
           return true;
         }
       }
-      const sent = await emitLocalCompanionLine({
-        scoreContext: outcome.line,
-        skipScore: true,
-        localDecision: {
-          allowed: true,
-          reason: "scenario-local",
-          annoyanceRisk: "low",
-          value: "medium",
-        },
-        line: { text: outcome.line, emotion: outcome.emotion },
-      });
-      if (sent) {
-        markScenarioTriggered(scenario);
-      }
-      return sent;
+      recordInitiativeSuppressed("scenario local line skipped without LLM");
+      return false;
     }
     return false;
   }
@@ -2479,7 +2607,10 @@ export function ChatPanel({
     adviceId: string,
     feedback: AdviceFeedback,
   ) {
-    updateAdviceFeedback(adviceId, feedback);
+    const updated = updateAdviceFeedback(adviceId, feedback);
+    if (updated) {
+      recordAdviceFeedbackOutcome(updated, feedback);
+    }
     setHistory((current) =>
       current.map((message, index) =>
         index === messageIndex
@@ -2489,144 +2620,6 @@ export function ChatPanel({
     );
     setOpenBranchMenuIndex(null);
   }
-
-  async function emitLocalCompanionLine(options: {
-    scoreContext: string;
-    skipScore?: boolean;
-    localDecision?: LocalInitiativeDecision;
-    plannedCheckMinSilenceMs?: number;
-    plannedCheckFreshTopics?: boolean;
-    riskToleranceBonus?: number;
-    initiativeKind?: InitiativeKind;
-    plannedAnchor?: string;
-    line?: { text: string; emotion: CharacterEmotion };
-    ambientTimeoutMs?: number;
-    kindCooldownMs?: number;
-  }): Promise<boolean> {
-    const initiativeKind = options.initiativeKind ?? "check_in";
-    const kindCooldownMs = options.kindCooldownMs;
-    const interruptibility = resolveInterruptibilityTier();
-    if (!canEmitProactiveReply(interruptibility, initiativeKind)) {
-      recordInitiativeSuppressed("interruptibility blocks local companion line");
-      return false;
-    }
-    if (
-      isQuietModeActive(settings, activeWindowRef.current) ||
-      blocksInitiative(lifecycleRef.current) ||
-      !canUseInitiativeKind(initiativeKind, { cooldownMs: kindCooldownMs })
-    ) {
-      return false;
-    }
-
-    let localDecision = options.localDecision;
-    if (!options.skipScore) {
-      localDecision = scoreInitiativeLocally({
-        description: options.scoreContext,
-        scene: sceneRef.current,
-        chatClosedAgoMs: Date.now() - lastChatClosedAtRef.current,
-        userActivityAgoMs: options.plannedCheckMinSilenceMs
-          ? Date.now() - lastUserActivityRef.current
-          : getCompanionSilenceMs(),
-        dailyCap: dailyInitiativeCap(settings),
-        riskTolerance:
-          initiativeRiskTolerance(settings) + (options.riskToleranceBonus ?? 0),
-        plannedCheckMinSilenceMs: options.plannedCheckMinSilenceMs,
-        mood: moodRef.current,
-        adaptiveEnabled: settings.adaptiveInitiativeEnabled,
-        plannedCheckFreshTopics: options.plannedCheckFreshTopics,
-      });
-    }
-    if (!localDecision?.allowed) {
-      return false;
-    }
-
-    const localLine =
-      options.line ?? chooseIdleLine(sceneRef.current, moodRef.current);
-    lastInitiativeFeaturesRef.current = buildInitiativeFeatures({
-      risk: localDecision.annoyanceRisk,
-      value: localDecision.value,
-      scene: sceneRef.current,
-      mood: moodRef.current,
-      ignoredCount: getRecentIgnoredInitiativeCount(),
-    });
-    markInitiativeKind(initiativeKind);
-    markInitiativeSent(
-      lastInitiativeFeaturesRef.current,
-      settings.adaptiveInitiativeEnabled,
-      initiativeKind,
-    );
-    setLastProactiveMessageAt();
-    registerProactiveReplySubject(
-      options.plannedAnchor,
-      localLine.text,
-    );
-    const bubbleMs = options.ambientTimeoutMs ?? 10_000;
-    const proactiveMessage: ChatMessage = {
-      role: "assistant",
-      content: localLine.text,
-      emotion: localLine.emotion,
-      messageId: crypto.randomUUID(),
-      isCanon: true,
-    };
-    setHistory((current) => [...current, proactiveMessage]);
-
-    if (!isOpen) {
-      onAmbientBubble?.(localLine.text);
-      onEmotionChange(localLine.emotion, "initiative");
-      onProactiveEmitted?.(localLine.emotion);
-      if (settings.proactiveOpenChat) {
-        onProactiveMessage();
-      }
-      if (
-        settings.blipSpeakInitiative &&
-        isBlipVoiceEnabled(settings) &&
-        !isTooLongForAutoBlip(localLine.text, settings)
-      ) {
-        void blipVoiceManager.speak(localLine.text, {
-          settings,
-          emotion: localLine.emotion,
-          initiative: true,
-          activeWindow,
-          onSpeakingStart: () => onStateChange("speaking"),
-          onSpeakingEnd: () => onStateChange(isOpen ? "listening" : "idle"),
-        });
-      }
-      window.setTimeout(() => onAmbientBubble?.(null), bubbleMs);
-      return true;
-    }
-    if (settings.proactiveOpenChat) {
-      onProactiveMessage();
-    }
-    onEmotionChange(localLine.emotion, "initiative");
-    onProactiveEmitted?.(localLine.emotion);
-    return true;
-  }
-
-  async function tryEmitLocalCompanionLine(
-    context: string,
-    options: {
-      plannedCheckMinSilenceMs?: number;
-      kindCooldownMs?: number;
-      skipScore?: boolean;
-      localDecision?: LocalInitiativeDecision;
-    } = {},
-  ): Promise<boolean> {
-    return emitLocalCompanionLine({
-      scoreContext: context,
-      plannedCheckMinSilenceMs: options.plannedCheckMinSilenceMs,
-      kindCooldownMs: options.kindCooldownMs,
-      skipScore: options.skipScore,
-      localDecision: options.localDecision,
-      riskToleranceBonus: options.skipScore ? undefined : 1,
-    });
-  }
-
-  const GENERIC_COMPANION_DECISION: LocalInitiativeDecision = {
-    allowed: true,
-    reason: "общая проверка присутствия",
-    annoyanceRisk: "low",
-    value: "medium",
-  };
 
   async function trySignalDrivenAdviceInitiative(input: {
     signalBundle: ReturnType<typeof buildInitiativeSignalBundle>;
@@ -2680,9 +2673,6 @@ export function ChatPanel({
     }
 
     const kindCooldownMs = input.intervalMs;
-    const plannedCheckContext =
-      "Плановая проверка инициативы после периода тишины.";
-
     if (!canUseInitiativeKind("check_in", { cooldownMs: kindCooldownMs })) {
       return false;
     }
@@ -2706,19 +2696,8 @@ export function ChatPanel({
       return sent;
     }
 
-    if (!shouldUseIdleLineFallback(settings, input.llmOnline)) {
-      return false;
-    }
-
-    return emitLocalCompanionLine({
-      scoreContext: plannedCheckContext,
-      skipScore: true,
-      localDecision: GENERIC_COMPANION_DECISION,
-      initiativeKind: "check_in",
-      kindCooldownMs,
-      plannedCheckMinSilenceMs: input.plannedSilenceMs,
-      ambientTimeoutMs: 8000,
-    });
+    recordInitiativeSuppressed("llm offline");
+    return false;
   }
 
   function getProactiveTiming(now = Date.now()) {
@@ -2772,6 +2751,9 @@ export function ChatPanel({
     kind: InitiativeKind,
     options: ProactivePackageOptions = {},
   ): Promise<ProactiveInitiativePackage | null> {
+    if (!isOpen && isLlmProviderOnline(settings, ollamaOnline)) {
+      onAmbientBubble?.("…");
+    }
     const mergedOpts = proactiveBundleOptions(options);
     const bundle = buildInitiativeSignalBundle(settings, mergedOpts);
     const banned = collectBannedProactiveTopics();
@@ -2788,7 +2770,7 @@ export function ChatPanel({
     };
 
     if (isLlmProviderOnline(settings, ollamaOnline)) {
-      const existingBundle = options.llmBundle ?? options.linkSynthesis;
+      const existingBundle = options.llmBundle;
       if (existingBundle) {
         if (!existingBundle.shouldSend) {
           recordInitiativeSuppressed(
@@ -2803,7 +2785,6 @@ export function ChatPanel({
               ? existingBundle.linkedThemes
               : candidateTopics,
           llmBundle: existingBundle,
-          linkSynthesis: existingBundle,
         };
       } else {
       const preliminaryAnchor =
@@ -2818,6 +2799,7 @@ export function ChatPanel({
         anchor: preliminaryAnchor,
         bundle,
         conversationTopics: candidateTopics,
+        urgencyLevel: mergedOpts.urgency?.level,
       });
       let ragSnippets: string[] = [];
       if (
@@ -2858,6 +2840,17 @@ export function ChatPanel({
         windowTitle: mergedOpts.windowTitle,
         signalSummary: mergedOpts.urgency?.reasons.join("; "),
       });
+      if (tone === "advice") {
+        reconcilePendingAdviceOutcomes({
+          afterState: buildAdviceObservedState({
+            topicKey: adviceTopicKey,
+            bundle,
+            facts: adviceFacts,
+            processName: mergedOpts.processName,
+            windowTitle: mergedOpts.windowTitle,
+          }),
+        });
+      }
       const advicePlan =
         tone === "advice"
           ? planAdvice({
@@ -2865,10 +2858,23 @@ export function ChatPanel({
               facts: adviceFacts,
               urgency: mergedOpts.urgency,
               feedback: getRecentAdviceFeedback(adviceTopicKey),
+              history: loadAdviceLedger(),
+              outcomes: getRecentAdviceOutcomes(adviceTopicKey),
               candidateTopics,
               ragSnippets,
             })
           : null;
+      if (tone === "advice" && !advicePlan?.selected) {
+        const hasGroundingFacts = adviceFacts.some((fact) =>
+          ["clipboard", "file", "urgency", "task", "query"].includes(fact.kind),
+        );
+        if (kind !== "check_in" && !hasGroundingFacts) {
+          recordInitiativeSuppressed(
+            advicePlan?.reason ?? "advice planner rejected repeated advice",
+          );
+          return null;
+        }
+      }
       let llmBundle = await synthesizeProactiveBundle(settings, {
         bundle,
         tone,
@@ -2909,28 +2915,6 @@ export function ChatPanel({
         }
       }
       if (!llmBundle.shouldSend) {
-        if (kind === "check_in" || kind === "quiet_presence") {
-          const offlineBundle = await synthesizeProactiveBundle(settings, {
-            bundle,
-            tone: llmBundle.tone,
-            bannedTopics: banned,
-            candidateTopics,
-            sessionMinutes: mergedOpts.sessionMinutes,
-            windowMinutes: mergedOpts.windowMinutes,
-            companionSilenceMs: mergedOpts.companionSilenceMs,
-            recentUserMessage: mergedOpts.recentUserMessage,
-            urgency: mergedOpts.urgency,
-            recentChatTurns: mergedOpts.recentChatTurns,
-            llmOnline: false,
-            ragSnippets: ragSnippets.length ? ragSnippets : undefined,
-            adviceCandidate: advicePlan?.selected,
-          });
-          if (offlineBundle.shouldSend) {
-            llmBundle = offlineBundle;
-          }
-        }
-      }
-      if (!llmBundle.shouldSend) {
         recordInitiativeSuppressed(
           llmBundle.rejectReason ?? "llm bundle rejected",
         );
@@ -2943,7 +2927,6 @@ export function ChatPanel({
             ? llmBundle.linkedThemes
             : candidateTopics,
         llmBundle,
-        linkSynthesis: llmBundle,
       };
       }
     }
@@ -2967,7 +2950,7 @@ export function ChatPanel({
         signalSummary: pkg.proactiveSignalSummary,
       });
     }
-    return attemptInitiative(pkg.eventDescription, pkg.initiativeKind, {
+    const sent = await attemptInitiative(pkg.eventDescription, pkg.initiativeKind, {
       initiativeAnchor: pkg.initiativeAnchor,
       softInitiativeAnchor: pkg.softInitiativeAnchor ?? true,
       bannedProactiveTopics: pkg.bannedProactiveTopics,
@@ -2978,21 +2961,31 @@ export function ChatPanel({
       proactiveSignalSummary: pkg.proactiveSignalSummary,
       gateContext: pkg.llmBundle
         ? buildGateContextFromBundle(pkg.llmBundle)
-        : pkg.linkSynthesis
-          ? buildGateContextFromBundle(pkg.linkSynthesis)
-          : undefined,
+        : undefined,
       proactiveLinkNarrative:
         pkg.llmBundle?.primaryChainSummary ??
-        pkg.linkSynthesis?.primaryChainSummary ??
-        pkg.llmBundle?.narrativeBrief ??
-        pkg.linkSynthesis?.narrativeBrief,
-      proactivePracticalHook: pkg.llmBundle?.practicalHook ?? pkg.linkSynthesis?.practicalHook,
-      proactiveInitiativeMove:
-        pkg.llmBundle?.initiativeMove ?? pkg.linkSynthesis?.initiativeMove,
+        pkg.llmBundle?.narrativeBrief,
+      proactivePracticalHook: pkg.llmBundle?.practicalHook,
+      proactiveInitiativeMove: pkg.llmBundle?.initiativeMove,
+      proactiveAdviceCandidateKind:
+        pkg.llmBundle?.selectedAdviceCandidate?.kind,
+      proactiveNoveltyGuidance: describeAdviceNoveltyForPrompt(
+        loadAdviceLedger(),
+      ),
       ignoreKindDailyCap: extra.ignoreKindDailyCap,
       kindCooldownMs: extra.kindCooldownMs,
       plannedCheckMinSilenceMs: extra.plannedCheckMinSilenceMs,
     });
+    if (sent) {
+      if (pkg.proactiveReplyTone === "advice") {
+        markAdviceAttemptAt();
+      } else {
+        markSmalltalkAttemptAt();
+      }
+    } else if (pkg.proactiveReplyTone === "advice") {
+      markAdviceAttemptAt();
+    }
+    return sent;
   }
 
   async function attemptInitiative(
@@ -3014,6 +3007,8 @@ export function ChatPanel({
       proactiveLinkNarrative?: string;
       proactivePracticalHook?: string;
       proactiveInitiativeMove?: string;
+      proactiveAdviceCandidateKind?: string;
+      proactiveNoveltyGuidance?: string;
     } = {},
   ): Promise<boolean> {
     const interruptibility = resolveInterruptibilityTier();
@@ -3082,7 +3077,8 @@ export function ChatPanel({
       dailyCap: dailyInitiativeCap(settings),
       riskTolerance: initiativeRiskTolerance(settings),
       plannedCheckMinSilenceMs:
-        options.plannedCheckMinSilenceMs ?? proactiveIntervalMs(settings),
+        options.plannedCheckMinSilenceMs ??
+        proactiveSmalltalkIntervalMs(settings),
       openLoopHint,
       mood,
       intent: userIntent,
@@ -3112,26 +3108,6 @@ export function ChatPanel({
     gateBusyRef.current = true;
     try {
       if (!isLlmProviderOnline(settings, ollamaOnline)) {
-        if (
-          initiativeKind === "check_in" ||
-          options.proactiveReplyTone === "smalltalk"
-        ) {
-          return emitLocalCompanionLine({
-            scoreContext: eventDescription,
-            skipScore: true,
-            localDecision: {
-              allowed: true,
-              reason: "LLM недоступен — запасная реплика",
-              annoyanceRisk: "low",
-              value: "low",
-            },
-            initiativeKind,
-            kindCooldownMs: options.kindCooldownMs,
-            plannedCheckMinSilenceMs: options.plannedCheckMinSilenceMs,
-            plannedAnchor: options.initiativeAnchor,
-            ambientTimeoutMs: 8000,
-          });
-        }
         recordInitiativeSuppressed("llm offline");
         return false;
       }
@@ -3171,9 +3147,6 @@ export function ChatPanel({
         reason: topic,
         interruptibility: describeInterruptibility(interruptibility),
       });
-      if (!isOpen && !settings.proactiveOpenChat) {
-        onAmbientBubble?.(topic.slice(0, 80));
-      }
       if (settings.proactiveOpenChat && allowsProactiveChat(interruptibility)) {
         onProactiveMessage();
       }
@@ -3190,6 +3163,8 @@ export function ChatPanel({
         proactiveLinkNarrative: options.proactiveLinkNarrative,
         proactivePracticalHook: options.proactivePracticalHook,
         proactiveInitiativeMove: options.proactiveInitiativeMove,
+        proactiveAdviceCandidateKind: options.proactiveAdviceCandidateKind,
+        proactiveNoveltyGuidance: options.proactiveNoveltyGuidance,
       });
       if (sent) {
         setLastProactiveMessageAt();
@@ -3199,6 +3174,9 @@ export function ChatPanel({
           settings.adaptiveInitiativeEnabled,
           initiativeKind,
         );
+        if (options.proactiveReplyTone) {
+          recordProactiveToneEmitted(options.proactiveReplyTone);
+        }
         if (options.proactiveReplyTone === "advice") {
           const subject = options.initiativeAnchor;
           if (subject) {
@@ -3221,15 +3199,17 @@ export function ChatPanel({
       return;
     }
 
-    const intervalMs = proactiveIntervalMs(settings);
-    ensureProactiveClockStarted(intervalMs);
+    const adviceIntervalMs = proactiveAdviceIntervalMs(settings);
+    const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
+    ensureProactiveClockStarted(adviceIntervalMs, smalltalkIntervalMs);
     if (!proactiveWasEnabledRef.current) {
-      armProactiveGracePeriod(intervalMs);
+      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs);
       proactiveWasEnabledRef.current = true;
     }
-    if (lastProactiveIntervalRef.current !== settings.proactiveIntervalMinutes) {
-      armProactiveGracePeriod(intervalMs);
-      lastProactiveIntervalRef.current = settings.proactiveIntervalMinutes;
+    const intervalKey = `${settings.proactiveAdviceIntervalMinutes}:${settings.proactiveSmalltalkIntervalMinutes}`;
+    if (lastProactiveIntervalRef.current !== intervalKey) {
+      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs);
+      lastProactiveIntervalRef.current = intervalKey;
     }
 
     const checkInitiative = async () => {
@@ -3242,7 +3222,7 @@ export function ChatPanel({
       if (blocksInitiative(lifecycleRef.current)) {
         return;
       }
-      const requiredIdleMs = Math.min(2 * 60 * 1000, intervalMs);
+      const requiredIdleMs = Math.min(2 * 60 * 1000, smalltalkIntervalMs);
       const activityAgoMs = Math.max(
         Date.now() - lastUserActivityRef.current,
         userIdleSecondsRef.current * 1000,
@@ -3275,11 +3255,13 @@ export function ChatPanel({
       });
       const urgency = scoreAdviceUrgency(signalBundle, settings, {
         sessionMinutes: proactiveTiming.sessionMinutes,
-        userIntervalMs: intervalMs,
+        userIntervalMs: adviceIntervalMs,
       });
       setLastAdviceUrgency(urgency);
 
-      const sinceAttempt = Date.now() - getLastProactiveAttemptAt();
+      const now = Date.now();
+      const sinceAdviceAttempt = now - getLastAdviceAttemptAt();
+      const sinceSmalltalkAttempt = now - getLastSmalltalkAttemptAt();
       const workContext = isProactiveWorkContext({
         bundle: signalBundle,
         sessionMinutes: proactiveTiming.sessionMinutes,
@@ -3287,15 +3269,18 @@ export function ChatPanel({
       const adviceReady =
         settings.advisorEnabled &&
         llmOnline &&
-        isAdviceReady(urgency, sinceAttempt);
-      const presenceReady = sinceAttempt >= intervalMs;
+        isAdviceReady(urgency, sinceAdviceAttempt, now, adviceIntervalMs);
+      const smalltalkReady = sinceSmalltalkAttempt >= smalltalkIntervalMs;
       const idleGateOpen =
         immersedCompanion || activityAgoMs >= requiredIdleMs;
       const tickAction = evaluateProactiveTick({
         adviceReady,
-        presenceReady,
+        smalltalkReady,
         idleGateOpen,
         loading: isLoadingRef.current,
+        adviceUrgencyLevel: urgency.level,
+        recentAdviceStreak: countRecentAdviceStreak(),
+        adviceSkewedToday: isAdviceSkewedToday(getProactiveToneSnapshot()),
       });
 
       if (tickAction === "silent") {
@@ -3308,37 +3293,37 @@ export function ChatPanel({
           urgency,
           plannedSilenceMs,
         });
-        const nextAction = afterAdviceAttempt({
-          adviceSent: sent,
-          presenceReady,
-        });
-        if (nextAction === "silent") {
-          setLastProactiveAttemptAt();
+        if (sent) {
           return;
         }
-        if (nextAction === "retry_advice_later") {
-          setLastProactiveAttemptAt();
+        markAdviceAttemptAt();
+        if (!smalltalkReady) {
           return;
         }
       }
 
-      if (!presenceReady) {
+      if (!smalltalkReady) {
         return;
       }
 
       const ritualPending = getPendingDailyRitual() !== null;
       const longSilence = activityAgoMs >= 20 * 60_000;
+      const adviceStreak = countRecentAdviceStreak();
+      const memoryRollBoost =
+        adviceStreak >= 2 ? 0.22 : adviceStreak >= 1 ? 0.12 : 0;
       const tryMemory =
         ritualPending ||
         longSilence ||
-        (!activeLevel && Math.random() < 0.18);
+        (!activeLevel &&
+          Math.random() <
+            Math.min(0.72, idleLineProbability(settings) + memoryRollBoost));
 
       if (
         !workContext &&
         urgency.level === "none" &&
         settings.userMemoryEnabled &&
         tryMemory &&
-        canUseInitiativeKind("memory_callback", { cooldownMs: intervalMs })
+        canUseInitiativeKind("memory_callback", { cooldownMs: smalltalkIntervalMs })
       ) {
         const pkg = await buildMemoryCallbackPackage(
           settings,
@@ -3351,11 +3336,10 @@ export function ChatPanel({
         if (pkg) {
           const sent = await launchProactiveInitiative(pkg, {
             ignoreKindDailyCap: true,
-            kindCooldownMs: intervalMs,
+            kindCooldownMs: smalltalkIntervalMs,
             plannedCheckMinSilenceMs: plannedSilenceMs,
           });
           if (sent) {
-            setLastProactiveAttemptAt();
             return;
           }
         }
@@ -3363,8 +3347,12 @@ export function ChatPanel({
 
       if (
         !activeLevel &&
-        Math.random() < 0.1 &&
-        canUseInitiativeKind("unfinished_thread", { cooldownMs: intervalMs })
+        Math.random() <
+          Math.min(
+            0.35,
+            0.1 + (adviceStreak >= 2 ? 0.18 : adviceStreak >= 1 ? 0.08 : 0),
+        ) &&
+        canUseInitiativeKind("unfinished_thread", { cooldownMs: smalltalkIntervalMs })
       ) {
         const nudge = getHighPriorityOpenTasks()[0] ?? getNextTask();
         if (nudge && !nudge.dueAt) {
@@ -3378,11 +3366,10 @@ export function ChatPanel({
             },
           );
           const sent = await launchProactiveInitiative(pkg, {
-            kindCooldownMs: intervalMs,
+            kindCooldownMs: smalltalkIntervalMs,
             plannedCheckMinSilenceMs: plannedSilenceMs,
           });
           if (sent) {
-            setLastProactiveAttemptAt();
             return;
           }
         }
@@ -3390,22 +3377,21 @@ export function ChatPanel({
 
       const generic = await tryGenericCompanionInitiative({
         activityAgoMs,
-        intervalMs,
+        intervalMs: smalltalkIntervalMs,
         plannedSilenceMs,
         llmOnline,
         immersedCompanion,
         companionSilenceMs,
       });
-      if (generic) {
-        setLastProactiveAttemptAt();
-      }
+      void generic;
     };
 
     const timer = window.setInterval(checkInitiative, 15_000);
     return () => window.clearInterval(timer);
   }, [
     settings.proactiveEnabled,
-    settings.proactiveIntervalMinutes,
+    settings.proactiveAdviceIntervalMinutes,
+    settings.proactiveSmalltalkIntervalMinutes,
     settings.proactiveOpenChat,
     settings.initiativeLevel,
     settings.userMemoryEnabled,
@@ -3426,13 +3412,17 @@ export function ChatPanel({
         settings.adaptiveInitiativeEnabled,
       );
       if (ignored > 0) {
-        onMoodInteraction?.("ignored_initiative");
+        window.dispatchEvent(
+          new CustomEvent(ADVICE_IGNORED_EVENT, {
+            detail: { count: ignored },
+          }),
+        );
       }
     };
     runPrune();
     const timer = window.setInterval(runPrune, 60_000);
     return () => window.clearInterval(timer);
-  }, [settings.adaptiveInitiativeEnabled, onMoodInteraction]);
+  }, [settings.adaptiveInitiativeEnabled]);
 
   useEffect(() => {
     if (!settings.autoVisionEnabled || !settings.activityTrackingEnabled) {
@@ -3889,19 +3879,11 @@ export function ChatPanel({
           if (!pkg) {
             return;
           }
-          void launchProactiveInitiative(pkg).then((sent) => {
-            if (sent) {
-              setLastProactiveAttemptAt();
-            }
-          });
+          void launchProactiveInitiative(pkg);
         });
         return;
       }
-      void tryEmitLocalCompanionLine(context).then((local) => {
-        if (local) {
-          setLastProactiveAttemptAt();
-        }
-      });
+      recordInitiativeSuppressed("llm offline");
     };
 
     const timer = window.setInterval(checkCompanionAmbient, 60_000);

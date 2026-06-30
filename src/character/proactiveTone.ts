@@ -1,3 +1,4 @@
+import type { AdviceUrgencyLevel } from "./adviceUrgency";
 import type { AppSettings } from "../settings/appSettings";
 import type { AdvisorAngle } from "./advisorEngine";
 import type { InitiativeKind } from "./initiativeKinds";
@@ -77,15 +78,80 @@ function hasTechnicalAdvisorSignals(bundle: InitiativeSignalBundle): boolean {
   );
 }
 
+/** Strong signals for flipping check-in to advice — dominant file alone is not enough. */
+export function hasUrgentAdvisorSignals(bundle: InitiativeSignalBundle): boolean {
+  const { advisor } = bundle;
+  return (
+    Boolean(advisor.repeatedErrorSignature) ||
+    advisor.stuckScore >= 0.45 ||
+    bundle.clipboardSnippets.some((clip) => clip.kind === "stacktrace") ||
+    bundle.focusBlockers.length > 0
+  );
+}
+
+const SMALLTALK_ONLY_KINDS = new Set<InitiativeKind>([
+  "memory_callback",
+  "return_reaction",
+  "context_comment",
+  "quiet_presence",
+]);
+
+const ADVICE_ONLY_KINDS = new Set<InitiativeKind>([
+  "process_advice",
+  "screen_glance",
+  "break_suggestion",
+  "distraction_nudge",
+]);
+
+export function resolveProactiveReplyTone(input: {
+  initiativeKind: InitiativeKind;
+  advisorAngle?: AdvisorAngle;
+  anchor?: string;
+  bundle?: InitiativeSignalBundle;
+  conversationTopics?: string[];
+  urgencyLevel?: AdviceUrgencyLevel;
+  llmTone?: ProactiveReplyTone;
+}): ProactiveReplyTone {
+  if (SMALLTALK_ONLY_KINDS.has(input.initiativeKind)) {
+    return "smalltalk";
+  }
+  if (ADVICE_ONLY_KINDS.has(input.initiativeKind)) {
+    return "advice";
+  }
+
+  const classified = classifyProactiveReplyTone({
+    initiativeKind: input.initiativeKind,
+    advisorAngle: input.advisorAngle,
+    anchor: input.anchor,
+    bundle: input.bundle,
+    conversationTopics: input.conversationTopics,
+    urgencyLevel: input.urgencyLevel,
+  });
+
+  if (classified === "smalltalk") {
+    return "smalltalk";
+  }
+  return input.llmTone === "advice" ? "advice" : classified;
+}
+
 function isAdviceAngle(angle?: AdvisorAngle): boolean {
   return angle === "debug_help" || angle === "refocus" || angle === "scope";
 }
 
 function isSocialTopicLabel(topic: string): boolean {
   const lower = topic.toLowerCase();
+  if (/\.(?:tsx?|jsx?|rs|py|go|java|cs|cpp)\b/i.test(topic)) {
+    return false;
+  }
   return (
     lower.includes("как прошло") ||
     lower.includes("как дела") ||
+    lower.includes("как идёт") ||
+    lower.includes("как идет") ||
+    lower.includes("что делаешь") ||
+    lower.includes("устал") ||
+    lower.includes("устала") ||
+    lower.includes("скучно") ||
     lower.includes("помнишь") ||
     lower.includes("вернул")
   );
@@ -104,12 +170,8 @@ export function classifyProactiveReplyTone(input: {
   anchor?: string;
   bundle?: InitiativeSignalBundle;
   conversationTopics?: string[];
-  llmTone?: ProactiveReplyTone;
+  urgencyLevel?: AdviceUrgencyLevel;
 }): ProactiveReplyTone {
-  if (input.llmTone) {
-    return input.llmTone;
-  }
-
   const { initiativeKind, advisorAngle, anchor, bundle, conversationTopics } =
     input;
 
@@ -129,41 +191,39 @@ export function classifyProactiveReplyTone(input: {
     case "quiet_presence":
       return "smalltalk";
     case "unfinished_thread":
-      if (isPracticalAnchor(anchor)) {
-        return "advice";
-      }
-      if (bundle && hasTechnicalAdvisorSignals(bundle)) {
+      if (isPracticalAnchor(anchor) && bundle && hasUrgentAdvisorSignals(bundle)) {
         return "advice";
       }
       return "smalltalk";
     case "check_in":
       if (
         isSocialOnlyTopics(conversationTopics) &&
-        (!bundle || !hasTechnicalAdvisorSignals(bundle)) &&
+        (!bundle || !hasUrgentAdvisorSignals(bundle)) &&
         !isPracticalAnchor(anchor)
       ) {
         return "smalltalk";
       }
-      if (isPracticalAnchor(anchor)) {
+      if (
+        input.urgencyLevel === "high" &&
+        bundle &&
+        hasUrgentAdvisorSignals(bundle)
+      ) {
         return "advice";
       }
-      if (bundle && isProactiveWorkContext({ bundle })) {
-        if (!isSocialOnlyTopics(conversationTopics)) {
-          return "advice";
-        }
-        const liveCodingFile =
-          bundle.editorFile ?? bundle.advisor.editorContext.file;
-        const inCodingWindow =
-          Boolean(bundle.window) &&
-          CODING_PROCESS_PATTERN.test(bundle.window!.processName);
-        if (liveCodingFile && inCodingWindow) {
-          return "advice";
-        }
+      if (
+        input.urgencyLevel === "medium" &&
+        bundle &&
+        hasUrgentAdvisorSignals(bundle) &&
+        (isPracticalAnchor(anchor) || !isSocialOnlyTopics(conversationTopics))
+      ) {
+        return "advice";
       }
-      if (bundle && hasTechnicalAdvisorSignals(bundle)) {
-        if (!isSocialOnlyTopics(conversationTopics)) {
-          return "advice";
-        }
+      if (
+        isPracticalAnchor(anchor) &&
+        bundle &&
+        hasUrgentAdvisorSignals(bundle)
+      ) {
+        return "advice";
       }
       return "smalltalk";
     default:

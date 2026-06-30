@@ -16,9 +16,10 @@ import {
   buildInitiativeSignalBundle,
   buildProactiveInitiativePackage,
 } from "../src/character/initiativeContext";
+import { classifyProactiveReplyTone } from "../src/character/proactiveTone";
 import {
   initiativeRiskTolerance,
-  proactiveIntervalMs,
+  proactiveSmalltalkIntervalMs,
 } from "../src/character/initiativeConfig";
 import { invalidateInitiativeKindCache } from "../src/character/initiativeKinds";
 import {
@@ -152,12 +153,12 @@ function evaluatePlannedStart({
   context: string;
   topics: string[];
 } {
-  const intervalMs = proactiveIntervalMs(settings);
+  const intervalMs = proactiveSmalltalkIntervalMs(settings);
   const requiredIdleMs = Math.min(2 * 60 * 1000, intervalMs);
   if (elapsedSinceAttemptMs < intervalMs) {
     return {
       shouldStart: false,
-      reason: "waiting for proactive interval",
+      reason: "waiting for smalltalk interval",
       context: "",
       topics: [],
     };
@@ -217,7 +218,9 @@ function runScenario(scenario: Scenario): ScenarioResult {
     proactiveEnabled: true,
     activityTrackingEnabled: true,
     initiativeLevel: "active" as const,
-    proactiveIntervalMinutes: 1,
+    proactiveSmalltalkIntervalMinutes: 1,
+    proactiveAdviceIntervalMinutes: 20,
+    proactiveIntervalMinutes: 20,
   };
   const setupResult = scenario.setup(now) ?? {};
   const mergedSettings = setupResult.settings ?? settings;
@@ -252,10 +255,13 @@ function runScenario(scenario: Scenario): ScenarioResult {
     description: prompt,
     scene: scenario.scene ?? "idle",
     chatClosedAgoMs: 60 * 60_000,
-    userActivityAgoMs: Math.max(2 * 60_000, proactiveIntervalMs(mergedSettings)),
+    userActivityAgoMs: Math.max(
+      2 * 60_000,
+      proactiveSmalltalkIntervalMs(mergedSettings),
+    ),
     dailyCap: 99,
     riskTolerance: 1,
-    plannedCheckMinSilenceMs: proactiveIntervalMs(mergedSettings),
+    plannedCheckMinSilenceMs: proactiveSmalltalkIntervalMs(mergedSettings),
     adaptiveEnabled: false,
   });
 
@@ -474,6 +480,56 @@ describe("advisor simulation", () => {
     });
   }
 
+  it("classifies quiet coding check-ins as mostly smalltalk", () => {
+    const quietCases = [
+      {
+        windowTitle: "README.md - Ari - Cursor",
+        sessionMinutes: 5,
+        windowMinutes: 5,
+      },
+      {
+        windowTitle: "notes.md - project - Cursor",
+        sessionMinutes: 10,
+        windowMinutes: 8,
+      },
+      {
+        windowTitle: "ChatPanel.tsx - Ari - Cursor",
+        sessionMinutes: 8,
+        windowMinutes: 8,
+      },
+    ];
+    let smalltalkCount = 0;
+    for (const item of quietCases) {
+      resetStores();
+      const bundle = buildInitiativeSignalBundle(defaultSettings, {
+        processName: "Cursor.exe",
+        windowTitle: item.windowTitle,
+        sessionMinutes: item.sessionMinutes,
+        windowMinutes: item.windowMinutes,
+      });
+      const quietBundle = {
+        ...bundle,
+        clipboardSnippets: [],
+        focusBlockers: [],
+        advisor: {
+          ...bundle.advisor,
+          stuckScore: 0,
+          repeatedErrorSignature: undefined,
+          dominantFile: undefined,
+        },
+      };
+      const tone = classifyProactiveReplyTone({
+        initiativeKind: "check_in",
+        bundle: quietBundle,
+        conversationTopics: [],
+      });
+      if (tone === "smalltalk") {
+        smalltalkCount += 1;
+      }
+    }
+    expect(smalltalkCount / quietCases.length).toBeGreaterThanOrEqual(0.5);
+  });
+
   it("summarizes collected signal stores", () => {
     resetStores();
     const now = Date.now();
@@ -509,7 +565,7 @@ describe("advisor simulation", () => {
       expectedStart: boolean;
     }> = [
       { level: "active", expectedStart: true },
-      { level: "balanced", expectedStart: true },
+      { level: "normal", expectedStart: true },
       { level: "rare", expectedStart: true },
       { level: "silent", expectedStart: false },
     ];
@@ -522,9 +578,11 @@ describe("advisor simulation", () => {
         proactiveEnabled: true,
         activityTrackingEnabled: true,
         initiativeLevel: item.level,
-        proactiveIntervalMinutes: 1,
+        proactiveSmalltalkIntervalMinutes: 1,
+        proactiveAdviceIntervalMinutes: 20,
+        proactiveIntervalMinutes: 20,
       };
-      const effectiveMs = proactiveIntervalMs(settings);
+      const effectiveMs = proactiveSmalltalkIntervalMs(settings);
       const firstEligibleTickMs = Math.ceil(effectiveMs / tickMs) * tickMs;
       const before = evaluatePlannedStart({
         settings,
@@ -559,8 +617,10 @@ describe("advisor simulation", () => {
       advisorEnabled: true,
       proactiveEnabled: true,
       activityTrackingEnabled: true,
-      initiativeLevel: "balanced" as const,
-      proactiveIntervalMinutes: 1,
+      initiativeLevel: "normal" as const,
+      proactiveSmalltalkIntervalMinutes: 1,
+      proactiveAdviceIntervalMinutes: 20,
+      proactiveIntervalMinutes: 20,
     };
     recordQueryTopic({
       topic: "Tauri active window permissions",
@@ -577,8 +637,8 @@ describe("advisor simulation", () => {
 
     const result = evaluatePlannedStart({
       settings,
-      elapsedSinceAttemptMs: proactiveIntervalMs(settings),
-      userActivityAgoMs: proactiveIntervalMs(settings),
+      elapsedSinceAttemptMs: proactiveSmalltalkIntervalMs(settings),
+      userActivityAgoMs: proactiveSmalltalkIntervalMs(settings),
       now,
     });
     const contextHasTopic =
@@ -606,8 +666,10 @@ describe("advisor simulation", () => {
       advisorEnabled: true,
       proactiveEnabled: true,
       activityTrackingEnabled: true,
-      initiativeLevel: "balanced" as const,
-      proactiveIntervalMinutes: 1,
+      initiativeLevel: "normal" as const,
+      proactiveSmalltalkIntervalMinutes: 1,
+      proactiveAdviceIntervalMinutes: 20,
+      proactiveIntervalMinutes: 20,
     };
     recordQueryTopic({
       topic: "Tauri active window permissions",
@@ -627,8 +689,8 @@ describe("advisor simulation", () => {
 
     const result = evaluatePlannedStart({
       settings,
-      elapsedSinceAttemptMs: proactiveIntervalMs(settings),
-      userActivityAgoMs: proactiveIntervalMs(settings),
+      elapsedSinceAttemptMs: proactiveSmalltalkIntervalMs(settings),
+      userActivityAgoMs: proactiveSmalltalkIntervalMs(settings),
       now,
     });
     topicReport.push({

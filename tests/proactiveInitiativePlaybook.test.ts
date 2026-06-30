@@ -130,6 +130,32 @@ describe("proactiveInitiativePlaybook", () => {
 
 
 
+  it("uses a long clipboard quote in probe hook when available", () => {
+    const snippet =
+      "ReferenceError: cannot read property at ChatPanel.tsx:42 in buildReply";
+    recordClipboardSignal({
+      clipKind: "stacktrace",
+      snippet,
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 5,
+    });
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "advice",
+      sessionMinutes: 5,
+    });
+    const hints = inferInitiativeMoves(bundle, facts);
+    const probe = hints.find((hint) => hint.move === "clipboard_probe");
+
+    expect(probe?.hookSeed).toContain("ReferenceError");
+    expect(probe?.hookSeed.length).toBeGreaterThan(60);
+  });
+
+
+
   it("suggests ide_invite when stuck on file in IDE window", () => {
 
     const bundle = buildInitiativeSignalBundle(defaultSettings, {

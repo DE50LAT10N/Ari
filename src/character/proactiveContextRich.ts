@@ -94,6 +94,9 @@ export function buildSmalltalkAngles(
     scene = "evening";
   }
   push(`атмосфера момента (${describePresenceScene(scene)}) — без советов и планов`);
+  push("боковая живая тема: странная бытовая мысль, музыка, игра, еда или настроение — без привязки к текущему файлу");
+  push("новостной или культурный повод как ассоциация, без утверждения конкретной свежей новости без live-проверки");
+  push("маленькая интересная заметка из мира технологий или культуры, сформулированная как смолток, не как справка");
 
   const wmRecent = pruneWorkingMemory(bundle.advisor.now).slice(-6).reverse();
   for (const entry of wmRecent) {

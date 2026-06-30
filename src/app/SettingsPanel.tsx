@@ -23,6 +23,16 @@ import {
 import type { ActiveWindowInfo } from "../platform/activeWindow";
 import { AboutPanel } from "./AboutPanel";
 import { OllamaModelPicker } from "./OllamaModelPicker";
+import {
+  GigaChatEmbeddingPicker,
+  GigaChatModelPicker,
+} from "./GigaChatModelPicker";
+import {
+  GIGA_CHAT_CHAT_MODELS,
+  GIGA_CHAT_VISION_MODELS,
+  syncGigaChatModelSelection,
+} from "../llm/gigaChatModels";
+import { resolveModel } from "../llm/modelRouter";
 import { getUserMemoryStats } from "../memory/userMemory";
 import { getMemoryHealthSnapshot } from "../memory/memoryTelemetry";
 import { getRetrievalHealthSnapshot } from "../memory/retrievalTelemetry";
@@ -33,9 +43,13 @@ import { consolidateUserMemory } from "../memory/memoryConsolidator";
 import { analyzeScreenCapture } from "../llm/visionClient";
 import {
   ensureProactiveClockStarted,
-  getLastProactiveAttemptAt,
+  getLastAdviceAttemptAt,
+  getLastSmalltalkAttemptAt,
 } from "../character/proactiveState";
-import { proactiveIntervalMs } from "../character/initiativeConfig";
+import {
+  proactiveAdviceIntervalMs,
+  proactiveSmalltalkIntervalMs,
+} from "../character/initiativeConfig";
 import { isQuietHours } from "../character/reminders";
 import { deriveLifecycleState } from "../character/lifecycle";
 import {
@@ -703,10 +717,16 @@ export function SettingsPanel({
         return;
       }
 
-      const intervalMs = proactiveIntervalMs(settings);
-      const remaining = Math.max(
+      const adviceIntervalMs = proactiveAdviceIntervalMs(settings);
+      const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
+      ensureProactiveClockStarted(adviceIntervalMs, smalltalkIntervalMs);
+      const adviceRemaining = Math.max(
         0,
-        intervalMs - (Date.now() - getLastProactiveAttemptAt()),
+        adviceIntervalMs - (Date.now() - getLastAdviceAttemptAt()),
+      );
+      const smalltalkRemaining = Math.max(
+        0,
+        smalltalkIntervalMs - (Date.now() - getLastSmalltalkAttemptAt()),
       );
       const contextHint = settings.activityTrackingEnabled
         ? settings.autoVisionEnabled
@@ -714,11 +734,14 @@ export function SettingsPanel({
           : " Авто-взгляд выключен; советы используют окно, буфер, память и историю."
         : " Контекст активного окна выключен, поэтому советы будут заметно беднее.";
       setProactiveStatus(
-        remaining === 0
-          ? `Сообщение будет создано при ближайшей проверке.${contextHint}`
-          : `До следующей плановой реплики: ${Math.max(
+        adviceRemaining === 0 || smalltalkRemaining === 0
+          ? `Ближайшая проверка готова: смолток ${smalltalkRemaining === 0 ? "сейчас" : `${Math.max(1, Math.ceil(smalltalkRemaining / 60_000))} мин`}, совет ${adviceRemaining === 0 ? "сейчас" : `${Math.max(1, Math.ceil(adviceRemaining / 60_000))} мин`}.${contextHint}`
+          : `До смолтока: ${Math.max(
               1,
-              Math.ceil(remaining / 60_000),
+              Math.ceil(smalltalkRemaining / 60_000),
+            )} мин · до совета: ${Math.max(
+              1,
+              Math.ceil(adviceRemaining / 60_000),
             )} мин.${contextHint}`,
       );
     };
@@ -735,7 +758,8 @@ export function SettingsPanel({
     };
   }, [
     settings.proactiveEnabled,
-    settings.proactiveIntervalMinutes,
+    settings.proactiveAdviceIntervalMinutes,
+    settings.proactiveSmalltalkIntervalMinutes,
     settings.initiativeLevel,
     settings.activityTrackingEnabled,
     settings.autoVisionEnabled,
@@ -900,13 +924,30 @@ export function SettingsPanel({
             </button>
           </div>
           <label className="settings-field">
-            <span>Модель чата и JSON</span>
-            <input
+            <span>Модель чата</span>
+            <GigaChatModelPicker
               value={settings.gigaChatModel}
-              onChange={(event) =>
+              options={GIGA_CHAT_CHAT_MODELS}
+              onChange={(gigaChatModel) =>
+                onChange(syncGigaChatModelSelection(settings, gigaChatModel))
+              }
+            />
+            <span className="settings-note">
+              Фактически для JSON/инициативы:{" "}
+              {resolveModel("json", settings)}
+            </span>
+          </label>
+          <label className="settings-field">
+            <span>JSON / инициатива (synthesis, gate)</span>
+            <GigaChatModelPicker
+              value={settings.fastJsonModel ?? ""}
+              options={GIGA_CHAT_CHAT_MODELS}
+              allowEmpty
+              emptyLabel="как модель чата"
+              onChange={(fastJsonModel) =>
                 onChange({
                   ...settings,
-                  gigaChatModel: event.currentTarget.value,
+                  fastJsonModel: fastJsonModel || undefined,
                 })
               }
             />
@@ -929,7 +970,11 @@ export function SettingsPanel({
             </select>
           </label>
           <span className="settings-note">
-            Ключ — Base64 из личного кабинета Sber (без префикса «Basic »).
+            Для проактивных реплик выбери <strong>GigaChat 2 Pro</strong> или{" "}
+            <strong>Max</strong>. Lite подписка часто заканчивается раньше —
+            смотри баланс в личном кабинете Sber.
+          </span>
+          <span className="settings-note">
             Scope должен совпадать с типом ключа: PERS / B2B / CORP.
           </span>
           <span className="settings-note">
@@ -1000,12 +1045,13 @@ export function SettingsPanel({
           {visionSource === "gigachat" ? (
             <label className="settings-field">
               <span>Vision-модель GigaChat</span>
-              <input
+              <GigaChatModelPicker
                 value={settings.gigaChatVisionModel}
-                onChange={(event) =>
+                options={GIGA_CHAT_VISION_MODELS}
+                onChange={(gigaChatVisionModel) =>
                   onChange({
                     ...settings,
-                    gigaChatVisionModel: event.currentTarget.value,
+                    gigaChatVisionModel,
                   })
                 }
               />
@@ -1049,11 +1095,11 @@ export function SettingsPanel({
             <label className="settings-field">
               <span>Модель embeddings</span>
               {embeddingSource === "gigachat" ? (
-                <input
+                <GigaChatEmbeddingPicker
                   value={settings.gigaChatEmbeddingModel}
-                  onChange={(event) =>
+                  onChange={(gigaChatEmbeddingModel) =>
                     applyEmbeddingSettingsChange(settings, onChange, {
-                      gigaChatEmbeddingModel: event.currentTarget.value,
+                      gigaChatEmbeddingModel,
                     })
                   }
                 />
@@ -1254,18 +1300,24 @@ export function SettingsPanel({
 
       <label className="settings-field">
         <span>Быстрая JSON-модель (initiative / validator)</span>
-        <OllamaModelPicker
-          value={settings.fastJsonModel ?? ""}
-          models={showOllamaModelCatalog ? (status?.models ?? []) : []}
-          placeholder={settings.model}
-          allowEmpty
-          onChange={(fastJsonModel) =>
-            onChange({
-              ...settings,
-              fastJsonModel: fastJsonModel || undefined,
-            })
-          }
-        />
+        {settings.llmProvider === "gigachat" ? (
+          <span className="settings-note">
+            Настраивается в блоке GigaChat API выше («JSON / инициатива»).
+          </span>
+        ) : (
+          <OllamaModelPicker
+            value={settings.fastJsonModel ?? ""}
+            models={showOllamaModelCatalog ? (status?.models ?? []) : []}
+            placeholder={settings.model}
+            allowEmpty
+            onChange={(fastJsonModel) =>
+              onChange({
+                ...settings,
+                fastJsonModel: fastJsonModel || undefined,
+              })
+            }
+          />
+        )}
       </label>
       <label className="settings-field">
         <span>Модель памяти (extraction / summarization)</span>
@@ -1457,8 +1509,9 @@ export function SettingsPanel({
             <option value="active">Активная</option>
           </select>
           <small className="settings-note">
-            Уровень масштабирует частоту и смелость инициатив. Общий вкл/выкл —
-            переключатель «Инициативность Ari» в разделе ниже.
+            Уровень масштабирует частоту и смелость инициатив. «Активная» —
+            чаще check-in, но не только советы. Общий вкл/выкл — переключатель
+            «Инициативность Ari» в разделе ниже.
           </small>
         </label>
         <label className="settings-field">
@@ -1612,16 +1665,46 @@ export function SettingsPanel({
           </button>
         </div>
         <NumberSetting
-          label="Минимальный интервал, минут"
-          value={settings.proactiveIntervalMinutes}
+          label="Интервал смолтока, минут"
+          value={settings.proactiveSmalltalkIntervalMinutes}
+          min={5}
+          max={240}
+          step={1}
+          hint="Живые реплики, память и check-in без обязательных советов."
+          onChange={(proactiveSmalltalkIntervalMinutes) =>
+            onChange({ ...settings, proactiveSmalltalkIntervalMinutes })
+          }
+        />
+        <NumberSetting
+          label="Интервал советов, минут"
+          value={settings.proactiveAdviceIntervalMinutes}
           min={1}
           max={240}
           step={1}
-          hint="Базовый интервал между плановыми проверками; уровень инициативы его масштабирует."
-          onChange={(proactiveIntervalMinutes) =>
-            onChange({ ...settings, proactiveIntervalMinutes })
+          hint="Практические советы при ошибках, застревании и рабочих сигналах."
+          onChange={(proactiveAdviceIntervalMinutes) =>
+            onChange({
+              ...settings,
+              proactiveAdviceIntervalMinutes,
+              proactiveIntervalMinutes: proactiveAdviceIntervalMinutes,
+            })
           }
         />
+      </div>
+
+      <div className="settings-section-card">
+        <div className="settings-section-heading compact">
+          <div>
+            <strong>Баланс проактивности</strong>
+            <span>
+              Сегодня: советы {memoryHealth.proactiveTone.adviceToday} / смолток{" "}
+              {memoryHealth.proactiveTone.smalltalkToday}. «Активная» инициатива
+              не означает только советы — в паузах Ari чаще говорит как
+              компаньон.
+              {proactiveStatus ? ` ${proactiveStatus}` : ""}
+            </span>
+          </div>
+        </div>
       </div>
 
       <div className="settings-section-card">
@@ -1656,7 +1739,10 @@ export function SettingsPanel({
         <div className="settings-section-heading">
           <div>
             <strong>Пресет «Компаньон»</strong>
-            <span>Включить память, инициативу, окно и реакции одним нажатием.</span>
+            <span>
+              Память, инициатива, окно и реакции. Советы при ошибках и застревании;
+              смолток в паузах и при возвращении.
+            </span>
           </div>
           <button
             type="button"
@@ -1778,8 +1864,8 @@ export function SettingsPanel({
           </button>
         </div>
         <span className="settings-note">
-          {proactiveStatus} При интервале в одну минуту достаточно одной
-          минуты без ввода пользователя.
+          Для проверки коротких интервалов достаточно пары минут без ввода
+          пользователя.
         </span>
         <div className="settings-section-heading compact">
           <div>

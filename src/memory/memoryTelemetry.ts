@@ -1,9 +1,11 @@
 import { getDailyInitiativeCount } from "../character/initiativeScoring";
+import type { ProactiveReplyTone } from "../character/proactiveTone";
 
 const AUTO_COMMIT_KEY = "desktop-character.memory-auto-commit.v1";
 const INBOX_KEY = "desktop-character.memory-inbox-candidates.v1";
 const TRIM_KEY = "desktop-character.context-trim.v1";
 const SUPPRESS_KEY = "desktop-character.initiative-suppress.v1";
+const TONE_KEY = "desktop-character.proactive-tone.v1";
 
 type AutoCommitEntry = {
   text: string;
@@ -14,6 +16,11 @@ type AutoCommitEntry = {
 
 type SuppressEntry = {
   reason: string;
+  at: number;
+};
+
+type ToneEntry = {
+  tone: ProactiveReplyTone;
   at: number;
 };
 
@@ -63,6 +70,44 @@ export function recordInitiativeSuppressed(reason: string): void {
   writeList(SUPPRESS_KEY, next, 24);
 }
 
+export function recordProactiveToneEmitted(tone: ProactiveReplyTone): void {
+  const next = readList<ToneEntry>(TONE_KEY);
+  next.push({ tone, at: Date.now() });
+  writeList(TONE_KEY, next, 80);
+}
+
+export function isAdviceSkewedToday(
+  snapshot: Pick<ProactiveToneSnapshot, "adviceToday" | "smalltalkToday">,
+): boolean {
+  if (snapshot.adviceToday < 3) {
+    return false;
+  }
+  if (snapshot.smalltalkToday === 0) {
+    return true;
+  }
+  const total = snapshot.adviceToday + snapshot.smalltalkToday;
+  return total >= 4 && snapshot.adviceToday / total > 0.8;
+}
+
+export type ProactiveToneSnapshot = {
+  adviceToday: number;
+  smalltalkToday: number;
+  recent: ToneEntry[];
+};
+
+export function getProactiveToneSnapshot(now = Date.now()): ProactiveToneSnapshot {
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const todayMs = todayStart.getTime();
+  const recent = readList<ToneEntry>(TONE_KEY);
+  const today = recent.filter((entry) => entry.at >= todayMs);
+  return {
+    adviceToday: today.filter((entry) => entry.tone === "advice").length,
+    smalltalkToday: today.filter((entry) => entry.tone === "smalltalk").length,
+    recent: recent.slice(-5),
+  };
+}
+
 export type MemoryHealthSnapshot = {
   autoCommitsToday: number;
   lastAutoCommits: AutoCommitEntry[];
@@ -70,6 +115,7 @@ export type MemoryHealthSnapshot = {
   lastContextTrims: Array<{ note: string; at: number }>;
   initiativesToday: number;
   lastSuppressions: SuppressEntry[];
+  proactiveTone: ProactiveToneSnapshot;
 };
 
 export function getMemoryHealthSnapshot(): MemoryHealthSnapshot {
@@ -85,5 +131,6 @@ export function getMemoryHealthSnapshot(): MemoryHealthSnapshot {
     lastContextTrims: readList<{ note: string; at: number }>(TRIM_KEY).slice(-4),
     initiativesToday: getDailyInitiativeCount(),
     lastSuppressions: readList<SuppressEntry>(SUPPRESS_KEY).slice(-5),
+    proactiveTone: getProactiveToneSnapshot(),
   };
 }

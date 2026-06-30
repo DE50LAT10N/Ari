@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   armProactiveGracePeriod,
   ensureProactiveClockStarted,
-  getLastProactiveAttemptAt,
+  getLastAdviceAttemptAt,
+  getLastSmalltalkAttemptAt,
   invalidateProactiveStateCache,
 } from "../src/character/proactiveState";
 import {
   allowsGenericCompanionInitiative,
-  prefersLocalCompanionLines,
-  proactiveIntervalMs,
+  proactiveAdviceIntervalMs,
+  proactiveSmalltalkIntervalMs,
 } from "../src/character/initiativeConfig";
 import {
   isPlannedCheckDescription,
@@ -46,17 +47,34 @@ describe("proactive loop helpers", () => {
   });
 
   it("arms grace period so next check is immediate", () => {
-    armProactiveGracePeriod(60_000);
-    expect(Date.now() - getLastProactiveAttemptAt()).toBeGreaterThanOrEqual(
+    armProactiveGracePeriod(60_000, 5 * 60_000);
+    expect(Date.now() - getLastAdviceAttemptAt()).toBeGreaterThanOrEqual(
       59_000,
+    );
+    expect(Date.now() - getLastSmalltalkAttemptAt()).toBeGreaterThanOrEqual(
+      5 * 60_000 - 1_000,
     );
   });
 
   it("starts proactive clock in the past on first run", () => {
-    ensureProactiveClockStarted(120_000);
-    expect(Date.now() - getLastProactiveAttemptAt()).toBeGreaterThanOrEqual(
+    ensureProactiveClockStarted(120_000, 6 * 60_000);
+    expect(Date.now() - getLastAdviceAttemptAt()).toBeGreaterThanOrEqual(
       119_000,
     );
+    expect(Date.now() - getLastSmalltalkAttemptAt()).toBeGreaterThanOrEqual(
+      6 * 60_000 - 1_000,
+    );
+  });
+
+  it("scales advice and smalltalk intervals independently", () => {
+    const settings = {
+      ...defaultSettings,
+      initiativeLevel: "active" as const,
+      proactiveSmalltalkIntervalMinutes: 5,
+      proactiveAdviceIntervalMinutes: 20,
+    };
+    expect(proactiveSmalltalkIntervalMs(settings)).toBe(195_000);
+    expect(proactiveAdviceIntervalMs(settings)).toBe(780_000);
   });
 
   it("detects planned check descriptions", () => {
@@ -132,35 +150,6 @@ describe("proactive loop helpers", () => {
   it("allows generic companion initiative after planned silence", () => {
     expect(allowsGenericCompanionInitiative(90_000, 60_000)).toBe(true);
     expect(allowsGenericCompanionInitiative(30_000, 60_000)).toBe(false);
-  });
-
-  it("prefers LLM companion lines when provider is online", () => {
-    const settings = { ...defaultSettings, initiativeLevel: "active" as const };
-    expect(prefersLocalCompanionLines(settings, 60_000)).toBe(false);
-    expect(
-      prefersLocalCompanionLines(
-        { ...defaultSettings, initiativeLevel: "normal", proactiveIntervalMinutes: 1 },
-        proactiveIntervalMs({
-          ...defaultSettings,
-          initiativeLevel: "normal",
-          proactiveIntervalMinutes: 1,
-        }),
-      ),
-    ).toBe(false);
-    expect(
-      prefersLocalCompanionLines(settings, 60_000, { practicalContext: true }),
-    ).toBe(false);
-  });
-
-  it("falls back to local lines only when LLM is offline", () => {
-    expect(
-      prefersLocalCompanionLines(defaultSettings, 20 * 60_000, {
-        llmOffline: true,
-      }),
-    ).toBe(true);
-    expect(prefersLocalCompanionLines(defaultSettings, 20 * 60_000)).toBe(
-      false,
-    );
   });
 
   it("allows immersed companion check-in via companion silence gate", () => {

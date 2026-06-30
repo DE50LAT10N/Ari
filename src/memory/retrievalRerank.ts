@@ -190,6 +190,3 @@ export async function applyRetrievalRerank({
     episodes: episodesResult.items,
   };
 }
-
-// Backward-compatible named exports
-export { rerankRagMatches, rerankMemoryFacts, rerankEpisodes };

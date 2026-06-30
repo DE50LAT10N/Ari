@@ -31,6 +31,8 @@ describe("capabilities", () => {
     expect(text).toContain("=== Chat & personality ===");
     expect(text).toContain("=== Memory (your config) ===");
     expect(text).toContain("=== Initiative & companion ===");
+    expect(text).toContain("smalltalk ~10 min");
+    expect(text).toContain("advice ~20 min");
     expect(text).toContain("docs/COMMANDS.md");
   });
 

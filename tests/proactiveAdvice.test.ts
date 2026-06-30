@@ -85,7 +85,7 @@ describe("coding session and proactive advice", () => {
     ).toBe(true);
   });
 
-  it("classifies advice when only social topics but current coding file is visible", () => {
+  it("classifies smalltalk when only social topics even with coding file visible", () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "ChatPanel.tsx - Ari - Cursor",
@@ -98,7 +98,7 @@ describe("coding session and proactive advice", () => {
         bundle,
         conversationTopics: ["как прошло «Deploy»"],
       }),
-    ).toBe("advice");
+    ).toBe("smalltalk");
   });
 
   it("builds live coding topic from current editor file", () => {

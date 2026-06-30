@@ -3,6 +3,8 @@ import type { AppSettings } from "../settings/appSettings";
 import { checkOllamaStatus } from "../llm/localLlmClient";
 import { checkGigaChatStatus, clearGigaChatTokenCache } from "../llm/gigaChatClient";
 import { saveGigaChatAuthKey } from "../platform/gigaChatCredentials";
+import { GigaChatModelPicker } from "./GigaChatModelPicker";
+import { GIGA_CHAT_CHAT_MODELS, syncGigaChatModelSelection } from "../llm/gigaChatModels";
 
 type ProviderCheckState = "idle" | "checking" | "ready" | "offline";
 
@@ -92,23 +94,35 @@ export function OnboardingPanel({
           </select>
         </label>
         {settings.llmProvider === "gigachat" && (
-          <label className="settings-field">
-            <span>Ключ авторизации GigaChat</span>
-            <input
-              type="password"
-              value={gigaChatKey}
-              placeholder="Base64 Authorization key"
-              autoComplete="off"
-              onChange={(event) => {
-                setCheckState("idle");
-                setCheckMessage("");
-                setGigaChatKey(event.currentTarget.value);
-              }}
-            />
-            <small>
-              Ключ из проекта GigaChat API. Сохраняется локально (DPAPI) при проверке.
-            </small>
-          </label>
+          <>
+            <label className="settings-field">
+              <span>Ключ авторизации GigaChat</span>
+              <input
+                type="password"
+                value={gigaChatKey}
+                placeholder="Base64 Authorization key"
+                autoComplete="off"
+                onChange={(event) => {
+                  setCheckState("idle");
+                  setCheckMessage("");
+                  setGigaChatKey(event.currentTarget.value);
+                }}
+              />
+              <small>
+                Ключ из проекта GigaChat API. Сохраняется локально (DPAPI) при проверке.
+              </small>
+            </label>
+            <label className="settings-field">
+              <span>Модель чата</span>
+              <GigaChatModelPicker
+                value={settings.gigaChatModel}
+                options={GIGA_CHAT_CHAT_MODELS}
+                onChange={(gigaChatModel) =>
+                  onChange(syncGigaChatModelSelection(settings, gigaChatModel))
+                }
+              />
+            </label>
+          </>
         )}
         <label className="settings-field">
           <span>Как тебя называть</span>

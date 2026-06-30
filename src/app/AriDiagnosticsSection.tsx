@@ -25,19 +25,22 @@ import {
 } from "../character/advisorEngine";
 import { formatActivitySignalsForDiagnostics } from "../memory/activitySignals";
 import {
-  getLastProactiveAttemptAt,
+  getLastAdviceAttemptAt,
   getLastProactiveMessageAt,
+  getLastSmalltalkAttemptAt,
 } from "../character/proactiveState";
 import { getLastAdviceUrgency } from "../character/adviceUrgency";
 import { getLastProactiveLlmBundle } from "../character/proactiveLlmEngine";
 import {
   dailyInitiativeCap,
-  proactiveIntervalMs,
+  proactiveAdviceIntervalMs,
+  proactiveSmalltalkIntervalMs,
 } from "../character/initiativeConfig";
 import { getDailyInitiativeCount } from "../character/initiativeScoring";
 import { getMemoryHealthSnapshot } from "../memory/memoryTelemetry";
 import { isLlmProviderOnline } from "../llm/providerOnline";
 import { getGigaChatAuthKeyPresent } from "../llm/gigaChatStatus";
+import { resolveModel } from "../llm/modelRouter";
 
 type DeskSnapshot = {
   focusSession: FocusSession | null;
@@ -54,16 +57,21 @@ type ProactiveDebug = {
   adviceSlotActive: boolean;
   initiativesToday: number;
   dailyCap: number;
-  nextCheckInSec: number;
+  nextAdviceSec: number;
+  nextSmalltalkSec: number;
   lastSuppressions: string[];
   adviceUrgencyLevel: string;
   adviceUrgencyScore: number;
   adviceUrgencyReasons: string[];
   adviceEffectiveIntervalMin: number;
+  smalltalkEffectiveIntervalMin: number;
   lastBundleScore: number | null;
   lastBundleShouldSend: boolean | null;
   lastInitiativeMove: string | null;
   lastPrimaryChain: string | null;
+  lastBundleSource: string | null;
+  adviceToday: number;
+  smalltalkToday: number;
 };
 
 function buildSnapshot(): DeskSnapshot {
@@ -79,10 +87,19 @@ function buildSnapshot(): DeskSnapshot {
 
 function buildProactiveDebug(): ProactiveDebug {
   const settings = loadSettings();
-  const intervalMs = proactiveIntervalMs(settings);
-  const lastAttempt = getLastProactiveAttemptAt();
-  const elapsed = Date.now() - lastAttempt;
-  const nextCheckInSec = Math.max(0, Math.ceil((intervalMs - elapsed) / 1000));
+  const adviceIntervalMs = proactiveAdviceIntervalMs(settings);
+  const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
+  const now = Date.now();
+  const nextAdviceSec = Math.max(
+    0,
+    Math.ceil((adviceIntervalMs - (now - getLastAdviceAttemptAt())) / 1000),
+  );
+  const nextSmalltalkSec = Math.max(
+    0,
+    Math.ceil(
+      (smalltalkIntervalMs - (now - getLastSmalltalkAttemptAt())) / 1000,
+    ),
+  );
   const health = getMemoryHealthSnapshot();
   const isGigaChat = settings.llmProvider === "gigachat";
   const providerOnline = isLlmProviderOnline(settings, null);
@@ -100,7 +117,8 @@ function buildProactiveDebug(): ProactiveDebug {
       urgency.level !== "none",
     initiativesToday: getDailyInitiativeCount(),
     dailyCap: dailyInitiativeCap(settings),
-    nextCheckInSec,
+    nextAdviceSec,
+    nextSmalltalkSec,
     lastSuppressions: health.lastSuppressions
       .slice(-3)
       .map((entry) => entry.reason),
@@ -109,12 +127,16 @@ function buildProactiveDebug(): ProactiveDebug {
     adviceUrgencyReasons: urgency?.reasons ?? [],
     adviceEffectiveIntervalMin: urgency
       ? Math.ceil(urgency.effectiveIntervalMs / 60_000)
-      : Math.ceil(intervalMs / 60_000),
+      : Math.ceil(adviceIntervalMs / 60_000),
+    smalltalkEffectiveIntervalMin: Math.ceil(smalltalkIntervalMs / 60_000),
     lastBundleScore: lastBundle?.usefulnessScore ?? null,
     lastBundleShouldSend: lastBundle ? lastBundle.shouldSend : null,
     lastInitiativeMove: lastBundle?.initiativeMove ?? null,
-    lastPrimaryChain:
+  lastPrimaryChain:
       lastBundle?.primaryChainSummary ?? lastBundle?.narrativeBrief ?? null,
+    lastBundleSource: lastBundle?.source ?? null,
+    adviceToday: health.proactiveTone.adviceToday,
+    smalltalkToday: health.proactiveTone.smalltalkToday,
   };
 }
 
@@ -251,6 +273,26 @@ export function AriDiagnosticsSection() {
               </dd>
             </div>
             <div>
+              <dt>Модель чата</dt>
+              <dd>
+                {settings.llmProvider === "gigachat"
+                  ? settings.gigaChatModel
+                  : settings.model}
+              </dd>
+            </div>
+            {settings.llmProvider === "gigachat" && (
+              <>
+                <div>
+                  <dt>JSON / инициатива (факт.)</dt>
+                  <dd>{resolveModel("json", settings)}</dd>
+                </div>
+                <div>
+                  <dt>Vision (факт.)</dt>
+                  <dd>{resolveModel("vision", settings)}</dd>
+                </div>
+              </>
+            )}
+            <div>
               <dt>LLM ({proactiveDebug.providerLabel})</dt>
               <dd>
                 {settings.llmProvider === "gigachat"
@@ -263,12 +305,22 @@ export function AriDiagnosticsSection() {
               </dd>
             </div>
             <div>
-              <dt>След. проверка</dt>
+              <dt>След. смолток</dt>
               <dd>
                 {settings.proactiveEnabled
-                  ? proactiveDebug.nextCheckInSec > 0
-                    ? `~${proactiveDebug.nextCheckInSec} с`
+                  ? proactiveDebug.nextSmalltalkSec > 0
+                    ? `~${proactiveDebug.nextSmalltalkSec} с`
                     : "готова"
+                  : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt>След. совет</dt>
+              <dd>
+                {settings.proactiveEnabled
+                  ? proactiveDebug.nextAdviceSec > 0
+                    ? `~${proactiveDebug.nextAdviceSec} с`
+                    : "готов"
                   : "—"}
               </dd>
             </div>
@@ -280,6 +332,10 @@ export function AriDiagnosticsSection() {
                 {proactiveDebug.adviceEffectiveIntervalMin} мин
               </dd>
             </div>
+            <div>
+              <dt>Интервал смолтока</dt>
+              <dd>{proactiveDebug.smalltalkEffectiveIntervalMin} мин</dd>
+            </div>
             {proactiveDebug.adviceUrgencyReasons.length > 0 && (
               <div>
                 <dt>Сигналы совета</dt>
@@ -287,12 +343,18 @@ export function AriDiagnosticsSection() {
               </div>
             )}
             <div>
+              <dt>Advice / Smalltalk сегодня</dt>
+              <dd>
+                {proactiveDebug.adviceToday} / {proactiveDebug.smalltalkToday}
+              </dd>
+            </div>
+            <div>
               <dt>Последний bundle</dt>
               <dd>
                 {proactiveDebug.lastBundleScore !== null
                   ? `score ${proactiveDebug.lastBundleScore.toFixed(2)} · shouldSend ${
                       proactiveDebug.lastBundleShouldSend ? "да" : "нет"
-                    }`
+                    } · source ${proactiveDebug.lastBundleSource ?? "—"}`
                   : "ещё не было"}
               </dd>
             </div>
