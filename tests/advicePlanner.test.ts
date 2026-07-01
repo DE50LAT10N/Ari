@@ -127,6 +127,28 @@ describe("advicePlanner", () => {
     expect(plan.selected?.actionText).toMatch(/Tauri active window/i);
   });
 
+  it("selects docs_to_code_bridge when browser search relates to current file", () => {
+    recordQueryTopic({
+      topic: "ChatPanel proactive advice gate",
+      source: "browser",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 8,
+    });
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "advice",
+      sessionMinutes: 8,
+    });
+
+    const plan = planAdvice({ bundle, facts });
+
+    expect(plan.selected?.kind).toBe("docs_to_code_bridge");
+    expect(plan.selected?.actionText).toMatch(/ChatPanel|поиск/i);
+  });
+
   it("downranks a candidate kind that recently interrupted the user", () => {
     recordClipboardSignal({
       clipKind: "stacktrace",

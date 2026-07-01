@@ -113,8 +113,11 @@ import { PROXIMITY_COOLDOWN_MS, ARI_USER_TYPING_EVENT } from "./avatarMotion";
 import { checkForAppUpdates } from "../platform/appUpdater";
 import {
   generateAmbientThought,
+  pickLocalAmbientThought,
   shouldAttemptAmbientThought,
+  shouldAttemptLocalAmbientThought,
 } from "../character/ambientThoughts";
+import { applyMoodTriggerToMood } from "../character/moodTriggers";
 
 const INITIATIVE_EMOTION_COOLDOWN_MS = 15_000;
 const MODEL_EMOTION_COOLDOWN_MS = 4_000;
@@ -189,6 +192,7 @@ export function App() {
   const ambientTimerRef = useRef<number | null>(null);
   const ambientThoughtBusyRef = useRef(false);
   const lastAmbientThoughtAtRef = useRef(0);
+  const lastLocalAmbientThoughtAtRef = useRef(0);
   const microReactionTimerRef = useRef<number | null>(null);
   const emotionSettleTimerRef = useRef<number | null>(null);
   const emotionTransitionTimerRef = useRef<number | null>(null);
@@ -1057,6 +1061,54 @@ export function App() {
           const context = presenceContextRef.current;
           const now = Date.now();
           const companionSilenceMs = getCompanionSilenceMs();
+          const focusActive = isFocusSessionActive();
+          const canShowLocalThought =
+            context &&
+            shouldAttemptLocalAmbientThought({
+              avatarLivelinessEnabled: context.avatarLivelinessEnabled,
+              chatOpen: context.chatOpen,
+              characterState: context.characterState,
+              quietModeActive: context.quietModeActive,
+              hasVisibleBubble: Boolean(ambientBubbleTextRef.current),
+              elapsedSinceLastMs: now - lastAmbientThoughtAtRef.current,
+              elapsedSinceLastLocalMs: now - lastLocalAmbientThoughtAtRef.current,
+              userIdleSeconds: context.userIdleSeconds,
+              companionSilenceMs,
+              attention: context.attention,
+              focusActive,
+            });
+          if (canShowLocalThought && context) {
+            const thought = pickLocalAmbientThought({
+              scene: context.scene,
+              attention: context.attention,
+              mood: context.mood,
+              activeProcess: context.activeWindow?.processName,
+              activeTitle: context.activeWindow?.title,
+              userIdleSeconds: context.userIdleSeconds,
+              companionSilenceMs,
+              pomodoroPhase: pomodoro.phase,
+              focusActive,
+              characterState: context.characterState,
+            });
+            if (thought && !cancelled && !chatOpenRef.current) {
+              lastLocalAmbientThoughtAtRef.current = Date.now();
+              setAmbientBubbleSession((current) => current + 1);
+              ambientBubbleTextRef.current = thought.text;
+              setAmbientBubble(thought.text);
+              setAmbientEmotion(thought.emotion);
+              showMicroReactionRef.current(
+                {
+                  id: Date.now(),
+                  type: "thinking",
+                  emotion: thought.emotion,
+                  thought: thought.text,
+                  durationMs: 3600,
+                },
+                "ambient",
+              );
+              return;
+            }
+          }
           const providerOnline = isLlmProviderOnline(settings, ollamaOnline);
           const canThink =
             context &&
@@ -1224,6 +1276,9 @@ export function App() {
         onProactiveEmitted={handleProactiveEmitted}
         onMoodInteraction={(interaction) =>
           setMood((current) => applyInteractionToMood(current, interaction))
+        }
+        onMoodTrigger={(trigger) =>
+          setMood((current) => applyMoodTriggerToMood(current, trigger))
         }
       />
       <NotificationToast />

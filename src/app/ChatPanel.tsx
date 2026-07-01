@@ -281,6 +281,12 @@ import {
   recordWorkingEvent,
   summarizeWorkingMemory,
 } from "../memory/workingMemory";
+import {
+  describeConversationMemory,
+  recordConversationMemoryExchange,
+  shouldPostprocessConversationMemory,
+  shouldRetrieveLongTermMemory,
+} from "../memory/conversationMemory";
 import { appendTimelineEvent } from "../memory/activityTimeline";
 import { isLlmProviderOnline, isVisionProviderOnline } from "../llm/providerOnline";
 import { readClipboardText, classifyClipboardText } from "../platform/clipboard";
@@ -365,6 +371,13 @@ import {
   parsePreferenceRule,
 } from "../memory/userPreferenceRules";
 import { getBondLevel } from "../character/relationship";
+import {
+  classifyMoodTrigger,
+  describeMoodTrigger,
+  moodTriggerEmotionHint,
+  previewMoodAfterTrigger,
+  type MoodTrigger,
+} from "../character/moodTriggers";
 type ChatPanelProps = {
   isOpen: boolean;
   settings: AppSettings;
@@ -398,6 +411,7 @@ type ChatPanelProps = {
       | "ignored_initiative"
       | "long_silence",
   ) => void;
+  onMoodTrigger?: (trigger: MoodTrigger) => void;
 };
 
 const STARTING_LINE =
@@ -636,6 +650,7 @@ export function ChatPanel({
   onAmbientBubble,
   onProactiveEmitted,
   onMoodInteraction,
+  onMoodTrigger,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<ChatMessage[]>(loadChatHistory);
@@ -1516,6 +1531,21 @@ export function ChatPanel({
       const lastUserMessage = [...baseHistory]
         .reverse()
         .find(({ role }) => role === "user")?.content ?? "";
+      const moodTrigger =
+        !options.proactive && !options.screenObservation && lastUserMessage
+          ? classifyMoodTrigger(lastUserMessage)
+          : classifyMoodTrigger("");
+      const moodTriggerDescription = describeMoodTrigger(moodTrigger) ?? undefined;
+      const moodForReply = moodTriggerDescription
+        ? previewMoodAfterTrigger(mood, moodTrigger)
+        : mood;
+      if (moodTriggerDescription) {
+        onMoodTrigger?.(moodTrigger);
+        const hintedEmotion = moodTriggerEmotionHint(moodTrigger);
+        if (hintedEmotion) {
+          applyReplyEmotion(hintedEmotion);
+        }
+      }
       const proactiveQuery = [
         options.eventDescription,
         options.initiativeKind,
@@ -1527,6 +1557,12 @@ export function ChatPanel({
         .filter(Boolean)
         .join(" ");
       const memoryQuery = options.proactive ? proactiveQuery : lastUserMessage;
+      const retrieveUserMemory =
+        settings.userMemoryEnabled &&
+        shouldRetrieveLongTermMemory(memoryQuery, {
+          proactive: Boolean(options.proactive),
+          ragEnabled: settings.ragEnabled,
+        });
       let rawMemory: Awaited<ReturnType<typeof searchRag>> = [];
       let rawUserMemory: Awaited<
         ReturnType<typeof selectUserMemoryContext>
@@ -1535,7 +1571,7 @@ export function ChatPanel({
         ReturnType<typeof selectEpisodicContext>
       > = { episodes: [], openLoops: [] };
       if (
-        (settings.ragEnabled || settings.userMemoryEnabled) &&
+        (settings.ragEnabled || retrieveUserMemory) &&
         memoryQuery.trim() &&
         !options.proactive
       ) {
@@ -1566,13 +1602,18 @@ export function ChatPanel({
         contextResults = await withTimeout(
           Promise.allSettled([
             searchRag(memoryQuery, settings),
-            settings.userMemoryEnabled
-              ? selectUserMemoryContext(memoryQuery, 18, 6, settings)
+            retrieveUserMemory
+              ? selectUserMemoryContext(
+                  memoryQuery,
+                  options.proactive ? 6 : 8,
+                  options.proactive ? 2 : 3,
+                  settings,
+                )
               : Promise.resolve({
                   facts: [],
                   summaries: [] as UserMemorySummary[],
                 }),
-            settings.userMemoryEnabled
+            retrieveUserMemory
               ? selectEpisodicContext(memoryQuery, settings)
               : Promise.resolve({ episodes: [], openLoops: [] }),
           ]),
@@ -1747,7 +1788,7 @@ export function ChatPanel({
         useIntentClassifier: settings.intentClassifierEnabled,
       });
       blipOptions.technical = responseMode === "technical_help";
-      const relationshipToneKey = deriveRelationshipTone(relationship, mood);
+      const relationshipToneKey = deriveRelationshipTone(relationship, moodForReply);
       const relationshipTone = describeRelationshipTone(relationshipToneKey);
       const recentPhrases = buildAvoidPhrases();
       const recentAssistantReplies = baseHistory
@@ -1770,7 +1811,7 @@ export function ChatPanel({
         proactive: Boolean(options.proactive),
         proactiveReplyTone,
         responseMode,
-        moodArchetype: deriveMoodArchetype(mood),
+        moodArchetype: deriveMoodArchetype(moodForReply),
         hasDebugSignals:
           Boolean(options.proactive) &&
           proactiveReplyTone === "advice" &&
@@ -1789,7 +1830,7 @@ export function ChatPanel({
         proactive: Boolean(options.proactive),
         userAskedQuestion,
       };
-      const emotionGuidance = describeEmotionAntiRepeat(mood);
+      const emotionGuidance = describeEmotionAntiRepeat(moodForReply);
       let runtimeContext: RuntimeContext = {
         memory,
         activeWindow,
@@ -1812,7 +1853,7 @@ export function ChatPanel({
         initiativeAnchor: options.initiativeAnchor,
         softInitiativeAnchor: options.softInitiativeAnchor,
         bannedProactiveTopics: options.bannedProactiveTopics,
-        mood: describeMoodForPrompt(mood),
+        mood: describeMoodForPrompt(moodForReply),
         relationship: `${describeRelationship(
           relationship,
         )}. ${describeBondForPrompt(relationship, settings.romanceMode)}; тон: ${relationshipTone}`,
@@ -1835,6 +1876,8 @@ export function ChatPanel({
           buildUserBehaviorBlock(settings, describePreferenceRules()) ||
           undefined,
         workingMemory: describeWorkingMemory() || undefined,
+        conversationMemory: describeConversationMemory() || undefined,
+        moodTrigger: moodTriggerDescription,
         liveToolContext,
         projectPinnedContext: describePinnedProjectContext() || undefined,
         goalLedger: formatGoalLedgerForPrompt() || undefined,
@@ -2092,7 +2135,7 @@ export function ChatPanel({
       setStreamingContent(null);
       setStreamingAssistantIndex(null);
       finalReply = processed.content;
-      replyEmotion = biasEmotionByMood(processed.emotion, mood);
+      replyEmotion = biasEmotionByMood(processed.emotion, moodForReply);
       applyReplyEmotion(replyEmotion, true);
       if (options.proactive && settings.proactiveOpenChat && !isOpen) {
         onProactiveMessage();
@@ -2231,13 +2274,19 @@ export function ChatPanel({
             replyEmotion,
           ),
         );
+        recordConversationMemoryExchange({
+          userMessage: lastUserMessage,
+          assistantReply: finalReply,
+          emotion: replyEmotion,
+        });
       }
 
       if (
         settings.userMemoryEnabled &&
         !options.proactive &&
         !options.screenObservation &&
-        lastUserMessage
+        lastUserMessage &&
+        shouldPostprocessConversationMemory(lastUserMessage, finalReply)
       ) {
         void loadOpenLoops()
           .then((loops) =>

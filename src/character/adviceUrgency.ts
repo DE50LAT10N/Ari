@@ -24,6 +24,7 @@ import {
   selectAdvisorAngle,
   type AdvisorAngle,
 } from "./advisorEngine";
+import { deriveScreenState } from "./screenState";
 
 const CLIPBOARD_FRESH_MS = 15 * 60_000;
 const WM_RECENT_MS = 20 * 60_000;
@@ -148,6 +149,22 @@ export function scoreAdviceUrgency(
     }
   }
 
+  const screenState = deriveScreenState(bundle);
+  if (screenState.visibleProblem && screenState.confidence >= 0.55) {
+    score += 2;
+    reasons.push(`видна проблема на экране: ${screenState.visibleProblem.slice(0, 60)}`);
+    subjectKey = subjectKey ?? screenState.visibleProblem.slice(0, 80);
+  }
+
+  const relatedQuery = bundle.advisor.topQueryThemes.find((theme) =>
+    themeMatchesContext(theme, bundle),
+  );
+  if (bundle.editorFile && relatedQuery) {
+    score += 1;
+    reasons.push(`поиск связан с ${bundle.editorFile}`);
+    subjectKey = subjectKey ?? `${bundle.editorFile}:${relatedQuery}`.slice(0, 80);
+  }
+
   if (sessionMinutes >= 3 && bundle.editorFile && score >= 2) {
     score += 1;
     reasons.push(`работа в ${bundle.editorFile}`);
@@ -168,6 +185,43 @@ export function scoreAdviceUrgency(
   }
 
   const workContext = isProactiveWorkContext({ bundle, sessionMinutes });
+  const hasWorkEvidence = Boolean(
+    bundle.editorFile ||
+      bundle.visionSummary ||
+      bundle.clipboardSnippets.length ||
+      bundle.taskActivityLink ||
+      bundle.nextTaskTitle ||
+      bundle.focusStep ||
+      bundle.focusBlockers.length ||
+      bundle.advisor.topQueryThemes.length ||
+      screenState.confidence >= 0.45,
+  );
+  if (
+    settings.initiativeLevel === "active" &&
+    workContext &&
+    hasWorkEvidence &&
+    sessionMinutes >= 5
+  ) {
+    score += 3;
+    reasons.push(
+      bundle.editorFile
+        ? `активный режим: рабочий контекст ${bundle.editorFile}`
+        : "активный режим: есть рабочий контекст",
+    );
+    subjectKey =
+      subjectKey ??
+      bundle.editorFile ??
+      screenState.visibleEntities[0] ??
+      bundle.window?.title?.slice(0, 80);
+  } else if (workContext && hasWorkEvidence && sessionMinutes >= 12) {
+    score += 1;
+    reasons.push("долгая работа с видимым контекстом");
+    subjectKey =
+      subjectKey ??
+      bundle.editorFile ??
+      screenState.visibleEntities[0] ??
+      bundle.window?.title?.slice(0, 80);
+  }
   let level: AdviceUrgencyLevel = "none";
   let effectiveIntervalMs = userIntervalMs;
 

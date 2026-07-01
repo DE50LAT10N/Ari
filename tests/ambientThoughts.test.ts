@@ -3,9 +3,12 @@ import {
   ambientThoughtCooldownMs,
   generateAmbientThought,
   getRecentAmbientThoughts,
+  localAmbientThoughtCooldownMs,
+  pickLocalAmbientThought,
   rememberAmbientThought,
   resetAmbientThoughtsForTests,
   shouldAttemptAmbientThought,
+  shouldAttemptLocalAmbientThought,
   validateAmbientThought,
   validateAmbientThoughtDetailed,
 } from "../src/character/ambientThoughts";
@@ -125,6 +128,33 @@ describe("ambientThoughts", () => {
         attention: "daydreaming",
       }),
     ).toBe(true);
+  });
+
+  it("allows local thoughts more often during focus without LLM", () => {
+    expect(
+      shouldAttemptLocalAmbientThought({
+        avatarLivelinessEnabled: true,
+        chatOpen: false,
+        characterState: "thinking",
+        quietModeActive: false,
+        hasVisibleBubble: false,
+        elapsedSinceLastMs: 0,
+        elapsedSinceLastLocalMs: localAmbientThoughtCooldownMs({
+          attention: "observing",
+          focusActive: true,
+          companionSilenceMs: 90_000,
+        }),
+        userIdleSeconds: 12,
+        companionSilenceMs: 90_000,
+        attention: "observing",
+        focusActive: true,
+      }),
+    ).toBe(true);
+
+    const thought = pickLocalAmbientThought(baseInput);
+    expect(thought).not.toBeNull();
+    expect(getRecentAmbientThoughts()).toContain(thought!.text);
+    expect(completeLlmJson).not.toHaveBeenCalled();
   });
 
   it("blocks ambient thoughts while chat is open", () => {

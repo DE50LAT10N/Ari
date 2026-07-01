@@ -27,6 +27,11 @@ import {
   type ProactiveTopicLink,
 } from "./proactiveTopicLinker";
 import type { ProactiveReplyTone } from "./proactiveTone";
+import {
+  buildAdvisorHypotheses,
+  describeAdvisorHypotheses,
+} from "./advisorHypotheses";
+import { deriveScreenState, describeScreenState } from "./screenState";
 
 export type { ProactiveInitiativeMove, ProactiveMoveHint, ProactiveTopicLink, ProactiveTopicChain };
 
@@ -39,7 +44,9 @@ export type ProactiveSignalFactKind =
   | "wm"
   | "urgency"
   | "goal"
-  | "session";
+  | "session"
+  | "screen"
+  | "hypothesis";
 
 export type ProactiveSignalFact = {
   id: string;
@@ -273,6 +280,27 @@ export function collectProactiveSignalFacts(
       `wm:${entry.id}`,
       entry.kind,
       [entry.topic, entry.app, entry.title].filter(Boolean).join(" — "),
+    );
+  }
+
+  const screenState = deriveScreenState(bundle);
+  if (screenState.confidence >= 0.45) {
+    push(
+      "screen",
+      "screen:state",
+      "Состояние экрана",
+      describeScreenState(screenState),
+    );
+  }
+
+  const hypotheses = buildAdvisorHypotheses(bundle, facts);
+  const hypothesisSummary = describeAdvisorHypotheses(hypotheses);
+  if (hypothesisSummary) {
+    push(
+      "hypothesis",
+      `hypothesis:${hypotheses[0]?.kind ?? "unknown"}`,
+      "Вывод советчика",
+      hypothesisSummary,
     );
   }
 

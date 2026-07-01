@@ -115,6 +115,8 @@ export type RuntimeContext = {
   userName?: string;
   behaviorSettings?: string;
   workingMemory?: string;
+  conversationMemory?: string;
+  moodTrigger?: string;
   liveToolContext?: string;
   ariTone?: string;
   tonePreferences?: string;
@@ -215,6 +217,26 @@ function createSystemPrompt(context?: RuntimeContext): string {
         context.workingMemory,
         "Используй это как личное наблюдение рядом с человеком, а не как отчёт или слежку.",
         "Можешь мягко дать совет или проявить интерес, если это уместно и не навязчиво.",
+      ].join("\n"),
+    );
+  }
+
+  if (context?.conversationMemory) {
+    runtimeSections.push(
+      [
+        "Recent conversational state, lightweight and local:",
+        context.conversationMemory,
+        "Use this as conversational continuity: tone, recent topics, friction, warmth, and threads. Do not claim it as durable memory unless it is also present in the memory blocks.",
+      ].join("\n"),
+    );
+  }
+
+  if (context?.moodTrigger) {
+    runtimeSections.push(
+      [
+        "Fresh emotional cue from the user's latest message:",
+        context.moodTrigger,
+        "Let it affect Ari's wording and emotion naturally in this reply, without explaining the internal mood system.",
       ].join("\n"),
     );
   }

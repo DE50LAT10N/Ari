@@ -8,9 +8,15 @@ import type { AdviceOutcomeRecord } from "./adviceOutcome";
 import type { AdviceUrgency } from "./adviceUrgency";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import type { ProactiveSignalFact } from "./proactiveLlmEngine";
+import { buildAdvisorHypotheses } from "./advisorHypotheses";
 
 export type AdviceCandidateKind =
   | "debug_next_step"
+  | "terminal_error_triage"
+  | "test_failure_triage"
+  | "docs_to_code_bridge"
+  | "stale_context_warning"
+  | "uncertainty_probe"
   | "clarifying_probe"
   | "task_bridge"
   | "scope_cut"
@@ -271,6 +277,108 @@ export function planAdvice(input: {
   const task = facts.find((fact) => fact.id.startsWith("task:link")) ??
     factByKind(facts, "task");
   const query = factsByKind(facts, "query")[0];
+  const screen = factByKind(facts, "screen");
+  const hypotheses = buildAdvisorHypotheses(bundle, facts);
+  const topHypothesis = hypotheses[0];
+  const hasStackClip = Boolean(
+    clip?.kind === "clipboard" &&
+      /error|exception|traceback|panic|failed|ошиб|stack|assert/i.test(clip.detail),
+  );
+
+  for (const hypothesis of hypotheses) {
+    if (
+      hypothesis.kind === "test_failure" &&
+      !hasStackClip &&
+      hypothesis.evidenceFactIds.length
+    ) {
+      candidates.push(
+        makeCandidate(
+          {
+            id: "test-failure-triage",
+            kind: "test_failure_triage",
+            evidenceIds: hypothesis.evidenceFactIds,
+            actionText: file
+              ? `Опираясь на видимое падение теста, предложи проверить первый expected/received и ближайшее изменение в ${file.detail}, без общего чеклиста.`
+              : "Опираясь на видимое падение теста, предложи начать с первого expected/received и одного минимального воспроизведения.",
+            expectedUtility: 0.88,
+            interruptionCost: 0.22,
+            confidence: hypothesis.confidence,
+            reason: hypothesis.claim,
+          },
+          history,
+          outcomes,
+        ),
+      );
+    }
+
+    if (
+      hypothesis.kind === "terminal_error" &&
+      !hasStackClip &&
+      hypothesis.evidenceFactIds.length
+    ) {
+      candidates.push(
+        makeCandidate(
+          {
+            id: "terminal-error-triage",
+            kind: "terminal_error_triage",
+            evidenceIds: hypothesis.evidenceFactIds,
+            actionText: file
+              ? `Свяжи видимую ошибку с ${file.detail}: предложи проверить ближайший файл/строку из сообщения и одно последнее изменение.`
+              : "Свяжи видимую ошибку с текущим окном: предложи выделить первый файл/строку из сообщения и проверить одну гипотезу.",
+            expectedUtility: 0.84,
+            interruptionCost: 0.24,
+            confidence: hypothesis.confidence,
+            reason: hypothesis.claim,
+          },
+          history,
+          outcomes,
+        ),
+      );
+    }
+
+    if (
+      hypothesis.kind === "docs_to_code" &&
+      query &&
+      file &&
+      bundle.taskActivityLink?.confidence !== "strong"
+    ) {
+      candidates.push(
+        makeCandidate(
+          {
+            id: "docs-to-code-bridge",
+            kind: "docs_to_code_bridge",
+            evidenceIds: hypothesis.evidenceFactIds,
+            actionText: `Свяжи поиск «${query.detail.slice(0, 80)}» с ${file.detail}: предложи одну проверку в коде или один вопрос, который подтвердит, что доки применимы здесь.`,
+            expectedUtility: 0.74,
+            interruptionCost: hypothesis.suggestedMove === "ask" ? 0.3 : 0.25,
+            confidence: hypothesis.confidence,
+            reason: hypothesis.claim,
+          },
+          history,
+          outcomes,
+        ),
+      );
+    }
+
+    if (hypothesis.kind === "stale_context") {
+      candidates.push(
+        makeCandidate(
+          {
+            id: "stale-context-warning",
+            kind: "stale_context_warning",
+            evidenceIds: hypothesis.evidenceFactIds,
+            actionText: `Коротко уточни, это всё ещё про задачу «${bundle.taskActivityLink?.taskTitle?.slice(0, 80) ?? task?.detail.slice(0, 80) ?? "текущую задачу"}», прежде чем давать следующий шаг.`,
+            expectedUtility: 0.66,
+            interruptionCost: 0.24,
+            confidence: hypothesis.confidence,
+            reason: hypothesis.claim,
+          },
+          history,
+          outcomes,
+        ),
+      );
+    }
+  }
 
   if (clip) {
     const quote = clip.detail.slice(0, 120);
@@ -457,6 +565,27 @@ export function planAdvice(input: {
           interruptionCost: 0.3,
           confidence: 0.58,
           reason: "сигнал есть, но полезный шаг неочевиден",
+        },
+        history,
+        outcomes,
+      ),
+    );
+  }
+
+  if (!candidates.length && screen && topHypothesis?.kind === "uncertain") {
+    candidates.push(
+      makeCandidate(
+        {
+          id: "uncertainty-probe",
+          kind: "uncertainty_probe",
+          evidenceIds: topHypothesis.evidenceFactIds,
+          actionText: file
+            ? `Спроси одним коротким вопросом, где сейчас узкое место в ${file.detail}, и не выдавай общий совет без подтверждения.`
+            : "Спроси одним коротким вопросом, что именно сейчас мешает, потому что контекст виден, но следующий шаг неочевиден.",
+          expectedUtility: 0.48,
+          interruptionCost: 0.2,
+          confidence: topHypothesis.confidence,
+          reason: topHypothesis.claim,
         },
         history,
         outcomes,
