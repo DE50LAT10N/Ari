@@ -12,8 +12,17 @@ const PROACTIVE_SUBJECT_COOLDOWN_KEY =
   "desktop-character.proactive-subject-cooldown.v1";
 const LAST_ADVICE_SUBJECT_KEY =
   "desktop-character.last-advice-subject.v1";
+const PROACTIVE_FAILURE_BACKOFF_KEY =
+  "desktop-character.proactive-failure-backoff.v1";
 
 export const PROACTIVE_SUBJECT_COOLDOWN_MS = 3 * 60 * 60 * 1000;
+
+const PROACTIVE_FAILURE_BACKOFF_STEPS_MS = [
+  5 * 60 * 1000,
+  15 * 60 * 1000,
+  30 * 60 * 1000,
+  60 * 60 * 1000,
+];
 
 let topicsCache: string[] | null = null;
 let lastMessageCache: number | null = null;
@@ -22,6 +31,12 @@ let lastAdviceAttemptCache: number | null = null;
 let lastSmalltalkAttemptCache: number | null = null;
 
 type SubjectCooldownEntry = { subject: string; at: number };
+export type ProactiveFailureBackoff = {
+  failures: number;
+  until: number;
+  at: number;
+  reason?: string;
+};
 
 export function invalidateProactiveStateCache(): void {
   topicsCache = null;
@@ -44,7 +59,74 @@ export function resetProactiveStateForTests(): void {
   localStorage.removeItem(LAST_PROACTIVE_ATTEMPT_KEY);
   localStorage.removeItem(LAST_ADVICE_ATTEMPT_KEY);
   localStorage.removeItem(LAST_SMALLTALK_ATTEMPT_KEY);
+  localStorage.removeItem(PROACTIVE_FAILURE_BACKOFF_KEY);
   localStorage.removeItem("desktop-character.idle-lines-recent.v1");
+}
+
+function loadProactiveFailureBackoff(): ProactiveFailureBackoff | null {
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(PROACTIVE_FAILURE_BACKOFF_KEY) ?? "null",
+    ) as unknown;
+    if (
+      !stored ||
+      typeof stored !== "object" ||
+      typeof (stored as ProactiveFailureBackoff).failures !== "number" ||
+      typeof (stored as ProactiveFailureBackoff).until !== "number" ||
+      typeof (stored as ProactiveFailureBackoff).at !== "number"
+    ) {
+      return null;
+    }
+    return stored as ProactiveFailureBackoff;
+  } catch {
+    return null;
+  }
+}
+
+export function getProactiveFailureBackoff(
+  now = Date.now(),
+): ProactiveFailureBackoff | null {
+  const backoff = loadProactiveFailureBackoff();
+  if (!backoff) {
+    return null;
+  }
+  if (backoff.until <= now) {
+    localStorage.removeItem(PROACTIVE_FAILURE_BACKOFF_KEY);
+    return null;
+  }
+  return backoff;
+}
+
+export function registerProactiveFailure(
+  reason: string,
+  now = Date.now(),
+): ProactiveFailureBackoff {
+  const previous = loadProactiveFailureBackoff();
+  const failures =
+    previous && now - previous.at < 2 * 60 * 60 * 1000
+      ? Math.min(previous.failures + 1, PROACTIVE_FAILURE_BACKOFF_STEPS_MS.length)
+      : 1;
+  const duration =
+    PROACTIVE_FAILURE_BACKOFF_STEPS_MS[
+      Math.min(failures - 1, PROACTIVE_FAILURE_BACKOFF_STEPS_MS.length - 1)
+    ];
+  const backoff: ProactiveFailureBackoff = {
+    failures,
+    until: now + duration,
+    at: now,
+    reason: reason.trim().slice(0, 160) || "proactive generation failed",
+  };
+  localStorage.setItem(PROACTIVE_FAILURE_BACKOFF_KEY, JSON.stringify(backoff));
+  window.dispatchEvent(new Event("ari-proactive-state-changed"));
+  return backoff;
+}
+
+export function clearProactiveFailureBackoff(): void {
+  if (localStorage.getItem(PROACTIVE_FAILURE_BACKOFF_KEY) === null) {
+    return;
+  }
+  localStorage.removeItem(PROACTIVE_FAILURE_BACKOFF_KEY);
+  window.dispatchEvent(new Event("ari-proactive-state-changed"));
 }
 
 export function normalizeProactiveSubject(text: string): string {

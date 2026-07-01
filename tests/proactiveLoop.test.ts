@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   armProactiveGracePeriod,
+  clearProactiveFailureBackoff,
   ensureProactiveClockStarted,
   getLastAdviceAttemptAt,
   getLastSmalltalkAttemptAt,
+  getProactiveFailureBackoff,
   invalidateProactiveStateCache,
+  registerProactiveFailure,
 } from "../src/character/proactiveState";
 import {
   allowsGenericCompanionInitiative,
@@ -64,6 +67,26 @@ describe("proactive loop helpers", () => {
     expect(Date.now() - getLastSmalltalkAttemptAt()).toBeGreaterThanOrEqual(
       6 * 60_000 - 1_000,
     );
+  });
+
+  it("backs off proactive LLM retries after generation failures", () => {
+    const first = registerProactiveFailure("timeout", 1_000);
+    expect(first.failures).toBe(1);
+    expect(first.until).toBe(301_000);
+    expect(getProactiveFailureBackoff(2_000)?.reason).toBe("timeout");
+
+    const second = registerProactiveFailure("still down", 2_000);
+    expect(second.failures).toBe(2);
+    expect(second.until).toBe(902_000);
+    expect(getProactiveFailureBackoff(903_000)).toBeNull();
+  });
+
+  it("clears proactive failure backoff after recovery", () => {
+    registerProactiveFailure("network", 1_000);
+    expect(getProactiveFailureBackoff(2_000)).not.toBeNull();
+
+    clearProactiveFailureBackoff();
+    expect(getProactiveFailureBackoff(2_000)).toBeNull();
   });
 
   it("scales advice and smalltalk intervals independently", () => {

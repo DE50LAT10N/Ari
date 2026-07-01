@@ -637,7 +637,8 @@ export function App() {
       }
     };
     void poll();
-    const timer = window.setInterval(() => void poll(), 30_000);
+    const statusPollMs = settings.llmProvider === "gigachat" ? 120_000 : 30_000;
+    const timer = window.setInterval(() => void poll(), statusPollMs);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

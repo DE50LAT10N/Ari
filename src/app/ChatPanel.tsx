@@ -35,11 +35,14 @@ import { buildLiveStatusLine } from "../character/liveStatus";
 import {
   ensureProactiveClockStarted,
   armProactiveGracePeriod,
+  clearProactiveFailureBackoff,
+  getProactiveFailureBackoff,
   getLastAdviceAttemptAt,
   getLastSmalltalkAttemptAt,
   markAdviceAttemptAt,
   markSmalltalkAttemptAt,
   registerProactiveReplySubject,
+  registerProactiveFailure,
   setLastProactiveMessageAt,
   rememberAdviceSubject,
 } from "../character/proactiveState";
@@ -99,7 +102,6 @@ import {
   AUTO_VISION_GLANCE_PROMPT,
   type VisionMode,
 } from "../llm/visionModes";
-import { extractEpisodeAndLoops } from "../memory/episodeExtractor";
 import {
   addEpisodes,
   addOpenLoops,
@@ -107,7 +109,7 @@ import {
   resolveOpenLoops,
   selectEpisodicContext,
 } from "../memory/episodicMemory";
-import { extractUserFacts } from "../memory/memoryExtractor";
+import { postprocessConversationMemory } from "../memory/conversationPostprocess";
 import {
   getLastMemoryConflictDescription,
   selectUserMemoryContext,
@@ -582,6 +584,13 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+function describeProactiveFailure(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim().slice(0, 120);
+  }
+  return String(error).slice(0, 120);
+}
+
 function scheduleThrottledStreamUpdate(
   content: string,
   timerRef: { current: number | null },
@@ -638,7 +647,6 @@ export function ChatPanel({
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [liveToolStatus, setLiveToolStatus] = useState<string | null>(null);
-  const [proactiveNotice, setProactiveNotice] = useState<string | null>(null);
   const [visionLoading, setVisionLoading] = useState(false);
   const [visionMenuOpen, setVisionMenuOpen] = useState(false);
   const [quickCommandOpen, setQuickCommandOpen] = useState(false);
@@ -1952,10 +1960,14 @@ export function ChatPanel({
       let reply = await runStream(buildMessages(fittedHistory, runtimeContext));
       let processed = processModelReply(reply, processReplyOptions);
 
-      if (options.proactive && isLlmProviderOnline(settings, ollamaOnline)) {
+      const shouldValidateProactiveWithLlm =
+        options.proactive &&
+        isLlmProviderOnline(settings, ollamaOnline) &&
+        (settings.llmProvider !== "gigachat" || proactiveReplyTone === "advice");
+      if (shouldValidateProactiveWithLlm) {
         const proactiveBundle = getLastProactiveLlmBundle();
         const proactiveFacts = getLastProactiveSignalFacts();
-        const maxProactiveRegens = 2;
+        const maxProactiveRegens = settings.llmProvider === "gigachat" ? 0 : 2;
         for (let attempt = 0; attempt <= maxProactiveRegens; attempt += 1) {
           if (!proactiveBundle || !processed.content.trim()) {
             break;
@@ -2147,6 +2159,7 @@ export function ChatPanel({
       );
       rememberReplyPhrases(finalReply, Boolean(options.proactive));
       if (options.proactive && finalReply.trim()) {
+        clearProactiveFailureBackoff();
         registerProactiveReplySubject(options.initiativeAnchor, finalReply);
       }
       ariLog("reply-meta", "debug", {
@@ -2226,8 +2239,16 @@ export function ChatPanel({
         !options.screenObservation &&
         lastUserMessage
       ) {
-        void extractUserFacts(lastUserMessage, finalReply, settings)
-          .then(async (facts) => {
+        void loadOpenLoops()
+          .then((loops) =>
+            postprocessConversationMemory(
+              lastUserMessage,
+              finalReply,
+              loops,
+              settings,
+            ),
+          )
+          .then(async ({ facts, episode, openLoops, resolvedLoopIds }) => {
             const { autoCommitted, inboxed } = await applyExtractedFacts(
               facts,
               lastUserMessage,
@@ -2255,21 +2276,6 @@ export function ChatPanel({
             ariLog("memory", "debug", {
               lastMemoryConflict: getLastMemoryConflictDescription(),
             });
-          })
-          .catch((memoryError: unknown) => {
-            logError("User memory extraction failed", memoryError);
-          });
-
-        void loadOpenLoops()
-          .then((loops) =>
-            extractEpisodeAndLoops(
-              lastUserMessage,
-              finalReply,
-              loops,
-              settings,
-            ),
-          )
-          .then(async ({ episode, openLoops, resolvedLoopIds }) => {
             if (episode) {
               await addEpisodes([episode]);
             }
@@ -2294,8 +2300,8 @@ export function ChatPanel({
             }
             await resolveOpenLoops(resolvedLoopIds);
           })
-          .catch((episodeError: unknown) => {
-            logError("Episodic memory extraction failed", episodeError);
+          .catch((postprocessError: unknown) => {
+            logError("Conversation memory postprocess failed", postprocessError);
           });
       }
     } catch (requestError) {
@@ -2313,7 +2319,13 @@ export function ChatPanel({
         }
         if (options.proactive) {
           logError("Proactive message generation failed", requestError);
-          setProactiveNotice("Инициатива не сработала — модель не ответила.");
+          const failureReason = describeProactiveFailure(requestError);
+          const backoff = registerProactiveFailure(failureReason);
+          recordInitiativeSuppressed(
+            `proactive generation failed; backoff ${Math.ceil(
+              (backoff.until - Date.now()) / 60_000,
+            )}m: ${failureReason}`,
+          );
           if (wantAmbientReveal) {
             onAmbientBubble?.(null);
           }
@@ -2751,6 +2763,13 @@ export function ChatPanel({
     kind: InitiativeKind,
     options: ProactivePackageOptions = {},
   ): Promise<ProactiveInitiativePackage | null> {
+    const backoff = getProactiveFailureBackoff();
+    if (backoff) {
+      recordInitiativeSuppressed(
+        `proactive backoff ${Math.ceil((backoff.until - Date.now()) / 60_000)}m`,
+      );
+      return null;
+    }
     if (!isOpen && isLlmProviderOnline(settings, ollamaOnline)) {
       onAmbientBubble?.("…");
     }
@@ -2982,8 +3001,12 @@ export function ChatPanel({
       } else {
         markSmalltalkAttemptAt();
       }
-    } else if (pkg.proactiveReplyTone === "advice") {
-      markAdviceAttemptAt();
+    } else {
+      if (pkg.proactiveReplyTone === "advice") {
+        markAdviceAttemptAt();
+      } else {
+        markSmalltalkAttemptAt();
+      }
     }
     return sent;
   }
@@ -3014,6 +3037,13 @@ export function ChatPanel({
     const interruptibility = resolveInterruptibilityTier();
     const initiativeKind =
       forcedKind ?? classifyInitiativeKind(eventDescription);
+    const backoff = getProactiveFailureBackoff();
+    if (backoff) {
+      recordInitiativeSuppressed(
+        `proactive backoff ${Math.ceil((backoff.until - Date.now()) / 60_000)}m`,
+      );
+      return false;
+    }
 
     if (!allowsInitiativeForKind(interruptibility, initiativeKind)) {
       recordInitiativeSuppressed("interruptibility blocks initiative");
@@ -3220,6 +3250,9 @@ export function ChatPanel({
         return;
       }
       if (blocksInitiative(lifecycleRef.current)) {
+        return;
+      }
+      if (getProactiveFailureBackoff()) {
         return;
       }
       const requiredIdleMs = Math.min(2 * 60 * 1000, smalltalkIntervalMs);
@@ -4651,19 +4684,6 @@ export function ChatPanel({
                     Настройки
                   </button>
                 </div>
-              </div>
-            )}
-
-            {proactiveNotice && (
-              <div className="chat-notice" role="status">
-                {proactiveNotice}
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => setProactiveNotice(null)}
-                >
-                  Закрыть
-                </button>
               </div>
             )}
           </div>

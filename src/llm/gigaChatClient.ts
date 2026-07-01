@@ -18,6 +18,10 @@ import {
   resolveSynthesisModel,
   type ModelTask,
 } from "./modelRouter";
+import {
+  enqueueGigaChatRequest,
+  recordGigaChatThrottle,
+} from "./gigaChatRateLimit";
 
 const AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
 const API_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1";
@@ -123,6 +127,7 @@ export async function completeGigaChatJson<T>(
   maxTokens = 256,
   task: ModelTask = "json",
 ): Promise<T> {
+  return enqueueGigaChatRequest(async () => {
   const model =
     task === "initiativeSynthesis" || task === "initiativeGate"
       ? resolveSynthesisModel(settings)
@@ -154,6 +159,7 @@ export async function completeGigaChatJson<T>(
   });
   const raw = await response.text();
   if (!response.ok) {
+    recordGigaChatThrottle(response.status);
     recordGigaChatFailure();
     throw apiError("GigaChat", response.status, raw);
   }
@@ -161,6 +167,7 @@ export async function completeGigaChatJson<T>(
     const body = JSON.parse(raw) as ChatResponse;
     const text = body.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
+      recordGigaChatThrottle();
       recordGigaChatFailure();
       throw new Error("GigaChat вернул пустой структурированный ответ.");
     }
@@ -170,6 +177,7 @@ export async function completeGigaChatJson<T>(
     recordGigaChatFailure();
     throw error;
   }
+  });
 }
 
 export async function streamGigaChat(
@@ -179,6 +187,7 @@ export async function streamGigaChat(
   onEmotion: (emotion: CharacterEmotion) => void,
   signal: AbortSignal,
 ): Promise<string> {
+  return enqueueGigaChatRequest(async () => {
   const response = await fetch(`${API_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: await apiHeaders(settings),
@@ -192,6 +201,7 @@ export async function streamGigaChat(
     signal,
   });
   if (!response.ok) {
+    recordGigaChatThrottle(response.status);
     recordGigaChatFailure();
     throw apiError("GigaChat", response.status, await response.text());
   }
@@ -241,11 +251,13 @@ export async function streamGigaChat(
   }
   const finalContent = stripEmotionMarkup(rawContent).trim();
   if (!finalContent) {
+    recordGigaChatThrottle();
     recordGigaChatFailure();
     throw new Error("GigaChat вернул пустой ответ.");
   }
   recordGigaChatSuccess();
   return finalContent;
+  });
 }
 
 function sanitizeBase64Image(value: string): string {
@@ -302,6 +314,7 @@ export async function analyzeGigaChatImages(
   prompt: string,
   settings: AppSettings,
 ): Promise<string> {
+  return enqueueGigaChatRequest(async () => {
   const fileIds: string[] = [];
   try {
     for (let index = 0; index < captures.length; index += 1) {
@@ -327,22 +340,28 @@ export async function analyzeGigaChatImages(
       }),
     });
     const raw = await response.text();
-    if (!response.ok) throw apiError("GigaChat vision", response.status, raw);
+    if (!response.ok) {
+      recordGigaChatThrottle(response.status);
+      throw apiError("GigaChat vision", response.status, raw);
+    }
     const body = JSON.parse(raw) as ChatResponse;
     const text = body.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
+      recordGigaChatThrottle();
       throw new Error("GigaChat vision вернул пустой ответ.");
     }
     return text.trim();
   } finally {
     await Promise.all(fileIds.map((id) => deleteFile(id, settings)));
   }
+  });
 }
 
 export async function createGigaChatEmbeddings(
   input: string[],
   settings: AppSettings,
 ): Promise<number[][]> {
+  return enqueueGigaChatRequest(async () => {
   const response = await fetch(`${API_BASE_URL}/embeddings`, {
     method: "POST",
     headers: await apiHeaders(settings),
@@ -352,23 +371,29 @@ export async function createGigaChatEmbeddings(
     }),
   });
   const raw = await response.text();
-  if (!response.ok) throw apiError("GigaChat embeddings", response.status, raw);
+  if (!response.ok) {
+    recordGigaChatThrottle(response.status);
+    throw apiError("GigaChat embeddings", response.status, raw);
+  }
   const body = JSON.parse(raw) as {
     data?: Array<{ index?: number; embedding?: number[] }>;
   };
   return (body.data ?? [])
     .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
     .map(({ embedding }) => embedding ?? []);
+  });
 }
 
 export async function checkGigaChatStatus(
   settings: AppSettings,
 ): Promise<{ online: boolean; error?: string }> {
+  return enqueueGigaChatRequest(async () => {
   try {
     const response = await fetch(`${API_BASE_URL}/models`, {
       headers: await apiHeaders(settings),
     });
     if (!response.ok) {
+      recordGigaChatThrottle(response.status);
       recordGigaChatFailure();
       throw apiError("GigaChat", response.status, await response.text());
     }
@@ -381,6 +406,7 @@ export async function checkGigaChatStatus(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+  });
 }
 
 export function clearGigaChatTokenCache(): void {

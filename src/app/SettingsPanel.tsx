@@ -581,7 +581,7 @@ export function SettingsPanel({
       });
     const statusPollMs =
       settings.llmProvider === "gigachat" && !needsOllamaModelCatalog(settings)
-        ? 30_000
+        ? 120_000
         : 10_000;
     const timer = window.setInterval(() => {
       void refreshStatus();
