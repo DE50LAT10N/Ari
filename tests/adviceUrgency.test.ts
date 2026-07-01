@@ -122,6 +122,22 @@ describe("adviceUrgency", () => {
     expect(urgency.reasons.some((reason) => reason.includes("активный режим"))).toBe(true);
   });
 
+  it("offers low urgency for sustained live IDE work with a shorter cap", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 6,
+    });
+    const urgency = scoreAdviceUrgency(bundle, defaultSettings, {
+      sessionMinutes: 6,
+      userIntervalMs: 20 * 60_000,
+    });
+
+    expect(urgency.level).toBe("low");
+    expect(urgency.effectiveIntervalMs).toBe(MEDIUM_ADVICE_CAP_MS);
+    expect(shouldOfferLlmAdvice(urgency)).toBe(true);
+  });
+
   it("does not offer advice when score is zero", () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {});
     const urgency = scoreAdviceUrgency(bundle, defaultSettings);

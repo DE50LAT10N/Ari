@@ -39,6 +39,18 @@ describe("checkInitiativePolicy", () => {
     ).toBe("try_smalltalk");
   });
 
+  it("lets low-urgency advice through when smalltalk is dominating the day", () => {
+    expect(
+      evaluateProactiveTick({
+        adviceReady: true,
+        smalltalkReady: true,
+        idleGateOpen: true,
+        adviceUrgencyLevel: "low",
+        smalltalkSkewedToday: true,
+      }),
+    ).toBe("try_advice");
+  });
+
   it("prefers smalltalk after an advice streak even at medium urgency", () => {
     expect(
       evaluateProactiveTick({

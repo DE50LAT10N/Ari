@@ -89,6 +89,19 @@ export function isAdviceSkewedToday(
   return total >= 4 && snapshot.adviceToday / total > 0.8;
 }
 
+export function isSmalltalkSkewedToday(
+  snapshot: Pick<ProactiveToneSnapshot, "adviceToday" | "smalltalkToday">,
+): boolean {
+  if (snapshot.smalltalkToday < 2) {
+    return false;
+  }
+  if (snapshot.adviceToday === 0) {
+    return true;
+  }
+  const total = snapshot.adviceToday + snapshot.smalltalkToday;
+  return total >= 4 && snapshot.smalltalkToday / total > 0.8;
+}
+
 export type ProactiveToneSnapshot = {
   adviceToday: number;
   smalltalkToday: number;

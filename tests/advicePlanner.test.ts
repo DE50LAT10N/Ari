@@ -149,6 +149,32 @@ describe("advicePlanner", () => {
     expect(plan.selected?.actionText).toMatch(/ChatPanel|поиск/i);
   });
 
+  it("prefers solution lookup when reference snippets can solve the problem", () => {
+    recordQueryTopic({
+      topic: "TS2345 Argument of type null is not assignable",
+      source: "browser",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 8,
+    });
+    const ragSnippets = [
+      "TS2345 часто возникает, когда значение может быть null; сузьте тип guard-условием или используйте nullish coalescing перед вызовом функции.",
+    ];
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "advice",
+      sessionMinutes: 8,
+      ragSnippets,
+    });
+
+    const plan = planAdvice({ bundle, facts, ragSnippets });
+
+    expect(plan.selected?.kind).toBe("solution_lookup");
+    expect(plan.selected?.actionText).toMatch(/TS2345|fix|проверку/i);
+  });
+
   it("downranks a candidate kind that recently interrupted the user", () => {
     recordClipboardSignal({
       clipKind: "stacktrace",

@@ -99,6 +99,7 @@ export function classifyAdviceArchetype(
     case "task_bridge":
       return "task_bridge";
     case "docs_lookup":
+    case "solution_lookup":
       return "docs_lookup";
     case "clarifying_probe":
       return "clarifying_probe";

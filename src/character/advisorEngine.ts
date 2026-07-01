@@ -114,6 +114,52 @@ function themeMatchesLiveContext(theme: string, ctx: AdvisorContext): boolean {
   return significantWords(theme).some((word) => haystack.includes(word));
 }
 
+function bundleLiveContextText(bundle?: InitiativeSignalBundle): string {
+  if (!bundle) {
+    return "";
+  }
+  return [
+    bundle.editorFile,
+    bundle.editorRepo,
+    bundle.window?.title,
+    bundle.window?.processName,
+    bundle.advisor.currentTitle,
+    bundle.advisor.currentProcess,
+    bundle.advisor.dominantFile,
+    bundle.advisor.dominantRepo,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+export function hasLiveWorkAnchor(bundle?: InitiativeSignalBundle): boolean {
+  if (!bundle) {
+    return false;
+  }
+  return Boolean(
+    bundle.editorFile ||
+      bundle.advisor.editorContext.file ||
+      bundle.window?.title ||
+      bundle.window?.processName,
+  );
+}
+
+export function textMatchesLiveWorkContext(
+  text: string | undefined,
+  bundle?: InitiativeSignalBundle,
+): boolean {
+  const trimmed = text?.trim();
+  if (!trimmed || !hasLiveWorkAnchor(bundle)) {
+    return false;
+  }
+  const haystack = bundleLiveContextText(bundle);
+  if (!haystack) {
+    return false;
+  }
+  return significantWords(trimmed).some((word) => haystack.includes(word));
+}
+
 function isQueryThemeFresh(ctx: AdvisorContext, theme: string): boolean {
   const signals = ctx.activitySummary.recentSignals.filter(
     (entry): entry is Extract<ActivitySignal, { kind: "query_topic" }> =>
@@ -560,6 +606,10 @@ export function buildConversationTopics(
       continue;
     }
     push(entry.topic.slice(0, 100));
+  }
+
+  if (hasLiveWorkAnchor(bundle)) {
+    return topics.slice(0, limit);
   }
 
   for (const entry of ctx.activitySummary.recentSignals.slice().reverse()) {

@@ -334,6 +334,7 @@ import {
   shouldRetryReply,
   shouldUseInCharacterFallback,
 } from "../character/replyPipeline";
+import { buildVisibleAdviceFallback } from "../character/proactiveAdviceFallback";
 import {
   allowsGenericCompanionInitiative,
   dailyInitiativeCap,
@@ -349,6 +350,7 @@ import {
   recordProactiveToneEmitted,
   getProactiveToneSnapshot,
   isAdviceSkewedToday,
+  isSmalltalkSkewedToday,
 } from "../memory/memoryTelemetry";
 import { countRecentAdviceStreak } from "../character/adviceLedger";
 import {
@@ -1778,6 +1780,7 @@ export function ChatPanel({
         lastUserMessage,
         memory.length,
         Boolean(options.proactive),
+        proactiveReplyTone,
       );
       const responseMode = classifyResponseMode({
         message: lastUserMessage,
@@ -2116,6 +2119,31 @@ export function ChatPanel({
 
       if (
         options.proactive &&
+        proactiveReplyTone === "advice" &&
+        processed.validation.issues.includes("proactive quality")
+      ) {
+        const fallback = buildVisibleAdviceFallback({
+          practicalHook: options.proactivePracticalHook,
+          linkNarrative: options.proactiveLinkNarrative,
+          signalSummary: options.proactiveSignalSummary,
+          activeWindow,
+        });
+        if (fallback) {
+          processed = {
+            content: fallback,
+            emotion: processed.emotion === "neutral" ? "curious" : processed.emotion,
+            validation: {
+              valid: true,
+              issues: processed.validation.issues.filter(
+                (issue) => issue !== "proactive quality",
+              ),
+            },
+          };
+        }
+      }
+
+      if (
+        options.proactive &&
         shouldSuppressProactiveReply(processed.validation.issues)
       ) {
         recordInitiativeSuppressed(
@@ -2418,9 +2446,10 @@ export function ChatPanel({
     message: string,
     memoryMatches: number,
     proactive: boolean,
+    proactiveReplyTone?: ProactiveReplyTone,
   ): "short" | "medium" | "long" {
     if (proactive) {
-      return "short";
+      return proactiveReplyTone === "advice" ? "medium" : "short";
     }
 
     const normalized = message.toLowerCase();
@@ -2886,7 +2915,7 @@ export function ChatPanel({
           const ragHits = await searchRag(ragQuery, settings);
           ragSnippets = ragHits
             .slice(0, 3)
-            .map((hit) => hit.text.trim().slice(0, 200))
+            .map((hit) => hit.text.trim().slice(0, 420))
             .filter(Boolean);
         } catch {
           ragSnippets = [];
@@ -3361,6 +3390,7 @@ export function ChatPanel({
       const smalltalkReady = sinceSmalltalkAttempt >= smalltalkIntervalMs;
       const idleGateOpen =
         immersedCompanion || activityAgoMs >= requiredIdleMs;
+      const toneSnapshot = getProactiveToneSnapshot();
       const tickAction = evaluateProactiveTick({
         adviceReady,
         smalltalkReady,
@@ -3368,7 +3398,8 @@ export function ChatPanel({
         loading: isLoadingRef.current,
         adviceUrgencyLevel: urgency.level,
         recentAdviceStreak: countRecentAdviceStreak(),
-        adviceSkewedToday: isAdviceSkewedToday(getProactiveToneSnapshot()),
+        adviceSkewedToday: isAdviceSkewedToday(toneSnapshot),
+        smalltalkSkewedToday: isSmalltalkSkewedToday(toneSnapshot),
       });
 
       if (tickAction === "silent") {

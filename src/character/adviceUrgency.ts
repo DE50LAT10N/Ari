@@ -184,6 +184,12 @@ export function scoreAdviceUrgency(
     reasons.push("недавняя активность в кратковременной памяти");
   }
 
+  if (sessionMinutes >= 5 && bundle.editorFile && score === 0) {
+    score += 1;
+    reasons.push(`live IDE context: ${bundle.editorFile}`);
+    subjectKey = subjectKey ?? bundle.editorFile;
+  }
+
   const workContext = isProactiveWorkContext({ bundle, sessionMinutes });
   const hasWorkEvidence = Boolean(
     bundle.editorFile ||
@@ -233,7 +239,10 @@ export function scoreAdviceUrgency(
     effectiveIntervalMs = Math.min(userIntervalMs, MEDIUM_ADVICE_CAP_MS);
   } else if (score >= 1 && workContext) {
     level = "low";
-    effectiveIntervalMs = userIntervalMs;
+    effectiveIntervalMs =
+      sessionMinutes >= 5 && bundle.editorFile
+        ? Math.min(userIntervalMs, MEDIUM_ADVICE_CAP_MS)
+        : userIntervalMs;
   }
 
   return {

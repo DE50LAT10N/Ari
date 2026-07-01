@@ -16,6 +16,7 @@ export function evaluateProactiveTick(input: {
   adviceUrgencyLevel?: AdviceUrgencyLevel;
   recentAdviceStreak?: number;
   adviceSkewedToday?: boolean;
+  smalltalkSkewedToday?: boolean;
 }): ProactiveTickAction {
   if (input.loading || !input.idleGateOpen) {
     return "silent";
@@ -27,6 +28,14 @@ export function evaluateProactiveTick(input: {
   const streak = input.recentAdviceStreak ?? 0;
   const skewed = input.adviceSkewedToday ?? false;
   if (input.adviceUrgencyLevel === "high" && input.adviceReady && streak < 3) {
+    return "try_advice";
+  }
+  if (
+    input.adviceReady &&
+    input.smalltalkReady &&
+    input.adviceUrgencyLevel === "low" &&
+    input.smalltalkSkewedToday
+  ) {
     return "try_advice";
   }
   if (

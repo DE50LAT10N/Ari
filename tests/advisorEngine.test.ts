@@ -21,6 +21,7 @@ import {
   invalidateProactiveStateCache,
   rememberProactiveTopic,
 } from "../src/character/proactiveState";
+import { addTask, invalidateTaskCache } from "../src/tasks/taskStore";
 
 function setupStorage(): void {
   const storage = new Map<string, string>();
@@ -47,6 +48,7 @@ describe("advisorEngine", () => {
     setupStorage();
     invalidateActivitySignalsCache();
     invalidateProactiveStateCache();
+    invalidateTaskCache();
   });
 
   it("selects rest angle when break is due", () => {
@@ -166,5 +168,25 @@ describe("advisorEngine", () => {
     const banned = ["как идёт ChatPanel.tsx"];
     expect(bundle.hasActionableSignals).toBe(true);
     expect(hasUsableProactiveContext(bundle, [], banned)).toBe(true);
+  });
+
+  it("keeps live IDE topics ahead of unrelated backlog topics", () => {
+    addTask({
+      title: "Подготовка к экзамену",
+      kind: "task",
+      status: "open",
+      priority: "normal",
+      source: "user",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - desktop-character - Cursor",
+      sessionMinutes: 8,
+      windowMinutes: 8,
+    });
+    const topics = buildConversationTopics(bundle.advisor, 6, [], bundle);
+
+    expect(topics.some((topic) => /ChatPanel\.tsx/i.test(topic))).toBe(true);
+    expect(topics.some((topic) => /экзамен/i.test(topic))).toBe(false);
   });
 });

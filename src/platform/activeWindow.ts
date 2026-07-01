@@ -28,6 +28,18 @@ export function saveLastExternalWindow(windowInfo: ActiveWindowInfo): void {
   localStorage.setItem(LAST_EXTERNAL_WINDOW_KEY, JSON.stringify(windowInfo));
 }
 
+function allowedOrNull(
+  windowInfo: ActiveWindowInfo | null,
+  allowlistValue: string,
+): ActiveWindowInfo | null {
+  if (!windowInfo) {
+    return null;
+  }
+  return matchesActivityAllowlist(windowInfo, allowlistValue)
+    ? windowInfo
+    : null;
+}
+
 export function matchesActivityAllowlist(
   windowInfo: ActiveWindowInfo,
   allowlistValue: string,
@@ -64,12 +76,21 @@ export async function getActiveWindowContext(
     return null;
   }
 
+  if (isAriWindow(activeWindow)) {
+    if (opts?.bypassPrivacyGate) {
+      return null;
+    }
+    return allowedOrNull(loadLastExternalWindow(), settings.activityAllowlist);
+  }
+
   if (
     !opts?.bypassPrivacyGate &&
     !matchesActivityAllowlist(activeWindow, settings.activityAllowlist)
   ) {
     return null;
   }
+
+  saveLastExternalWindow(activeWindow);
 
   return activeWindow;
 }

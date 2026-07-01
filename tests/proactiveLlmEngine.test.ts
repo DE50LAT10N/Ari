@@ -3,6 +3,7 @@ import { defaultSettings } from "../src/settings/appSettings";
 import {
   invalidateActivitySignalsCache,
   recordClipboardSignal,
+  recordQueryTopic,
 } from "../src/memory/activitySignals";
 import { buildInitiativeSignalBundle } from "../src/character/initiativeContext";
 import {
@@ -308,6 +309,48 @@ describe("proactiveLlmEngine", () => {
     const clips = facts.filter((fact) => fact.kind === "clipboard");
     expect(clips.length).toBe(3);
     expect(clips.some((fact) => fact.id.includes(":0"))).toBe(true);
+  });
+
+  it("collects reference facts from RAG snippets for substantive advice", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 8,
+    });
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "advice",
+      sessionMinutes: 8,
+      ragSnippets: [
+        "TS2345: narrow nullable value with an if guard before passing it to a function.",
+      ],
+    });
+
+    const reference = facts.find((fact) => fact.kind === "reference");
+    expect(reference?.detail).toMatch(/TS2345|nullable/i);
+  });
+
+  it("drops stale chat and query facts when IDE has a live file anchor", () => {
+    recordQueryTopic({
+      topic: "Подготовка к экзамену",
+      source: "browser",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - desktop-character - Cursor",
+      sessionMinutes: 8,
+    });
+
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "advice",
+      recentUserMessage: "заверши цель Подготовка к экзамену",
+      sessionMinutes: 8,
+    });
+
+    expect(facts.some((fact) => fact.kind === "chat")).toBe(false);
+    expect(facts.some((fact) => /экзамен/i.test(fact.detail))).toBe(false);
+    expect(facts.some((fact) => /ChatPanel\.tsx/i.test(fact.detail))).toBe(true);
   });
 
   it("validateProactiveReplyLlm flags meta commentary", async () => {

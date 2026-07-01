@@ -31,6 +31,10 @@ import {
   buildAdvisorHypotheses,
   describeAdvisorHypotheses,
 } from "./advisorHypotheses";
+import {
+  hasLiveWorkAnchor,
+  textMatchesLiveWorkContext,
+} from "./advisorEngine";
 import { deriveScreenState, describeScreenState } from "./screenState";
 
 export type { ProactiveInitiativeMove, ProactiveMoveHint, ProactiveTopicLink, ProactiveTopicChain };
@@ -41,6 +45,7 @@ export type ProactiveSignalFactKind =
   | "chat"
   | "task"
   | "query"
+  | "reference"
   | "wm"
   | "urgency"
   | "goal"
@@ -139,6 +144,33 @@ function stripEmotionTags(text: string): string {
   return text.replace(/<emotion>[^<]+<\/emotion>/gi, "").trim();
 }
 
+function canUseBacklogFact(
+  text: string | undefined,
+  bundle: InitiativeSignalBundle,
+): boolean {
+  if (!hasLiveWorkAnchor(bundle)) {
+    return true;
+  }
+  return textMatchesLiveWorkContext(text, bundle);
+}
+
+function describeRelevantScreenState(
+  state: ReturnType<typeof deriveScreenState>,
+  bundle: InitiativeSignalBundle,
+): string {
+  if (!hasLiveWorkAnchor(bundle)) {
+    return describeScreenState(state);
+  }
+  return [
+    `app=${state.app}`,
+    state.visibleCodeContext?.file ? `file=${state.visibleCodeContext.file}` : "",
+    state.visibleProblem ? `problem=${state.visibleProblem}` : "",
+    `confidence=${state.confidence.toFixed(2)}`,
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
 function factFingerprint(
   facts: ProactiveSignalFact[],
   tone: ProactiveReplyTone,
@@ -208,7 +240,7 @@ function createAdviceFallbackBundle(
   }
   const candidate = input.adviceCandidate ?? null;
   const groundingFacts = facts.filter((fact) =>
-    ["file", "clipboard", "task", "query", "urgency", "screen", "hypothesis"].includes(
+    ["file", "clipboard", "task", "query", "reference", "urgency", "screen", "hypothesis"].includes(
       fact.kind,
     ),
   );
@@ -305,7 +337,10 @@ export function collectProactiveSignalFacts(
       .reverse()
       .find((turn) => turn.role === "user")
       ?.content;
-  if (recentUser) {
+  if (
+    recentUser &&
+    (canUseBacklogFact(recentUser, bundle) || bundle.clipboardSnippets.length > 0)
+  ) {
     push(
       "chat",
       "chat:last-user",
@@ -314,7 +349,7 @@ export function collectProactiveSignalFacts(
     );
   }
 
-  if (bundle.nextTaskTitle) {
+  if (bundle.nextTaskTitle && canUseBacklogFact(bundle.nextTaskTitle, bundle)) {
     push("task", "task:next", "Открытая задача", bundle.nextTaskTitle);
   }
   if (bundle.taskActivityLink?.taskTitle) {
@@ -327,11 +362,17 @@ export function collectProactiveSignalFacts(
   }
 
   for (const theme of bundle.advisor.topQueryThemes.slice(0, 3)) {
+    if (!canUseBacklogFact(theme, bundle)) {
+      continue;
+    }
     push("query", `query:${theme}`, "Тема поиска", theme);
   }
   for (const entry of bundle.advisor.activitySummary.recentSignals
     .filter((signal) => signal.kind === "query_topic")
     .slice(-2)) {
+    if (!canUseBacklogFact(entry.topic, bundle)) {
+      continue;
+    }
     push(
       "query",
       `query:${entry.topic}`,
@@ -341,6 +382,14 @@ export function collectProactiveSignalFacts(
   }
 
   for (const entry of pruneWorkingMemory(bundle.advisor.now).slice(-4)) {
+    if (
+      !canUseBacklogFact(
+        [entry.topic, entry.app, entry.title].filter(Boolean).join(" "),
+        bundle,
+      )
+    ) {
+      continue;
+    }
     push(
       "wm",
       `wm:${entry.id}`,
@@ -355,13 +404,29 @@ export function collectProactiveSignalFacts(
       "screen",
       "screen:state",
       "Состояние экрана",
-      describeScreenState(screenState),
+      describeRelevantScreenState(screenState, bundle),
+    );
+  }
+
+  for (let index = 0; index < (input.ragSnippets ?? []).length; index += 1) {
+    const snippet = input.ragSnippets?.[index];
+    if (!snippet?.trim()) {
+      continue;
+    }
+    push(
+      "reference",
+      `reference:${index}`,
+      "RAG / web reference",
+      redactSecrets(snippet).slice(0, 260),
     );
   }
 
   const hypotheses = buildAdvisorHypotheses(bundle, facts);
-  const hypothesisSummary = describeAdvisorHypotheses(hypotheses);
-  if (hypothesisSummary) {
+  const relevantHypotheses = hasLiveWorkAnchor(bundle)
+    ? hypotheses.filter((hypothesis) => hypothesis.kind !== "uncertain")
+    : hypotheses;
+  const hypothesisSummary = describeAdvisorHypotheses(relevantHypotheses);
+  if (hypothesisSummary && canUseBacklogFact(hypothesisSummary, bundle)) {
     push(
       "hypothesis",
       `hypothesis:${hypotheses[0]?.kind ?? "unknown"}`,
@@ -380,7 +445,7 @@ export function collectProactiveSignalFacts(
   }
 
   const goals = formatGoalLedgerForPrompt(2);
-  if (goals) {
+  if (goals && canUseBacklogFact(goals, bundle)) {
     push("goal", "goal:ledger", "Цели", goals.replace(/\n/g, " | "));
   }
 
@@ -543,14 +608,14 @@ function parseBundleResponse(
       : "";
   const practicalHook =
     typeof response.practicalHook === "string" && response.practicalHook.trim()
-      ? response.practicalHook.trim().slice(0, 220)
+      ? response.practicalHook.trim().slice(0, 320)
       : undefined;
   const adviceSteps = Array.isArray(response.adviceSteps)
     ? response.adviceSteps
         .filter((item): item is string => typeof item === "string")
         .map((item) => item.trim())
         .filter(Boolean)
-        .slice(0, 3)
+        .slice(0, 4)
     : undefined;
   const usefulnessScore =
     typeof response.usefulnessScore === "number"
@@ -627,7 +692,7 @@ function parseBundleResponse(
     tone,
     linkedThemes,
     mergedAnchor: mergedAnchor.slice(0, 180),
-    narrativeBrief: narrativeBrief.slice(0, 600),
+    narrativeBrief: narrativeBrief.slice(0, 700),
     practicalHook: tone === "advice" ? practicalHook : undefined,
     adviceSteps: tone === "advice" ? adviceSteps : undefined,
     usefulnessScore,
@@ -730,8 +795,11 @@ function bundleSystemPrompt(isAdvice: boolean, requireHook: boolean): string {
     VN_CHARACTER_RULE,
     "Свяжи сигналы пользователя в одну причинно-следственную нить для проактивной реплики Ari.",
     isAdvice
-      ? "Режим: advice. narrativeBrief — одно предложение «X потому что Y, сейчас Z». practicalHook — заход Ari за плечом с цитатой из факта (буфер, файл, вопрос). adviceSteps — 1–3 проверяемых шага от первого лица, не numbered list."
+      ? "Режим: advice. narrativeBrief — одно предложение «X потому что Y, сейчас Z». practicalHook — заход Ari за плечом с цитатой из факта (буфер, файл, вопрос). adviceSteps — 2–4 проверяемых шага: причина, fix/команда/настройка, проверка исхода; не numbered list."
       : "Режим: smalltalk. Одна живая нить без советов и next step. Можно выбрать контекстное наблюдение или боковую тему: музыка, игры, еда, настроение, странная бытовая мысль, культурный/новостной повод. Не утверждай конкретную свежую новость без live-проверки. Предпочитай утверждение/наблюдение; не заканчивай вопросом.",
+    isAdvice
+      ? "Если есть RAG/reference/web facts, извлеки из них вероятное решение проблемы. Не ограничивайся «поищи/проверь»: дай гипотезу, конкретный fix/команду/настройку и короткую проверку исхода."
+      : "",
     requireHook
       ? "Обязательно practicalHook с цитатой из fact + initiativeMove + groundFactIds + topicLinks."
       : "Верни initiativeMove, groundFactIds, topicLinks если есть граф связей.",
@@ -779,7 +847,7 @@ async function callSynthesisLlm(
             ? `Выбранный planner-ход совета (следуй ему, не заменяй generic check-in):\n${formatAdviceCandidateForPrompt(input.adviceCandidate)}`
             : "",
           input.ragSnippets?.length
-            ? `Фрагменты из документов:\n${input.ragSnippets.map((snippet) => `- ${snippet.slice(0, 160)}`).join("\n")}`
+            ? `Фрагменты RAG/reference для решения проблемы:\n${input.ragSnippets.map((snippet) => `- ${snippet.slice(0, 360)}`).join("\n")}`
             : "",
           input.candidateTopics?.length
             ? `Кандидаты (ярлыки, не копируй дословно):\n${input.candidateTopics.join("\n")}`

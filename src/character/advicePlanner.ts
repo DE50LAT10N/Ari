@@ -23,6 +23,7 @@ export type AdviceCandidateKind =
   | "refocus"
   | "rest"
   | "docs_lookup"
+  | "solution_lookup"
   | "memory_pattern";
 
 export type AdviceCandidate = {
@@ -277,6 +278,7 @@ export function planAdvice(input: {
   const task = facts.find((fact) => fact.id.startsWith("task:link")) ??
     factByKind(facts, "task");
   const query = factsByKind(facts, "query")[0];
+  const reference = factByKind(facts, "reference");
   const screen = factByKind(facts, "screen");
   const hypotheses = buildAdvisorHypotheses(bundle, facts);
   const topHypothesis = hypotheses[0];
@@ -500,6 +502,30 @@ export function planAdvice(input: {
           interruptionCost: 0.25,
           confidence: 0.72,
           reason: "сессия достаточно длинная для паузы",
+        },
+        history,
+        outcomes,
+      ),
+    );
+  }
+
+  if (reference || input.ragSnippets?.length) {
+    const source = reference?.detail ?? input.ragSnippets?.[0] ?? "";
+    candidates.push(
+      makeCandidate(
+        {
+          id: "solution-lookup",
+          kind: "solution_lookup",
+          evidenceIds: [reference?.id, query?.id, file?.id, clip?.id].filter(
+            Boolean,
+          ) as string[],
+          actionText: file
+            ? `Из найденного фрагмента вытащи вероятную причину и предложи конкретный fix для ${file.detail}; опирайся на «${source.slice(0, 140)}», затем дай короткую проверку результата.`
+            : `Из найденного фрагмента вытащи вероятную причину проблемы и предложи конкретный fix; опирайся на «${source.slice(0, 140)}», затем дай короткую проверку результата.`,
+          expectedUtility: 0.9,
+          interruptionCost: 0.25,
+          confidence: reference ? 0.82 : 0.74,
+          reason: "есть справочный фрагмент, из которого можно дать решение, а не только направление поиска",
         },
         history,
         outcomes,
