@@ -157,6 +157,39 @@ describe("proactiveLlmEngine", () => {
     expect(completeLlmJson).not.toHaveBeenCalled();
   });
 
+  it("falls back to planner advice when synthesis fails", async () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "README.md - desktop-character - Cursor",
+      sessionMinutes: 8,
+    });
+    vi.mocked(completeLlmJson).mockRejectedValue(new Error("bad json"));
+
+    const result = await synthesizeProactiveBundle(defaultSettings, {
+      bundle,
+      tone: "advice",
+      candidateTopics: ["README.md"],
+      sessionMinutes: 8,
+      llmOnline: true,
+      adviceCandidate: {
+        id: "docs-to-code-bridge",
+        kind: "docs_to_code_bridge",
+        evidenceIds: ["file:README.md"],
+        actionText:
+          "Свяжи README.md с текущим шагом: предложи проверить раздел установки.",
+        expectedUtility: 0.74,
+        interruptionCost: 0.25,
+        confidence: 0.7,
+        reason: "есть текущий файл и рабочий контекст",
+        score: 1.2,
+      },
+    });
+
+    expect(result.shouldSend).toBe(true);
+    expect(result.practicalHook).toContain("README.md");
+    expect(result.selectedAdviceCandidate?.kind).toBe("docs_to_code_bridge");
+  });
+
   it("accepts LLM advice bundle without topicLinks by filling graph edges", async () => {
     recordClipboardSignal({
       clipKind: "stacktrace",

@@ -53,6 +53,15 @@ type AvatarProps = {
 
 type ReactionOverlay = MicroReactionType;
 
+const SQUISH_MS = 420;
+const HEADPAT_LOCK_MS = 700;
+const RECOIL_MS = 320;
+const LONG_PRESS_MS = 620;
+const HOVER_REACTION_MS = 650;
+const BLINK_CLOSE_MS = 105;
+const BLINK_MIN_MS = 5500;
+const BLINK_RANDOM_MS = 6500;
+
 const overlaySymbols: Record<ReactionOverlay, string> = {
   question: "?",
   surprise: "!",
@@ -148,10 +157,29 @@ export function Avatar({
   const [recoil, setRecoil] = useState(false);
   const [squish, setSquish] = useState(false);
   const hoverTimerRef = useRef<number | null>(null);
+  const squishTimerRef = useRef<number | null>(null);
+  const headpatTimerRef = useRef<number | null>(null);
+  const recoilTimerRef = useRef<number | null>(null);
   const clickBurstRef = useRef(0);
   const lastClickAtRef = useRef(0);
   const longPressTimerRef = useRef<number | null>(null);
   const headpatTriggeredRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      for (const timer of [
+        hoverTimerRef.current,
+        squishTimerRef.current,
+        headpatTimerRef.current,
+        recoilTimerRef.current,
+        longPressTimerRef.current,
+      ]) {
+        if (timer !== null) {
+          window.clearTimeout(timer);
+        }
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!chatOpen) return;
@@ -164,12 +192,11 @@ export function Avatar({
 
   useEffect(() => {
     const onReaction = () => {
-      setSquish(true);
-      window.setTimeout(() => setSquish(false), 420);
+      triggerSquish();
     };
     window.addEventListener(AVATAR_REACTION_EVENT, onReaction);
     return () => window.removeEventListener(AVATAR_REACTION_EVENT, onReaction);
-  }, []);
+  }, [pngRenderer]);
 
   useEffect(() => {
     activeLayerRef.current = activeLayer;
@@ -249,10 +276,10 @@ export function Avatar({
       blinkTimer = window.setTimeout(() => {
         if (state !== "speaking" && state !== "thinking") {
           setBlinking(true);
-          closeTimer = window.setTimeout(() => setBlinking(false), 105);
+          closeTimer = window.setTimeout(() => setBlinking(false), BLINK_CLOSE_MS);
         }
         schedule();
-      }, 5500 + Math.random() * 6500);
+      }, BLINK_MIN_MS + Math.random() * BLINK_RANDOM_MS);
     };
     schedule();
     return () => {
@@ -262,20 +289,41 @@ export function Avatar({
   }, [state]);
 
   function triggerSquish() {
+    if (squishTimerRef.current) {
+      window.clearTimeout(squishTimerRef.current);
+    }
     setSquish(true);
-    window.setTimeout(() => setSquish(false), 420);
+    squishTimerRef.current = window.setTimeout(() => {
+      setSquish(false);
+      squishTimerRef.current = null;
+    }, SQUISH_MS);
     pngRenderer.playReaction({ kind: "repeated_click" });
   }
 
   function triggerHeadpat() {
     if (headpatTriggeredRef.current) return;
     headpatTriggeredRef.current = true;
-    window.setTimeout(() => {
+    if (headpatTimerRef.current) {
+      window.clearTimeout(headpatTimerRef.current);
+    }
+    headpatTimerRef.current = window.setTimeout(() => {
       headpatTriggeredRef.current = false;
-    }, 700);
+      headpatTimerRef.current = null;
+    }, HEADPAT_LOCK_MS);
     setOverlay({ id: Date.now(), type: "heart" });
     triggerSquish();
     onHeadpat?.();
+  }
+
+  function triggerRecoil() {
+    if (recoilTimerRef.current) {
+      window.clearTimeout(recoilTimerRef.current);
+    }
+    setRecoil(true);
+    recoilTimerRef.current = window.setTimeout(() => {
+      setRecoil(false);
+      recoilTimerRef.current = null;
+    }, RECOIL_MS);
   }
 
   const idleClass = livelinessEnabled ? idleActionClass(idleAction) : "";
@@ -297,8 +345,7 @@ export function Avatar({
           lastClickAtRef.current = now;
           clickBurstRef.current += 1;
           if (emotion === "annoyed" && clickBurstRef.current >= 2) {
-            setRecoil(true);
-            window.setTimeout(() => setRecoil(false), 320);
+            triggerRecoil();
             clickBurstRef.current = 0;
           }
           triggerSquish();
@@ -314,7 +361,8 @@ export function Avatar({
           }
           longPressTimerRef.current = window.setTimeout(() => {
             triggerHeadpat();
-          }, 620);
+            longPressTimerRef.current = null;
+          }, LONG_PRESS_MS);
         }}
         onPointerUp={() => {
           if (longPressTimerRef.current) {
@@ -359,15 +407,20 @@ export function Avatar({
           );
         }}
         onPointerEnter={() => {
+          if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
           hoverTimerRef.current = window.setTimeout(() => {
             if (!overlay && state === "idle") {
               setOverlay({ id: Date.now(), type: "question" });
             }
-          }, 650);
+            hoverTimerRef.current = null;
+          }, HOVER_REACTION_MS);
         }}
         onPointerLeave={() => {
           clearPointerParallax();
-          if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+          if (hoverTimerRef.current) {
+            window.clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = null;
+          }
           setOverlay((current) =>
             current?.type === "question" ? null : current,
           );

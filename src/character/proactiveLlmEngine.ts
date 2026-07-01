@@ -198,6 +198,72 @@ function createRejectedProactiveLlmBundle(
   };
 }
 
+function createAdviceFallbackBundle(
+  input: ProactiveLlmInput,
+  facts: ProactiveSignalFact[],
+  reason: ProactiveLlmSystemRejectReason,
+): ProactiveLlmBundle | null {
+  if (input.tone !== "advice") {
+    return null;
+  }
+  const candidate = input.adviceCandidate ?? null;
+  const groundingFacts = facts.filter((fact) =>
+    ["file", "clipboard", "task", "query", "urgency", "screen", "hypothesis"].includes(
+      fact.kind,
+    ),
+  );
+  if (!candidate && groundingFacts.length === 0) {
+    return null;
+  }
+
+  const primaryFact = groundingFacts[0];
+  const evidenceIds = candidate?.evidenceIds.length
+    ? candidate.evidenceIds
+    : groundingFacts.slice(0, 3).map((fact) => fact.id);
+  const actionText =
+    candidate?.actionText ??
+    (primaryFact
+      ? `Сделай один следующий шаг от факта: ${primaryFact.detail}`
+      : "Сделай один следующий шаг по текущему рабочему контексту.");
+  const anchor =
+    input.candidateTopics?.[0] ??
+    candidate?.kind ??
+    primaryFact?.detail.slice(0, 80) ??
+    "текущий рабочий контекст";
+  const linkedThemes = [
+    candidate?.kind,
+    ...groundingFacts.map((fact) => fact.detail.slice(0, 60)),
+  ]
+    .filter((item): item is string => Boolean(item?.trim()))
+    .slice(0, 2);
+
+  return {
+    tone: "advice",
+    linkedThemes,
+    mergedAnchor: anchor.slice(0, 180),
+    narrativeBrief: candidate
+      ? `Planner выбрал ${candidate.kind}: ${candidate.reason}`
+      : `Совет опирается на текущие факты: ${groundingFacts
+          .slice(0, 2)
+          .map((fact) => fact.label)
+          .join(", ")}`,
+    practicalHook: actionText.slice(0, 220),
+    adviceSteps: [actionText.slice(0, 180)],
+    usefulnessScore: Math.max(0.62, candidate?.expectedUtility ?? 0.62),
+    shouldSend: true,
+    rejectReason: `fallback after ${reason}`,
+    overlapsBanned: false,
+    source: "llm",
+    initiativeMove: "concrete_step",
+    groundFactIds: evidenceIds,
+    primaryChainSummary: candidate
+      ? `${candidate.reason}: ${actionText.slice(0, 160)}`
+      : actionText.slice(0, 200),
+    linkConfidence: candidate?.confidence ?? 0.58,
+    selectedAdviceCandidate: candidate ?? undefined,
+  };
+}
+
 export function collectProactiveSignalFacts(
   input: ProactiveLlmInput,
 ): ProactiveSignalFact[] {
@@ -812,14 +878,44 @@ export async function synthesizeProactiveBundle(
       }
     }
     if (parsed) {
+      if (!parsed.shouldSend && !parsed.overlapsBanned) {
+        const fallback = createAdviceFallbackBundle(
+          enriched,
+          facts,
+          "llm synthesis rejected",
+        );
+        if (fallback) {
+          bundleCache.set(fingerprint, { at: Date.now(), value: fallback });
+          return rememberProactiveLlmBundle(fallback, facts);
+        }
+      }
       bundleCache.set(fingerprint, { at: Date.now(), value: parsed });
       return rememberProactiveLlmBundle(parsed, facts);
     }
   } catch {
+    const fallback = createAdviceFallbackBundle(
+      enriched,
+      facts,
+      "llm synthesis failed",
+    );
+    if (fallback) {
+      bundleCache.set(fingerprint, { at: Date.now(), value: fallback });
+      return rememberProactiveLlmBundle(fallback, facts);
+    }
     return rememberProactiveLlmBundle(
       createRejectedProactiveLlmBundle(enriched.tone, "llm synthesis failed"),
       facts,
     );
+  }
+
+  const fallback = createAdviceFallbackBundle(
+    enriched,
+    facts,
+    "llm synthesis rejected",
+  );
+  if (fallback) {
+    bundleCache.set(fingerprint, { at: Date.now(), value: fallback });
+    return rememberProactiveLlmBundle(fallback, facts);
   }
 
   return rememberProactiveLlmBundle(

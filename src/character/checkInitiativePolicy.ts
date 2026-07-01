@@ -48,11 +48,18 @@ export function evaluateProactiveTick(input: {
 export function afterAdviceAttempt(input: {
   adviceSent: boolean;
   smalltalkReady: boolean;
+  adviceUrgencyLevel?: AdviceUrgencyLevel;
 }): ProactiveTickAction {
   if (input.adviceSent) {
     return "silent";
   }
   if (!input.smalltalkReady) {
+    return "retry_advice_later";
+  }
+  if (
+    input.adviceUrgencyLevel === "medium" ||
+    input.adviceUrgencyLevel === "high"
+  ) {
     return "retry_advice_later";
   }
   return "try_smalltalk";

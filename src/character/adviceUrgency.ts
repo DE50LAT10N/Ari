@@ -260,7 +260,14 @@ export function isAdviceReady(
   }
   const effectiveIntervalMs = Math.min(adviceIntervalMs, urgency.effectiveIntervalMs);
   if (sinceAdviceAttemptMs < effectiveIntervalMs) {
-    return false;
+    const recentSentAdvice = countRecentAdviceByTone(
+      "advice",
+      now - effectiveIntervalMs,
+      now,
+    );
+    if (recentSentAdvice > 0) {
+      return false;
+    }
   }
   if (urgency.level === "low") {
     const recentAdvice = countRecentAdviceByTone(

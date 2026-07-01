@@ -1,3 +1,5 @@
+import { putMany, waitForTransaction } from "./idbUtils";
+
 export type UserMemoryFact = {
   id: string;
   text: string;
@@ -81,14 +83,6 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-function waitForTransaction(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error);
-  });
-}
-
 async function getAll<T>(storeName: string): Promise<T[]> {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
@@ -107,15 +101,8 @@ async function getAll<T>(storeName: string): Promise<T[]> {
   });
 }
 
-async function putMany<T>(storeName: string, values: T[]): Promise<void> {
-  if (!values.length) return;
-  const database = await openDatabase();
-  const transaction = database.transaction(storeName, "readwrite");
-  const store = transaction.objectStore(storeName);
-  values.forEach((value) => store.put(value));
-  await waitForTransaction(transaction);
-  database.close();
-}
+const putManyMemory = <T>(storeName: string, values: T[]) =>
+  putMany(openDatabase, storeName, values);
 
 function notifyMemoryChanged(): void {
   invalidateUserMemoryCache();
@@ -170,7 +157,7 @@ export async function initializeUserMemory(): Promise<void> {
                   : now,
             }];
           });
-          await putMany(FACTS_STORE, facts);
+          await putManyMemory(FACTS_STORE, facts);
         }
       } finally {
         localStorage.setItem(MIGRATION_KEY, "1");
@@ -233,7 +220,7 @@ export async function importMemorySummaries(
 ): Promise<void> {
   if (!summaries.length) return;
   await initializeUserMemory();
-  await putMany(SUMMARIES_STORE, summaries);
+  await putManyMemory(SUMMARIES_STORE, summaries);
   notifyMemoryChanged();
 }
 
@@ -337,7 +324,7 @@ export async function addUserMemoryFacts(
     });
   }
 
-  await putMany(FACTS_STORE, [...updated, ...added]);
+  await putManyMemory(FACTS_STORE, [...updated, ...added]);
   if (added.length || updated.length) notifyMemoryChanged();
   const settings = loadSettings();
   for (const fact of [...added, ...updated.filter((fact) => added.every((entry) => entry.id !== fact.id))]) {
@@ -388,7 +375,7 @@ export async function updateUserMemoryFact(
   const fact = facts.find((item) => item.id === id);
   if (!fact) return;
   await invalidateSummariesForFact(id);
-  await putMany(FACTS_STORE, [{
+  await putManyMemory(FACTS_STORE, [{
     ...fact,
     text: normalized,
     confidence: 1,
@@ -401,10 +388,13 @@ export async function updateUserMemoryFact(
 
 async function deleteFromStore(storeName: string, id: string): Promise<void> {
   const database = await openDatabase();
-  const transaction = database.transaction(storeName, "readwrite");
-  transaction.objectStore(storeName).delete(id);
-  await waitForTransaction(transaction);
-  database.close();
+  try {
+    const transaction = database.transaction(storeName, "readwrite");
+    transaction.objectStore(storeName).delete(id);
+    await waitForTransaction(transaction);
+  } finally {
+    database.close();
+  }
 }
 
 async function invalidateSummariesForFact(factId: string): Promise<void> {
@@ -418,7 +408,7 @@ async function invalidateSummariesForFact(factId: string): Promise<void> {
     affected.flatMap(({ factIds }) => factIds),
   );
   const facts = await loadUserMemory();
-  await putMany(
+  await putManyMemory(
     FACTS_STORE,
     facts
       .filter(({ id }) => id !== factId && affectedFactIds.has(id))
@@ -437,14 +427,17 @@ export async function removeUserMemoryFact(id: string): Promise<void> {
 
 export async function clearUserMemory(): Promise<void> {
   const database = await openDatabase();
-  const transaction = database.transaction(
-    [FACTS_STORE, SUMMARIES_STORE],
-    "readwrite",
-  );
-  transaction.objectStore(FACTS_STORE).clear();
-  transaction.objectStore(SUMMARIES_STORE).clear();
-  await waitForTransaction(transaction);
-  database.close();
+  try {
+    const transaction = database.transaction(
+      [FACTS_STORE, SUMMARIES_STORE],
+      "readwrite",
+    );
+    transaction.objectStore(FACTS_STORE).clear();
+    transaction.objectStore(SUMMARIES_STORE).clear();
+    await waitForTransaction(transaction);
+  } finally {
+    database.close();
+  }
   notifyMemoryChanged();
 }
 
@@ -453,8 +446,8 @@ export async function saveMemorySummary(
   facts: UserMemoryFact[],
 ): Promise<void> {
   const now = Date.now();
-  await putMany(SUMMARIES_STORE, [summary]);
-  await putMany(
+  await putManyMemory(SUMMARIES_STORE, [summary]);
+  await putManyMemory(
     FACTS_STORE,
     facts.map((fact) => ({ ...fact, consolidatedAt: now })),
   );
@@ -498,7 +491,7 @@ export async function supersedeMemoryFacts(ids: string[]): Promise<void> {
       updatedAt: now,
     }));
   if (!updated.length) return;
-  await putMany(FACTS_STORE, updated);
+  await putManyMemory(FACTS_STORE, updated);
   notifyMemoryChanged();
 }
 
@@ -509,7 +502,7 @@ export async function markFactsRecalled(ids: string[]): Promise<void> {
   const now = Date.now();
   const updated = facts.filter((fact) => idSet.has(fact.id));
   if (!updated.length) return;
-  await putMany(
+  await putManyMemory(
     FACTS_STORE,
     updated.map((fact) => ({ ...fact, lastSeenAt: now, updatedAt: now })),
   );

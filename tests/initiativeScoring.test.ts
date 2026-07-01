@@ -163,6 +163,63 @@ describe("initiativeScoring", () => {
     expect(decision.reason).toBe("плановая проверка после тишины");
   });
 
+  it("allows concrete advice after short activity in active mode", () => {
+    const decision = scoreInitiativeLocally({
+      description:
+        "Режим реплики: совет. Planner: docs_to_code_bridge — связать README.md с текущим шагом.",
+      scene: "focus",
+      chatClosedAgoMs: 10 * 60_000,
+      userActivityAgoMs: 20_000,
+      dailyCap: 99,
+      riskTolerance: 1,
+      plannedCheckMinSilenceMs: 120_000,
+      practicalAdviceReady: true,
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.value).toBe("high");
+    expect(decision.reason).toBe("конкретный совет по текущему контексту");
+  });
+
+  it("allows concrete advice through one pending initiative in normal mode", () => {
+    markInitiativeSent();
+
+    const decision = scoreInitiativeLocally({
+      description:
+        "Режим реплики: совет. Planner: docs_to_code_bridge — связать README.md с текущим шагом.",
+      scene: "focus",
+      chatClosedAgoMs: 10 * 60_000,
+      userActivityAgoMs: 45_000,
+      dailyCap: 99,
+      riskTolerance: 0,
+      plannedCheckMinSilenceMs: 120_000,
+      practicalAdviceReady: true,
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.value).toBe("high");
+  });
+
+  it("keeps concrete advice blocked after repeated unacknowledged initiatives", () => {
+    markInitiativeSent();
+    markInitiativeSent();
+    markInitiativeSent();
+
+    const decision = scoreInitiativeLocally({
+      description:
+        "Режим реплики: совет. Planner: docs_to_code_bridge — связать README.md с текущим шагом.",
+      scene: "focus",
+      chatClosedAgoMs: 10 * 60_000,
+      userActivityAgoMs: 45_000,
+      dailyCap: 99,
+      riskTolerance: 0,
+      plannedCheckMinSilenceMs: 120_000,
+      practicalAdviceReady: true,
+    });
+
+    expect(decision.allowed).toBe(false);
+  });
+
   it("blocks planned check when no fresh topics remain at normal initiative level", () => {
     const decision = scoreInitiativeLocally({
       description: [

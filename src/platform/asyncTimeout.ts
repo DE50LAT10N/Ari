@@ -19,6 +19,12 @@ export async function withTimeout<T>(
   }
 }
 
+export function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
 /** Lets the browser paint status updates before heavy CPU work. */
 export function yieldToMain(): Promise<void> {
   return new Promise((resolve) => {

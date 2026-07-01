@@ -20,6 +20,7 @@ import {
   getActiveProjectBinder,
   readProjectFile,
 } from "../character/projectBinder";
+import { parseEditorContext } from "../platform/windowContext";
 
 export function actionText(action: SafeActionProposal): string | undefined {
   const text = (action.content ?? action.target)?.trim();
@@ -68,6 +69,14 @@ type ExtractionResponse = {
   action?: unknown;
 };
 
+export type SafeActionExtractionContext = {
+  activeWindow?: {
+    processName?: string;
+    title?: string;
+  } | null;
+  activeProjectRootPath?: string;
+};
+
 type NativeSafeAction = {
   actionType: "open_url" | "open_path" | "copy_text" | "create_note";
   target?: string;
@@ -76,6 +85,9 @@ type NativeSafeAction = {
 };
 
 const ACTION_LOG_KEY = "desktop-character.safe-action-log.v1";
+
+const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
+const URL_PATTERN = /https?:\/\/[^\s<>"')]+/i;
 
 export type SafeActionLogEntry = {
   timestamp: number;
@@ -105,6 +117,148 @@ function isActionType(value: unknown): value is SafeActionType {
     value === "open_settings_page" ||
     value === "export_note"
   );
+}
+
+function createActionProposal(input: {
+  type: SafeActionType;
+  title: string;
+  target?: string;
+  content?: string;
+  filename?: string;
+  dueAt?: number;
+}): SafeActionProposal {
+  return {
+    id:
+      typeof globalThis.crypto?.randomUUID === "function"
+        ? globalThis.crypto.randomUUID()
+        : `action-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: input.type,
+    title: input.title.slice(0, 160),
+    target: input.target,
+    content: input.content,
+    filename: input.filename,
+    dueAt: input.dueAt,
+    status: "pending",
+  };
+}
+
+function safeJoinWindowsPath(rootPath: string, relativePath: string): string | null {
+  const root = rootPath.trim();
+  const relative = relativePath.trim().replace(/\//g, "\\");
+  if (!root || !relative || relative.includes("..") || WINDOWS_ABSOLUTE_PATH.test(relative)) {
+    return null;
+  }
+  return `${root.replace(/[\\/]+$/, "")}\\${relative.replace(/^[\\/]+/, "")}`;
+}
+
+function resolveProjectRootPath(context?: SafeActionExtractionContext): string | undefined {
+  return (
+    context?.activeProjectRootPath?.trim() ||
+    getActiveProjectBinder()?.rootPath?.trim() ||
+    undefined
+  );
+}
+
+function resolveOpenPathTarget(
+  target: string | undefined,
+  context?: SafeActionExtractionContext,
+): string | undefined {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (WINDOWS_ABSOLUTE_PATH.test(trimmed) || trimmed.startsWith("\\\\")) {
+    return trimmed;
+  }
+  const rootPath = resolveProjectRootPath(context);
+  return rootPath ? safeJoinWindowsPath(rootPath, trimmed) ?? undefined : undefined;
+}
+
+function activeEditorFilePath(
+  context?: SafeActionExtractionContext,
+): { file?: string; target?: string } {
+  const title = context?.activeWindow?.title;
+  if (!title) {
+    return {};
+  }
+  const editor = parseEditorContext(title);
+  const file = editor.file?.trim();
+  if (!file || !/\.[a-z0-9]{1,8}$/i.test(file)) {
+    return {};
+  }
+  return {
+    file,
+    target: resolveOpenPathTarget(file, context) ?? file,
+  };
+}
+
+function textRequestsOpen(text: string): boolean {
+  return /(?:открой|открыть|покажи|показать|взглян|посмотр|прочитай|прочесть|open|show|read)/i.test(
+    text,
+  );
+}
+
+function replyPromisesConfirmation(reply: string): boolean {
+  return /(?:карточк|подтвержд|разреш)/i.test(reply);
+}
+
+function extractContentAfterVerb(text: string, pattern: RegExp): string | undefined {
+  const match = text.match(pattern);
+  const value = match?.[1]?.trim();
+  return value ? value.slice(0, 100_000) : undefined;
+}
+
+export function extractDeterministicSafeAction(
+  userMessage: string,
+  assistantReply = "",
+  context?: SafeActionExtractionContext,
+): SafeActionProposal | null {
+  const combined = `${userMessage}\n${assistantReply}`;
+  const url = combined.match(URL_PATTERN)?.[0];
+  if (url && textRequestsOpen(combined)) {
+    return createActionProposal({
+      type: "open_url",
+      title: "Открыть ссылку",
+      target: url,
+    });
+  }
+
+  const absolutePath = combined.match(/[A-Za-z]:[\\/][^\n\r"'<>|]+/)?.[0]?.trim();
+  if (absolutePath && textRequestsOpen(combined)) {
+    return createActionProposal({
+      type: "open_path",
+      title: "Открыть файл или папку",
+      target: absolutePath,
+    });
+  }
+
+  const copyText = extractContentAfterVerb(
+    userMessage,
+    /(?:скопируй|копируй|copy)\s+([\s\S]{2,})/i,
+  );
+  if (copyText) {
+    return createActionProposal({
+      type: "copy_text",
+      title: "Скопировать текст",
+      content: copyText,
+    });
+  }
+
+  const shouldOpenActiveFile =
+    textRequestsOpen(userMessage) ||
+    (replyPromisesConfirmation(assistantReply) && textRequestsOpen(assistantReply));
+  if (shouldOpenActiveFile) {
+    const activeFile = activeEditorFilePath(context);
+    if (activeFile.target) {
+      return createActionProposal({
+        type: "open_path",
+        title: `Открыть ${activeFile.file ?? "активный файл"}`,
+        target: activeFile.target,
+      });
+    }
+  }
+
+  return null;
 }
 
 export function isSafeActionProposal(
@@ -169,12 +323,22 @@ export async function extractSafeAction(
   userMessage: string,
   assistantReply: string,
   settings: AppSettings,
+  context?: SafeActionExtractionContext,
 ): Promise<SafeActionProposal | null> {
   if (!settings.safeActionsEnabled) return null;
 
   const intent = settings.intentClassifierEnabled
     ? classifyUserIntent(userMessage)
     : null;
+  const deterministic = extractDeterministicSafeAction(
+    userMessage,
+    assistantReply,
+    context,
+  );
+  if (deterministic) {
+    return deterministic;
+  }
+
   if (
     intent &&
     isHighConfidenceIntent(intent, 0.85) &&
@@ -222,8 +386,12 @@ export async function extractSafeAction(
   const candidate = raw as Record<string, unknown>;
   if (!isActionType(candidate.type)) return null;
 
-  const target =
+  const rawTarget =
     typeof candidate.target === "string" ? candidate.target.trim() : undefined;
+  const target =
+    candidate.type === "open_path"
+      ? resolveOpenPathTarget(rawTarget, context) ?? rawTarget
+      : rawTarget;
   const content =
     typeof candidate.content === "string"
       ? candidate.content.slice(0, 100_000)
@@ -263,8 +431,7 @@ export async function extractSafeAction(
     return null;
   }
 
-  return {
-    id: crypto.randomUUID(),
+  return createActionProposal({
     type: candidate.type,
     title:
       typeof candidate.title === "string" && candidate.title.trim()
@@ -274,8 +441,7 @@ export async function extractSafeAction(
     content,
     filename,
     dueAt: Number.isFinite(dueAt) ? dueAt : undefined,
-    status: "pending",
-  };
+  });
 }
 
 export async function executeSafeAction(
@@ -461,7 +627,15 @@ export async function executeSafeAction(
 
   const nativeAction: NativeSafeAction = {
     actionType: nativeType,
-    target: action.target,
+    target:
+      nativeType === "open_path"
+        ? resolveOpenPathTarget(action.target) ??
+          (() => {
+            throw new Error(
+              "Для открытия файла нужен абсолютный путь или активный привязанный проект.",
+            );
+          })()
+        : action.target,
     content:
       nativeType === "copy_text" || nativeType === "create_note"
         ? (action.content ?? action.target)

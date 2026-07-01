@@ -425,6 +425,7 @@ export function scoreInitiativeLocally({
   intent,
   adaptiveEnabled = false,
   plannedCheckFreshTopics,
+  practicalAdviceReady = false,
 }: {
   description: string;
   scene: PresenceScene;
@@ -438,12 +439,14 @@ export function scoreInitiativeLocally({
   intent?: UserIntent;
   adaptiveEnabled?: boolean;
   plannedCheckFreshTopics?: boolean;
+  practicalAdviceReady?: boolean;
 }): LocalInitiativeDecision {
   const normalized = description.toLowerCase();
   const overlapText = initiativeTopicOverlapText(description);
   const dailyCount = getDailyInitiativeCount();
   const ignoredCount = getRecentIgnoredInitiativeCount();
   const recentlyIgnored = ignoredCount > 0;
+  const ignoredTooMuchForAdvice = ignoredCount >= 3;
   const recentTopics = getRecentProactiveTopics();
   const plannedCheckReady =
     /плановая проверка инициативы/.test(normalized) &&
@@ -480,6 +483,8 @@ export function scoreInitiativeLocally({
   if (scene === "focus" || chatClosedAgoMs < 5 * 60_000) risk = "medium";
   const minUserSilenceMs = plannedCheckReady
     ? Math.min(60_000, plannedCheckMinSilenceMs)
+    : practicalAdviceReady
+      ? Math.min(15_000, plannedCheckMinSilenceMs)
     : 60_000;
   if (
     (dailyCap < 9999 && dailyCount >= dailyCap) ||
@@ -490,7 +495,9 @@ export function scoreInitiativeLocally({
   }
 
   let value: InitiativeValue = "low";
-  if (openLoopHint && /(срок|напомин|незаверш|обещал)/i.test(openLoopHint)) {
+  if (practicalAdviceReady) {
+    value = "high";
+  } else if (openLoopHint && /(срок|напомин|незаверш|обещал)/i.test(openLoopHint)) {
     value = "high";
   } else if (/(срок|напомин|ошибк|опасн|незаверш|обещал)/.test(normalized)) {
     value = "high";
@@ -540,9 +547,20 @@ export function scoreInitiativeLocally({
   if (plannedCheckReady && freshTopicsAvailable && riskTolerance >= 0) {
     allowed = true;
   }
+  if (
+    practicalAdviceReady &&
+    riskTolerance >= 0 &&
+    dailyCount < dailyCap &&
+    !ignoredTooMuchForAdvice &&
+    userActivityAgoMs >= minUserSilenceMs
+  ) {
+    allowed = true;
+  }
 
   const reason = repeated
     ? "тема похожа на недавнюю инициативу"
+    : practicalAdviceReady && allowed
+      ? "конкретный совет по текущему контексту"
     : plannedCheckReady && allowed && riskTolerance >= 0
       ? "плановая проверка после тишины"
       : recentlyIgnored

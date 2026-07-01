@@ -11,6 +11,7 @@ import {
   updateTask,
   type Task,
 } from "../tasks/taskStore";
+import { putMany, waitForTransaction } from "./idbUtils";
 
 export type MemoryEpisode = {
   id: string;
@@ -75,14 +76,6 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-function waitForTransaction(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error);
-  });
-}
-
 async function loadStore<T>(storeName: string): Promise<T[]> {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
@@ -101,22 +94,18 @@ async function loadStore<T>(storeName: string): Promise<T[]> {
   });
 }
 
-async function putMany<T>(storeName: string, values: T[]): Promise<void> {
-  if (!values.length) return;
-  const database = await openDatabase();
-  const transaction = database.transaction(storeName, "readwrite");
-  const store = transaction.objectStore(storeName);
-  values.forEach((value) => store.put(value));
-  await waitForTransaction(transaction);
-  database.close();
-}
+const putManyEpisodes = <T>(storeName: string, values: T[]) =>
+  putMany(openDatabase, storeName, values);
 
 async function remove(storeName: string, id: string): Promise<void> {
   const database = await openDatabase();
-  const transaction = database.transaction(storeName, "readwrite");
-  transaction.objectStore(storeName).delete(id);
-  await waitForTransaction(transaction);
-  database.close();
+  try {
+    const transaction = database.transaction(storeName, "readwrite");
+    transaction.objectStore(storeName).delete(id);
+    await waitForTransaction(transaction);
+  } finally {
+    database.close();
+  }
 }
 
 function notifyChanged(): void {
@@ -199,7 +188,7 @@ export async function addEpisodes(
       updatedAt: now,
     }];
   });
-  await putMany(EPISODES_STORE, episodes);
+  await putManyEpisodes(EPISODES_STORE, episodes);
   if (episodes.length) {
     notifyChanged();
     const settings = loadSettings();
@@ -361,9 +350,12 @@ export async function selectEpisodicContext(
 
 export async function clearEpisodicMemory(): Promise<void> {
   const database = await openDatabase();
-  const transaction = database.transaction([EPISODES_STORE], "readwrite");
-  transaction.objectStore(EPISODES_STORE).clear();
-  await waitForTransaction(transaction);
-  database.close();
+  try {
+    const transaction = database.transaction([EPISODES_STORE], "readwrite");
+    transaction.objectStore(EPISODES_STORE).clear();
+    await waitForTransaction(transaction);
+  } finally {
+    database.close();
+  }
   notifyChanged();
 }

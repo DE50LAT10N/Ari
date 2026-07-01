@@ -5,7 +5,10 @@ import {
   shouldConsiderLiveTools,
   stripHtmlToText,
 } from "../src/tools/liveTools";
-import { actionText } from "../src/tools/safeActions";
+import {
+  actionText,
+  extractDeterministicSafeAction,
+} from "../src/tools/safeActions";
 import type { SafeActionProposal } from "../src/tools/safeActions";
 
 describe("liveTools", () => {
@@ -67,5 +70,38 @@ describe("safeActions actionText", () => {
 
   it("returns undefined for empty values", () => {
     expect(actionText({ ...base, content: "   " })).toBeUndefined();
+  });
+});
+
+describe("safeActions deterministic extraction", () => {
+  it("creates an open_url proposal without LLM", () => {
+    const action = extractDeterministicSafeAction(
+      "открой https://example.com/docs",
+      "Предложу открыть ссылку. Сначала появится карточка подтверждения.",
+    );
+
+    expect(action?.type).toBe("open_url");
+    expect(action?.target).toBe("https://example.com/docs");
+    expect(action?.status).toBe("pending");
+  });
+
+  it("creates an active editor file proposal when Ari promised confirmation", () => {
+    const action = extractDeterministicSafeAction(
+      "давай взглянем, что там написано",
+      "Предлагаю открыть; сначала появится карточка подтверждения.",
+      {
+        activeWindow: {
+          processName: "Cursor.exe",
+          title: "README.md - desktop-character - Cursor",
+        },
+        activeProjectRootPath: "C:\\Users\\Пользователь\\desktop-character",
+      },
+    );
+
+    expect(action?.type).toBe("open_path");
+    expect(action?.title).toContain("README.md");
+    expect(action?.target).toBe(
+      "C:\\Users\\Пользователь\\desktop-character\\README.md",
+    );
   });
 });

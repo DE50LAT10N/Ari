@@ -62,6 +62,7 @@ import {
   type ProactivePackageOptions,
 } from "../character/initiativeContext";
 import {
+  afterAdviceAttempt,
   evaluateProactiveTick,
 } from "../character/checkInitiativePolicy";
 import {
@@ -2218,17 +2219,19 @@ export function ChatPanel({
         !options.screenObservation &&
         lastUserMessage
       ) {
-        void extractSafeAction(lastUserMessage, finalReply, settings)
+        void extractSafeAction(lastUserMessage, finalReply, settings, {
+          activeWindow,
+        })
           .then((action) => {
             if (!action) return;
             ariLog("reply-meta", "debug", {
               lastActionProposal: action.title,
             });
             setHistory((current) =>
-              current.map((message, index) =>
-                index === assistantIndex &&
+              current.map((message) =>
+                message.messageId === assistantMessageId &&
                 message.role === "assistant" &&
-                message.content === finalReply
+                !message.action
                   ? { ...message, action }
                   : message,
               ),
@@ -3050,12 +3053,6 @@ export function ChatPanel({
       } else {
         markSmalltalkAttemptAt();
       }
-    } else {
-      if (pkg.proactiveReplyTone === "advice") {
-        markAdviceAttemptAt();
-      } else {
-        markSmalltalkAttemptAt();
-      }
     }
     return sent;
   }
@@ -3145,6 +3142,14 @@ export function ChatPanel({
     const userIntent = settings.intentClassifierEnabled
       ? classifyUserIntent(eventDescription).intent
       : undefined;
+    const practicalAdviceReady =
+      options.proactiveReplyTone === "advice" &&
+      Boolean(
+        options.proactivePracticalHook ||
+          options.proactiveAdviceCandidateKind ||
+          options.proactiveLinkNarrative ||
+          options.gateContext,
+      );
     const localDecision = scoreInitiativeLocally({
       description: eventDescription,
       scene,
@@ -3163,6 +3168,7 @@ export function ChatPanel({
       intent: userIntent,
       adaptiveEnabled: settings.adaptiveInitiativeEnabled,
       plannedCheckFreshTopics: options.plannedCheckFreshTopics,
+      practicalAdviceReady,
     });
     lastInitiativeFeaturesRef.current = buildInitiativeFeatures({
       risk: localDecision.annoyanceRisk,
@@ -3375,11 +3381,15 @@ export function ChatPanel({
           urgency,
           plannedSilenceMs,
         });
-        if (sent) {
+        const nextAfterAdvice = afterAdviceAttempt({
+          adviceSent: sent,
+          smalltalkReady,
+          adviceUrgencyLevel: urgency.level,
+        });
+        if (nextAfterAdvice === "silent") {
           return;
         }
-        markAdviceAttemptAt();
-        if (!smalltalkReady) {
+        if (nextAfterAdvice === "retry_advice_later") {
           return;
         }
       }

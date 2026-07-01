@@ -129,6 +129,25 @@ describe("adviceUrgency", () => {
     expect(isAdviceReady(urgency, 60_000)).toBe(false);
   });
 
+  it("ignores stale advice attempt cooldown when no advice was actually sent", () => {
+    recordClipboardSignal({
+      clipKind: "stacktrace",
+      snippet: "TypeError: Cannot read properties of undefined",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 8,
+    });
+    const urgency = scoreAdviceUrgency(bundle, defaultSettings, {
+      sessionMinutes: 8,
+      userIntervalMs: 20 * 60_000,
+    });
+
+    expect(urgency.level).toBe("high");
+    expect(isAdviceReady(urgency, 30_000, Date.now(), 20 * 60_000)).toBe(true);
+  });
+
   it("caps medium urgency interval at ten minutes", () => {
     recordClipboardSignal({
       clipKind: "code",

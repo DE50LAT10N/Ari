@@ -116,6 +116,7 @@ import {
   saveOpenCategories,
   type SettingsCategoryId,
 } from "./settingsCategoryIds";
+import { delay } from "../platform/asyncTimeout";
 
 type SettingsPanelProps = {
   settings: AppSettings;
@@ -152,10 +153,6 @@ function applyEmbeddingSettingsChange(
     invalidateEmbeddingIndexes();
   }
   onChange({ ...settings, ...patch });
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 function NumberSetting({
@@ -412,7 +409,7 @@ export function SettingsPanel({
     setOperationError(null);
     try {
       const message = await restartOllama(modelsDir);
-      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      await delay(2000);
       await refreshOllamaModels();
       setRagMessage(message);
     } catch (error) {

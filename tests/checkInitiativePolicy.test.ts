@@ -128,6 +128,30 @@ describe("checkInitiativePolicy", () => {
     ).toBe("try_smalltalk");
   });
 
+  it("does not replace failed medium or high advice with smalltalk", () => {
+    expect(
+      afterAdviceAttempt({
+        adviceSent: false,
+        smalltalkReady: true,
+        adviceUrgencyLevel: "medium",
+      }),
+    ).toBe("retry_advice_later");
+    expect(
+      afterAdviceAttempt({
+        adviceSent: false,
+        smalltalkReady: true,
+        adviceUrgencyLevel: "high",
+      }),
+    ).toBe("retry_advice_later");
+    expect(
+      afterAdviceAttempt({
+        adviceSent: false,
+        smalltalkReady: true,
+        adviceUrgencyLevel: "low",
+      }),
+    ).toBe("try_smalltalk");
+  });
+
   it("allows immersed generic check-in via companion silence", () => {
     expect(
       allowsGenericCompanionInitiative(30_000, 120_000, {
