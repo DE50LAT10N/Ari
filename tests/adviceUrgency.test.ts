@@ -7,11 +7,14 @@ import {
 import { recordWorkingEvent, invalidateWorkingMemoryCache } from "../src/memory/workingMemory";
 import { buildInitiativeSignalBundle } from "../src/character/initiativeContext";
 import {
+  describeAdviceReadiness,
+  getAdviceReadinessBlockReason,
   isAdviceReady,
   planSignalDrivenAdvice,
   scoreAdviceUrgency,
   shouldOfferLlmAdvice,
 } from "../src/character/adviceUrgency";
+import { rememberAdviceSent, resetAdviceLedgerForTests } from "../src/character/adviceLedger";
 import { buildAdviceBrief } from "../src/character/proactiveContextRich";
 import {
   MEDIUM_ADVICE_CAP_MS,
@@ -51,6 +54,7 @@ describe("adviceUrgency", () => {
     invalidateWorkingMemoryCache();
     invalidateProactiveStateCache();
     resetProactiveStateForTests();
+    resetAdviceLedgerForTests();
   });
 
   it("scores high urgency for stacktrace and stuck file", () => {
@@ -74,6 +78,27 @@ describe("adviceUrgency", () => {
     expect(urgency.level).toBe("high");
     expect(urgency.effectiveIntervalMs).toBe(URGENT_ADVICE_MIN_MS);
     expect(urgency.reasons.some((r) => r.includes("буфер"))).toBe(true);
+  });
+
+  it("raises urgency for fresh generic text in clipboard", () => {
+    recordClipboardSignal({
+      clipKind: "text",
+      snippet: "npm run test:unit failed with 3 errors",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "package.json - Ari - Cursor",
+      sessionMinutes: 5,
+    });
+    const urgency = scoreAdviceUrgency(bundle, defaultSettings, {
+      sessionMinutes: 5,
+      userIntervalMs: 20 * 60_000,
+    });
+
+    expect(urgency.score).toBeGreaterThanOrEqual(1);
+    expect(urgency.reasons.some((reason) => reason.includes("свежий буфер"))).toBe(
+      true,
+    );
   });
 
   it("does not offer low urgency for sustained IDE without strong signals", () => {
@@ -316,5 +341,65 @@ describe("adviceUrgency", () => {
     const brief = buildAdviceBrief(urgency, stuckBundle);
     expect(urgency.level).toBe("high");
     expect(brief).toMatch(/срочность high|буфер/i);
+  });
+
+  it("bypasses low-urgency 25min cap when wm user_action is in reasons", () => {
+    rememberAdviceSent({
+      tone: "advice",
+      anchor: "recent-advice",
+      signalSummary: "test",
+    });
+    const urgency = {
+      level: "low" as const,
+      score: 2,
+      reasons: ["недавнее действие в кратковременной памяти"],
+      effectiveIntervalMs: 10 * 60_000,
+      subjectKey: "comfyui",
+    };
+    expect(isAdviceReady(urgency, 600_000)).toBe(true);
+    expect(getAdviceReadinessBlockReason(urgency, 600_000)).toBeNull();
+  });
+
+  it("blocks low urgency when recent advice exists without actionable bypass", () => {
+    rememberAdviceSent({
+      tone: "advice",
+      anchor: "recent-advice",
+      signalSummary: "test",
+    });
+    const urgency = {
+      level: "low" as const,
+      score: 2,
+      reasons: ["активный режим в IDE"],
+      effectiveIntervalMs: 10 * 60_000,
+      subjectKey: "file.md",
+    };
+    expect(isAdviceReady(urgency, 600_000)).toBe(false);
+    expect(getAdviceReadinessBlockReason(urgency, 600_000)).toBe(
+      "low: уже был совет за 25 мин",
+    );
+  });
+
+  it("describeAdviceReadiness reports real block reason instead of timer-only ready", () => {
+    rememberAdviceSent({
+      tone: "advice",
+      anchor: "recent-advice",
+      signalSummary: "test",
+    });
+    const urgency = {
+      level: "low" as const,
+      score: 2,
+      reasons: ["активный режим в IDE"],
+      effectiveIntervalMs: 10 * 60_000,
+      subjectKey: "file.md",
+    };
+    const snapshot = describeAdviceReadiness(urgency, {
+      advisorEnabled: true,
+      llmOnline: true,
+      sinceAdviceAttemptMs: 600_000,
+      adviceIntervalMs: 10 * 60_000,
+    });
+    expect(snapshot.ready).toBe(false);
+    expect(snapshot.blockReason).toBe("low: уже был совет за 25 мин");
+    expect(snapshot.label).toBe("low: уже был совет за 25 мин");
   });
 });

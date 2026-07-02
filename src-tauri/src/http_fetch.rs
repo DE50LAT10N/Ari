@@ -84,7 +84,13 @@ pub async fn http_fetch(request: HttpFetchRequest) -> Result<HttpFetchResponse, 
         .as_ref()
         .map_err(|error| error.clone())?;
 
-    let mut builder = http.request(method, &url);
+    let mut builder = http
+        .request(method, &url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+        )
+        .header("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
     for (name, value) in request.headers {
         builder = builder.header(name, value);
     }

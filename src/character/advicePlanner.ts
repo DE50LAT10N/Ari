@@ -9,6 +9,11 @@ import type { AdviceUrgency } from "./adviceUrgency";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import type { ProactiveSignalFact } from "./proactiveLlmEngine";
 import { buildAdvisorHypotheses } from "./advisorHypotheses";
+import {
+  describeClipboardSemantics,
+  isClipboardSemanticallyRich,
+} from "../platform/clipboardSemantics";
+import { rerankAdviceCandidates } from "./relevanceRanker";
 
 export type AdviceCandidateKind =
   | "debug_next_step"
@@ -94,24 +99,32 @@ function feedbackBonus(
       bonus -= candidate.kind === "rest" ? 0.2 : 0.65;
     }
   }
+  const candidateArchetype = classifyAdviceArchetype(
+    candidate.actionText,
+    candidate.kind,
+  );
   for (const entry of outcomes) {
     if (!entry.outcome) continue;
     const sameKind =
       entry.candidateKind === candidate.kind ||
       entry.candidateKind === candidate.id;
+    const sameArchetype =
+      candidateArchetype !== "unknown" &&
+      candidateArchetype ===
+        classifyAdviceArchetype(entry.reason, entry.candidateKind);
     if (entry.outcome === "helped" || entry.outcome === "resolved") {
-      bonus += sameKind ? 0.28 : 0.08;
+      bonus += sameKind || sameArchetype ? 0.28 : 0.08;
     }
     if (entry.outcome === "ignored") {
-      bonus -= sameKind ? 0.35 : 0.1;
+      bonus -= sameKind || sameArchetype ? 0.35 : 0.1;
       if (candidate.kind === "clarifying_probe") bonus += 0.12;
     }
     if (entry.outcome === "stale") {
-      bonus -= sameKind ? 0.32 : 0.08;
+      bonus -= sameKind || sameArchetype ? 0.32 : 0.08;
       bonus += candidate.evidenceIds.length >= 2 ? 0.1 : -0.1;
     }
     if (entry.outcome === "interrupted") {
-      bonus -= sameKind ? 0.85 : 0.18;
+      bonus -= sameKind || sameArchetype ? 2.25 : 0.18;
       if (candidate.interruptionCost <= 0.28) bonus += 0.08;
     }
   }
@@ -150,6 +163,19 @@ function firstUsefulFeedback(
     (entry) =>
       entry.feedback === "useful" &&
       (entry.practicalHook || entry.replyText || entry.signalSummary),
+  );
+}
+
+function hasRecentAdviceKind(
+  history: AdviceLedgerEntry[],
+  kind: string,
+  now = Date.now(),
+  windowMs = 2 * 60 * 60_000,
+): boolean {
+  return history.some(
+    (entry) =>
+      now - entry.at <= windowMs &&
+      (entry.adviceCandidateKind === kind || entry.initiativeMove === kind),
   );
 }
 
@@ -315,9 +341,9 @@ export function planAdvice(input: {
 
     if (
       hypothesis.kind === "terminal_error" &&
-      !hasStackClip &&
       hypothesis.evidenceFactIds.length
     ) {
+      const terminalQuote = clip ? ` «${clip.detail.slice(0, 160)}»` : "";
       candidates.push(
         makeCandidate(
           {
@@ -325,10 +351,37 @@ export function planAdvice(input: {
             kind: "terminal_error_triage",
             evidenceIds: hypothesis.evidenceFactIds,
             actionText: file
-              ? `Свяжи видимую ошибку с ${file.detail}: предложи проверить ближайший файл/строку из сообщения и одно последнее изменение.`
-              : "Свяжи видимую ошибку с текущим окном: предложи выделить первый файл/строку из сообщения и проверить одну гипотезу.",
+              ? `Свяжи ошибку${terminalQuote} с ${file.detail}: предложи проверить ближайший файл/строку из сообщения и одно последнее изменение.`
+              : `Свяжи ошибку${terminalQuote} с текущим окном: предложи выделить первый файл/строку из сообщения и проверить одну гипотезу.`,
             expectedUtility: 0.84,
             interruptionCost: 0.24,
+            confidence: hypothesis.confidence,
+            reason: hypothesis.claim,
+          },
+          history,
+          outcomes,
+        ),
+      );
+    }
+
+    if (hypothesis.kind === "clipboard_solution" && clip) {
+      const semantics = describeClipboardSemantics(clip.detail);
+      const semanticInstruction = semantics
+        ? ` Используй элементы из буфера как якорь: ${semantics}.`
+        : "";
+      candidates.push(
+        makeCandidate(
+          {
+            id: "clipboard-solution",
+            kind: clip.detail.match(/https?:\/\/|www\./i)
+              ? "docs_lookup"
+              : "debug_next_step",
+            evidenceIds: hypothesis.evidenceFactIds,
+            actionText: file
+              ? `Разбери буфер «${clip.detail.slice(0, 160)}» как главный факт и привяжи к ${file.detail}.${semanticInstruction} Дай гипотезу по связи этих элементов, один конкретный следующий шаг и проверку результата. Не задавай уточняющий вопрос и не уходи в общий комментарий по файлу.`
+              : `Разбери буфер «${clip.detail.slice(0, 180)}».${semanticInstruction} Дай гипотезу по связи этих элементов, один конкретный следующий шаг и проверку результата. Не задавай уточняющий вопрос.`,
+            expectedUtility: 0.88,
+            interruptionCost: 0.18,
             confidence: hypothesis.confidence,
             reason: hypothesis.claim,
           },
@@ -380,9 +433,62 @@ export function planAdvice(input: {
         ),
       );
     }
+
+    if (hypothesis.kind === "stuck_before_search" && file) {
+      candidates.push(
+        makeCandidate(
+          {
+            id: "stuck-before-search",
+            kind: "debug_next_step",
+            evidenceIds: hypothesis.evidenceFactIds,
+            actionText: `Предположи узкое место в ${file.detail} до того, как пользователь пойдёт искать: проверь последний изменённый блок, его входные данные и один наблюдаемый выход. Дай конкретную гипотезу, проверку и критерий "починилось/нет".`,
+            expectedUtility: 0.86,
+            interruptionCost: 0.22,
+            confidence: hypothesis.confidence,
+            reason: hypothesis.claim,
+          },
+          history,
+          outcomes,
+        ),
+      );
+    }
   }
 
-  if (clip) {
+  const inputFriction = bundle.advisor.activitySummary.inputFrictionScore;
+  if (
+    file &&
+    inputFriction >= 1 &&
+    !candidates.some(
+      (candidate) =>
+        candidate.id === "stuck-before-search" ||
+        candidate.kind === "debug_next_step",
+    )
+  ) {
+    candidates.push(
+      makeCandidate(
+        {
+          id: "keyboard-friction-next-step",
+          kind: "debug_next_step",
+          evidenceIds: [file.id, urgency?.id].filter(Boolean) as string[],
+          actionText: `По ${file.detail} виден keyboard/input friction: не предлагай перерыв. Дай одну вероятную причину застревания, проверку ближайшего изменённого блока и конкретный критерий результата.`,
+          expectedUtility: 0.82,
+          interruptionCost: 0.2,
+          confidence: Math.min(0.82, 0.58 + inputFriction * 0.08),
+          reason: `keyboard/input friction ${inputFriction.toFixed(1)} в текущем IDE-контексте`,
+        },
+        history,
+        outcomes,
+      ),
+    );
+  }
+
+  const substantiveClip =
+    clip &&
+    (isClipboardSemanticallyRich(clip.detail) ||
+      /error|exception|failed|cannot|denied|not found|traceback|panic|function|const|class|import|def |https?:\/\/|www\.|ошиб/i.test(
+        clip.detail,
+      ));
+  if (clip && !substantiveClip) {
     const quote = clip.detail.slice(0, 120);
     candidates.push(
       makeCandidate(
@@ -490,7 +596,20 @@ export function planAdvice(input: {
     );
   }
 
-  if (bundle.advisor.breakDue) {
+  const recentRestAdvice = hasRecentAdviceKind(history, "rest");
+  const clipboardNeedsAnswer = Boolean(
+    clip &&
+      (isClipboardSemanticallyRich(clip.detail) ||
+        /error|exception|failed|cannot|denied|not found|traceback|panic|function|const|class|import|def |https?:\/\/|www\.|ошиб/i.test(
+          clip.detail,
+        )),
+  );
+  const workNeedsAnswer =
+    Boolean(file) &&
+    (bundle.advisor.activitySummary.inputFrictionScore >= 1 ||
+      bundle.advisor.stuckScore >= 0.45 ||
+      Boolean(clipboardNeedsAnswer || query || reference));
+  if (bundle.advisor.breakDue && !recentRestAdvice && !workNeedsAnswer) {
     candidates.push(
       makeCandidate(
         {
@@ -619,7 +738,12 @@ export function planAdvice(input: {
     );
   }
 
-  const ranked = candidates.sort((left, right) => right.score - left.score);
+  const ranked = rerankAdviceCandidates(candidates, {
+    bundle,
+    facts,
+    urgency: input.urgency,
+    adviceReady: input.urgency ? input.urgency.level !== "none" : undefined,
+  });
   const selected = selectAdviceCandidate(ranked, facts, history, outcomes);
 
   return {

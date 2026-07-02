@@ -1,0 +1,156 @@
+import type { AppSettings } from "../settings/appSettings";
+import type { ProactiveToneSnapshot } from "../memory/memoryTelemetry";
+import {
+  isAdviceSkewedToday,
+  isSmalltalkSkewedToday,
+} from "../memory/memoryTelemetry";
+import type { AdviceUrgency } from "./adviceUrgency";
+import {
+  hasSubstantiveAdviceSignals,
+  shouldAttemptAdviceCycle,
+} from "./adviceEngine";
+import {
+  evaluateProactiveTick,
+  type ProactiveTickAction,
+} from "./checkInitiativePolicy";
+import type { InitiativeSignalBundle } from "./initiativeContext";
+import { rankRelevanceCandidates } from "./relevanceRanker";
+
+export type ProactiveEngineDecision = {
+  action: ProactiveTickAction;
+  allowSmalltalk: boolean;
+  adviceReady: boolean;
+  adviceStarved: boolean;
+  adviceUrgency: AdviceUrgency;
+  reason: string;
+  relevanceScores?: string[];
+};
+
+export function planProactiveEngineTick(input: {
+  settings: AppSettings;
+  bundle: InitiativeSignalBundle;
+  urgency: AdviceUrgency;
+  llmOnline: boolean;
+  idleGateOpen: boolean;
+  loading: boolean;
+  smalltalkReady: boolean;
+  sinceAdviceAttemptMs: number;
+  adviceIntervalMs: number;
+  toneSnapshot: ProactiveToneSnapshot;
+  recentAdviceStreak: number;
+}): ProactiveEngineDecision {
+  const hasActionableSignals = hasSubstantiveAdviceSignals(
+    input.bundle,
+    input.urgency,
+  );
+  const adviceStarved =
+    input.settings.advisorEnabled &&
+    input.llmOnline &&
+    hasActionableSignals &&
+    input.sinceAdviceAttemptMs >= input.adviceIntervalMs &&
+    (input.toneSnapshot.adviceToday === 0 ||
+      isSmalltalkSkewedToday(input.toneSnapshot));
+
+  const adviceReady = shouldAttemptAdviceCycle({
+    advisorEnabled: input.settings.advisorEnabled,
+    idleGateOpen: input.idleGateOpen,
+    loading: input.loading,
+    urgency: input.urgency,
+    hasActionableSignals,
+    adviceStarved,
+    sinceAdviceAttemptMs: input.sinceAdviceAttemptMs,
+    adviceIntervalMs: input.adviceIntervalMs,
+  });
+
+  let action = evaluateProactiveTick({
+    adviceReady,
+    smalltalkReady: input.smalltalkReady,
+    idleGateOpen: input.idleGateOpen,
+    loading: input.loading,
+    adviceUrgencyLevel: input.urgency.level,
+    recentAdviceStreak: input.recentAdviceStreak,
+    adviceSkewedToday: isAdviceSkewedToday(input.toneSnapshot),
+    smalltalkSkewedToday: isSmalltalkSkewedToday(input.toneSnapshot),
+    adviceToday: input.toneSnapshot.adviceToday,
+    sinceAdviceAttemptMs: input.sinceAdviceAttemptMs,
+    adviceCooldownMs: input.adviceIntervalMs,
+  });
+
+  if (adviceStarved && input.idleGateOpen && !input.loading) {
+    action = "try_advice";
+  }
+
+  const protectSmalltalkSlot =
+    input.smalltalkReady &&
+    input.recentAdviceStreak >= 1 &&
+    input.urgency.level !== "high" &&
+    !isSmalltalkSkewedToday(input.toneSnapshot);
+  if (protectSmalltalkSlot) {
+    action = "try_smalltalk";
+  }
+
+  let relevanceScores: string[] | undefined;
+  if (input.idleGateOpen && !input.loading && !protectSmalltalkSlot) {
+    const candidates: Array<"silent" | "try_advice" | "try_smalltalk"> = [
+      "silent",
+    ];
+    if (adviceReady || adviceStarved || input.urgency.level === "high") {
+      candidates.push("try_advice");
+    }
+    if (input.smalltalkReady) {
+      candidates.push("try_smalltalk");
+    }
+    if (candidates.length > 2) {
+      const ranked = rankRelevanceCandidates(candidates, {
+        bundle: input.bundle,
+        urgency: input.urgency,
+        llmOnline: input.llmOnline,
+        idleGateOpen: input.idleGateOpen,
+        loading: input.loading,
+        adviceReady,
+        smalltalkReady: input.smalltalkReady,
+        toneSnapshot: input.toneSnapshot,
+        recentAdviceStreak: input.recentAdviceStreak,
+      });
+      relevanceScores = ranked.map(
+        (candidate) => `${candidate.kind}:${candidate.score.toFixed(2)}`,
+      );
+      const winner = ranked[0]?.kind;
+      if (winner && winner !== "silent") {
+        action = winner;
+      }
+    }
+  }
+
+  const adviceUrgency =
+    input.urgency.level === "none" && adviceStarved
+      ? {
+          ...input.urgency,
+          level: "low" as const,
+          score: Math.max(input.urgency.score, 1),
+          effectiveIntervalMs: input.adviceIntervalMs,
+          reasons:
+            input.urgency.reasons.length > 0
+              ? input.urgency.reasons
+              : ["принудительный совет при actionable signals"],
+        }
+      : input.urgency;
+
+  return {
+    action,
+    allowSmalltalk: action === "try_smalltalk",
+    adviceReady,
+    adviceStarved,
+    adviceUrgency,
+    reason: protectSmalltalkSlot
+      ? "protected smalltalk timer"
+      : adviceStarved
+      ? "advice starved"
+      : action === "silent"
+        ? "no proactive slot"
+        : relevanceScores
+          ? `ranker ${action}`
+          : action,
+    relevanceScores,
+  };
+}

@@ -9,10 +9,14 @@ import { buildInitiativeSignalBundle } from "../src/character/initiativeContext"
 import {
   buildAdviceFallbackBundle,
   buildClarifyingProbeBundle,
+  buildFileClarifyingQuestion,
   collectProactiveSignalFacts,
   isSingleFactorGenericAdvice,
+  isThinContextGenericAdvice,
   localReplyQualityCheck,
   resetProactiveLlmCacheForTests,
+  getLastProactiveLlmBundle,
+  getLastProactiveSynthesisReject,
   synthesizeProactiveBundle,
   tryAdviceFallbackChain,
   validateProactiveReplyLlm,
@@ -184,6 +188,36 @@ describe("proactiveLlmEngine", () => {
     expect(result.usefulnessScore).toBeGreaterThan(0.45);
   });
 
+  it("returns clarifying probe when synthesis score is zero and fallback chain fails", async () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "CHANGELOG.md - Ari - Cursor",
+      sessionMinutes: 6,
+    });
+    vi.mocked(completeLlmJson).mockResolvedValue({
+      tone: "advice",
+      linkedThemes: ["CHANGELOG.md"],
+      mergedAnchor: "CHANGELOG.md",
+      narrativeBrief: "повтор",
+      usefulnessScore: 0,
+      shouldSend: false,
+      overlapsBanned: false,
+      rejectReason: "llm synthesis rejected",
+    });
+
+    const result = await synthesizeProactiveBundle(defaultSettings, {
+      bundle,
+      tone: "advice",
+      candidateTopics: ["CHANGELOG.md"],
+      sessionMinutes: 6,
+      llmOnline: true,
+    });
+
+    expect(result.shouldSend).toBe(true);
+    expect(result.selectedAdviceCandidate?.kind).toBe("clarifying_probe");
+    expect(result.usefulnessScore).toBeGreaterThan(0);
+  });
+
   it("returns rejected LLM bundle instead of fallback when LLM is offline", async () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
@@ -199,10 +233,12 @@ describe("proactiveLlmEngine", () => {
       llmOnline: false,
     });
 
-    expect(result.source).toBe("llm");
+    expect(result.source).toBe("rejected");
     expect(result.shouldSend).toBe(false);
     expect(result.rejectReason).toBe("llm offline");
     expect(completeLlmJson).not.toHaveBeenCalled();
+    expect(getLastProactiveLlmBundle()).toBeNull();
+    expect(getLastProactiveSynthesisReject()?.rejectReason).toBe("llm offline");
   });
 
   it("falls back to planner advice when synthesis fails", async () => {
@@ -502,7 +538,7 @@ describe("proactiveLlmEngine", () => {
     expect(messages?.[1]?.content).toMatch(/Сгруппированный контекст/);
   });
 
-  it("prefers clarifying probe before generic fallback when probe facts exist", () => {
+  it("uses substantive clipboard fallback before clarifying when probe facts can answer", () => {
     recordClipboardSignal({
       clipKind: "stacktrace",
       snippet: "TypeError: Cannot read properties of undefined",
@@ -530,7 +566,36 @@ describe("proactiveLlmEngine", () => {
 
     expect(clarifying?.rejectReason).toContain("clarifying probe");
     expect(clarifying?.initiativeMove).toBe("clipboard_probe");
-    expect(chained?.selectedAdviceCandidate?.kind).toBe("clarifying_probe");
+    expect(chained?.rejectReason).toContain("fallback");
+    expect(chained?.initiativeMove).toBe("concrete_step");
+    expect(chained?.selectedAdviceCandidate?.kind).toBe("debug_next_step");
+    expect(chained?.practicalHook).toMatch(/TypeError|буфер/i);
+  });
+
+  it("uses clipboard semantic anchors in fallback advice", () => {
+    recordClipboardSignal({
+      clipKind: "text",
+      snippet: "Gates{Quiet? Offline? Busy?}\nInput{User message} --> Cmd{Chat command?}",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ARCHITECTURE.md - Ari - Cursor",
+      sessionMinutes: 8,
+    });
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "advice",
+      sessionMinutes: 8,
+    });
+    const chained = tryAdviceFallbackChain(
+      { bundle, tone: "advice", sessionMinutes: 8 },
+      facts,
+      "llm synthesis rejected",
+    );
+
+    expect(chained?.selectedAdviceCandidate?.kind).toBe("debug_next_step");
+    expect(chained?.practicalHook).toMatch(/Gates|Input|Cmd|узлы|связи/i);
+    expect(chained?.practicalHook).not.toMatch(/перерыв|скопируй|уточни/i);
   });
 
   it("flags single-factor generic advice and accepts multi-factor replies", () => {
@@ -582,5 +647,145 @@ describe("proactiveLlmEngine", () => {
         genericBundle,
       ),
     ).toBe(false);
+  });
+
+  it("detects thin-context generic advice with only passive file signal", () => {
+    const bundle = {
+      tone: "advice" as const,
+      linkedThemes: ["CHANGELOG.md"],
+      mergedAnchor: "CHANGELOG.md",
+      narrativeBrief: "проверь файл",
+      usefulnessScore: 0.62,
+      shouldSend: true,
+      overlapsBanned: false,
+      source: "llm" as const,
+      initiativeMove: "ide_invite" as const,
+    };
+    const facts = [
+      {
+        id: "file:CHANGELOG.md",
+        kind: "file" as const,
+        label: "Файл в IDE",
+        detail: "CHANGELOG.md",
+      },
+    ];
+
+    expect(
+      isThinContextGenericAdvice(
+        "А давай проверим CHANGELOG.md ещё раз? Мало ли что упустили!",
+        facts,
+        bundle,
+      ),
+    ).toBe(true);
+    expect(
+      localReplyQualityCheck(
+        bundle,
+        "Загляни ещё раз в CHANGELOG.md — вдруг там какая мелкая ошибка?",
+        facts,
+      )?.issues,
+    ).toContain("thin-context generic");
+    expect(
+      isThinContextGenericAdvice(
+        "Посмотри, нет ли в комментариях к твоему коду в ML.md каких-нибудь важных примечаний.",
+        facts.map((fact) =>
+          fact.kind === "file" ? { ...fact, detail: "ML.md" } : fact,
+        ),
+        { ...bundle, mergedAnchor: "ML.md", linkedThemes: ["ML.md"] },
+      ),
+    ).toBe(true);
+  });
+
+  it("routes thin context fallback to clarifying probe even with planner candidate", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "CHANGELOG.md - Ari - Cursor",
+      sessionMinutes: 4,
+    });
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "advice",
+      sessionMinutes: 4,
+    });
+    const chained = tryAdviceFallbackChain(
+      {
+        bundle,
+        tone: "advice",
+        sessionMinutes: 4,
+        adviceCandidate: {
+          id: "planner-1",
+          kind: "refocus",
+          evidenceIds: ["file:CHANGELOG.md"],
+          actionText: "Сделай один следующий шаг от факта: CHANGELOG.md",
+          expectedUtility: 0.7,
+          interruptionCost: 0.1,
+          confidence: 0.7,
+          reason: "фокус на файле",
+          score: 0.7,
+        },
+      },
+      facts,
+      "llm synthesis rejected",
+    );
+
+    expect(chained?.selectedAdviceCandidate?.kind).toBe("clarifying_probe");
+    expect(chained?.practicalHook).toMatch(/\?/);
+  });
+
+  it("varies file clarifying questions by filename", () => {
+    const a = buildFileClarifyingQuestion("CHANGELOG.md");
+    const b = buildFileClarifyingQuestion("README.md");
+    expect(a).toContain("CHANGELOG.md");
+    expect(b).toContain("README.md");
+    expect(a).not.toBe(b);
+  });
+
+  it("keeps last actionable bundle when a later synthesis is rejected", async () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "main.tsx - Ari - Cursor",
+      sessionMinutes: 6,
+    });
+    vi.mocked(completeLlmJson).mockResolvedValueOnce({
+      tone: "advice",
+      linkedThemes: ["main.tsx"],
+      mergedAnchor: "main.tsx",
+      narrativeBrief: "уточнение по main.tsx",
+      practicalHook: "Что сейчас делаешь с main.tsx — правишь логику или сверяешь поведение?",
+      usefulnessScore: 0.58,
+      shouldSend: true,
+      overlapsBanned: false,
+    });
+    await synthesizeProactiveBundle(defaultSettings, {
+      bundle,
+      tone: "advice",
+      candidateTopics: ["main.tsx"],
+      sessionMinutes: 6,
+      llmOnline: true,
+    });
+    expect(getLastProactiveLlmBundle()?.shouldSend).toBe(true);
+    expect(getLastProactiveLlmBundle()?.usefulnessScore).toBeGreaterThan(0.45);
+
+    vi.mocked(completeLlmJson).mockResolvedValueOnce({
+      tone: "smalltalk",
+      linkedThemes: ["повтор"],
+      mergedAnchor: "повтор",
+      narrativeBrief: "повтор",
+      usefulnessScore: 0,
+      shouldSend: false,
+      overlapsBanned: true,
+      rejectReason: "пересечение с запретами",
+    });
+    await synthesizeProactiveBundle(defaultSettings, {
+      bundle,
+      tone: "smalltalk",
+      candidateTopics: ["повтор"],
+      sessionMinutes: 6,
+      llmOnline: true,
+    });
+
+    expect(getLastProactiveLlmBundle()?.shouldSend).toBe(true);
+    expect(getLastProactiveLlmBundle()?.usefulnessScore).toBeGreaterThan(0.45);
+    expect(getLastProactiveSynthesisReject()?.tone).toBe("smalltalk");
+    expect(getLastProactiveSynthesisReject()?.source).toBe("rejected");
   });
 });

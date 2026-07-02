@@ -350,6 +350,14 @@ export function buildProactiveWebSearchQuery(
   if (bundle.advisor.dominantFile && /\.[a-z0-9]{1,6}$/i.test(bundle.advisor.dominantFile)) {
     parts.push(bundle.advisor.dominantFile);
   }
+  if (
+    bundle.advisor.activitySummary.inputFrictionScore >= 1 &&
+    (bundle.editorFile || bundle.advisor.dominantFile)
+  ) {
+    parts.push(
+      `${bundle.editorFile ?? bundle.advisor.dominantFile} stuck debugging likely cause fix`,
+    );
+  }
   const browserTheme = latestBrowserTheme(bundle);
   if (browserTheme) {
     parts.push(browserTheme.slice(0, 80));

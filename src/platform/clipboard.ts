@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ClipboardSignalKind } from "../memory/activitySignals";
+import { isClipboardSemanticallyRich } from "./clipboardSemantics";
 
 export type ClipboardContentKind = ClipboardSignalKind;
 
@@ -19,10 +20,20 @@ export function classifyClipboardText(text: string): ClipboardContentKind {
     return "stacktrace";
   }
   if (
+    /(?:error|warning|failed|failure|cannot|denied|not found|timeout|status\s+\d{3}|npm ERR!|cargo|vite|tsc|eslint|diagnostic|ошиб|предупрежд|не найден|отказано)/i.test(
+      trimmed,
+    )
+  ) {
+    return "diagnostic";
+  }
+  if (
     /(?:function\s+\w+|const\s+\w+\s*=|import\s+.+\s+from|class\s+\w+|def\s+\w+\(|public\s+(?:static\s+)?(?:void|class)|#include\s+<|fn\s+\w+\(|interface\s+\w+)/.test(
       trimmed,
     )
   ) {
+    return "code";
+  }
+  if (isClipboardSemanticallyRich(trimmed)) {
     return "code";
   }
   return "text";

@@ -52,4 +52,20 @@ describe("adviceNovelty", () => {
       true,
     );
   });
+
+  it("blocks repeated file clarifying questions after one probe", () => {
+    const issues = evaluateAdviceNovelty({
+      text: "Сейчас фокус на main.tsx — дописываешь запись к релизу или правишь уже существующий блок?",
+      candidateKind: "clarifying_probe",
+      recentEntries: [
+        ledgerEntry({
+          adviceCandidateKind: "clarifying_probe",
+          practicalHook:
+            "Вижу main.tsx — что именно хочешь сдвинуть: формат, содержание или проверку перед коммитом?",
+        }),
+      ],
+    });
+
+    expect(issues.some((issue) => issue.kind === "repeat_archetype")).toBe(true);
+  });
 });

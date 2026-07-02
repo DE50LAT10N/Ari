@@ -121,8 +121,23 @@ describe("checkInitiativePolicy", () => {
         idleGateOpen: true,
         adviceUrgencyLevel: "low",
         recentAdviceStreak: 1,
+        sinceAdviceAttemptMs: 120_000,
+        adviceCooldownMs: 60_000,
       }),
     ).toBe("try_smalltalk");
+  });
+
+  it("stays silent right after advice instead of ping-ponging to smalltalk", () => {
+    expect(
+      evaluateProactiveTick({
+        adviceReady: false,
+        smalltalkReady: true,
+        idleGateOpen: true,
+        recentAdviceStreak: 1,
+        sinceAdviceAttemptMs: 30_000,
+        adviceCooldownMs: 120_000,
+      }),
+    ).toBe("silent");
   });
 
   it("uses smalltalk when only smalltalk slot is ready", () => {

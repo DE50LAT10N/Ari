@@ -30,8 +30,14 @@ import {
   getLastProactiveMessageAt,
   getLastSmalltalkAttemptAt,
 } from "../character/proactiveState";
-import { getLastAdviceUrgency } from "../character/adviceUrgency";
-import { getLastProactiveLlmBundle } from "../character/proactiveLlmEngine";
+import {
+  getLastAdviceUrgency,
+  describeAdviceReadiness,
+  computeCadencePressure,
+} from "../character/adviceUrgency";
+import { describeAdviceEngineForDiagnostics } from "../character/adviceEngine";
+import { describeRelevanceRankerForDiagnostics } from "../character/relevanceRanker";
+import { getLastProactiveLlmBundle, getLastProactiveSynthesisReject } from "../character/proactiveLlmEngine";
 import {
   dailyInitiativeCap,
   proactiveAdviceIntervalMs,
@@ -59,6 +65,9 @@ type ProactiveDebug = {
   initiativesToday: number;
   dailyCap: number;
   nextAdviceSec: number;
+  nextAdviceLabel: string;
+  adviceBlockReason: string | null;
+  adviceReady: boolean;
   nextSmalltalkSec: number;
   lastSuppressions: string[];
   adviceUrgencyLevel: string;
@@ -71,9 +80,19 @@ type ProactiveDebug = {
   lastInitiativeMove: string | null;
   lastPrimaryChain: string | null;
   lastBundleSource: string | null;
+  lastSynthesisReject: string | null;
   adviceToday: number;
   smalltalkToday: number;
   lastAdviceDecision: string | null;
+  engineStrategy: string;
+  engineReason: string;
+  engineTrace: string[];
+  cadencePressure: string;
+  relevanceWinner: string;
+  relevanceScores: string[];
+  relevanceLearnedEvents: number;
+  relevanceLastUpdate: string | null;
+  relevanceRecentUpdates: string[];
 };
 
 function buildSnapshot(): DeskSnapshot {
@@ -92,10 +111,6 @@ function buildProactiveDebug(): ProactiveDebug {
   const adviceIntervalMs = proactiveAdviceIntervalMs(settings);
   const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
   const now = Date.now();
-  const nextAdviceSec = Math.max(
-    0,
-    Math.ceil((adviceIntervalMs - (now - getLastAdviceAttemptAt())) / 1000),
-  );
   const nextSmalltalkSec = Math.max(
     0,
     Math.ceil(
@@ -107,6 +122,25 @@ function buildProactiveDebug(): ProactiveDebug {
   const providerOnline = isLlmProviderOnline(settings, null);
   const urgency = getLastAdviceUrgency();
   const lastBundle = getLastProactiveLlmBundle();
+  const lastReject = getLastProactiveSynthesisReject();
+  const sinceAdviceAttempt = now - getLastAdviceAttemptAt();
+  const adviceReadiness = describeAdviceReadiness(urgency, {
+    advisorEnabled: settings.advisorEnabled,
+    llmOnline: providerOnline,
+    sinceAdviceAttemptMs: sinceAdviceAttempt,
+    adviceIntervalMs,
+    now,
+  });
+  const engineDebug = describeAdviceEngineForDiagnostics();
+  const relevance = describeRelevanceRankerForDiagnostics();
+  const cadence = urgency
+    ? computeCadencePressure(
+        urgency,
+        sinceAdviceAttempt,
+        now,
+        adviceIntervalMs,
+      )
+    : { level: "none" as const, reasons: [] };
 
   return {
     providerLabel: isGigaChat ? "GigaChat" : "Ollama",
@@ -119,7 +153,10 @@ function buildProactiveDebug(): ProactiveDebug {
       urgency.level !== "none",
     initiativesToday: getDailyInitiativeCount(),
     dailyCap: dailyInitiativeCap(settings),
-    nextAdviceSec,
+    nextAdviceSec: adviceReadiness.intervalWaitSec,
+    nextAdviceLabel: adviceReadiness.label,
+    adviceBlockReason: adviceReadiness.blockReason,
+    adviceReady: adviceReadiness.ready,
     nextSmalltalkSec,
     lastSuppressions: health.lastSuppressions
       .slice(-3)
@@ -137,9 +174,24 @@ function buildProactiveDebug(): ProactiveDebug {
   lastPrimaryChain:
       lastBundle?.primaryChainSummary ?? lastBundle?.narrativeBrief ?? null,
     lastBundleSource: lastBundle?.source ?? null,
+    lastSynthesisReject: lastReject
+      ? `${lastReject.tone} · score ${lastReject.usefulnessScore.toFixed(2)} · ${lastReject.rejectReason ?? "отклонён"}`
+      : null,
     adviceToday: health.proactiveTone.adviceToday,
     smalltalkToday: health.proactiveTone.smalltalkToday,
     lastAdviceDecision: getLastAdviceDecision(),
+    engineStrategy: engineDebug.strategy,
+    engineReason: engineDebug.reason,
+    engineTrace: engineDebug.trace.slice(-6),
+    cadencePressure:
+      cadence.reasons.length > 0
+        ? `${cadence.level}: ${cadence.reasons.join(" · ")}`
+        : cadence.level,
+    relevanceWinner: relevance.winner,
+    relevanceScores: relevance.scores,
+    relevanceLearnedEvents: relevance.learnedEvents,
+    relevanceLastUpdate: relevance.lastUpdate,
+    relevanceRecentUpdates: relevance.recentUpdates,
   };
 }
 
@@ -321,12 +373,56 @@ export function AriDiagnosticsSection() {
               <dt>След. совет</dt>
               <dd>
                 {settings.proactiveEnabled
-                  ? proactiveDebug.nextAdviceSec > 0
-                    ? `~${proactiveDebug.nextAdviceSec} с`
-                    : "готов"
+                  ? proactiveDebug.adviceReady
+                    ? "готов"
+                    : proactiveDebug.nextAdviceLabel
                   : "—"}
               </dd>
             </div>
+            {proactiveDebug.adviceBlockReason && !proactiveDebug.adviceReady && (
+              <div>
+                <dt>Давление cadence</dt>
+                <dd>{proactiveDebug.cadencePressure}</dd>
+              </div>
+            )}
+            <div>
+              <dt>Движок совета</dt>
+              <dd>
+                {proactiveDebug.engineStrategy} ·{" "}
+                {proactiveDebug.engineReason}
+              </dd>
+            </div>
+            <div>
+              <dt>Ranker</dt>
+              <dd>
+                {proactiveDebug.relevanceWinner}
+                {proactiveDebug.relevanceScores.length > 0
+                  ? ` · ${proactiveDebug.relevanceScores.join(" · ")}`
+                  : ""}
+              </dd>
+            </div>
+            <div>
+              <dt>Ranker learning</dt>
+              <dd>
+                {proactiveDebug.relevanceLearnedEvents > 0
+                  ? `${proactiveDebug.relevanceLearnedEvents} events · ${
+                      proactiveDebug.relevanceLastUpdate ?? "—"
+                    }`
+                  : "нет обучающих событий"}
+              </dd>
+            </div>
+            {proactiveDebug.relevanceRecentUpdates.length > 1 && (
+              <div>
+                <dt>Ranker recent</dt>
+                <dd>{proactiveDebug.relevanceRecentUpdates.join(" · ")}</dd>
+              </div>
+            )}
+            {proactiveDebug.engineTrace.length > 0 && (
+              <div>
+                <dt>Трейс движка</dt>
+                <dd>{proactiveDebug.engineTrace.join(" · ")}</dd>
+              </div>
+            )}
             <div>
               <dt>Срочность совета</dt>
               <dd>
@@ -361,6 +457,12 @@ export function AriDiagnosticsSection() {
                   : "ещё не было"}
               </dd>
             </div>
+            {proactiveDebug.lastSynthesisReject && (
+              <div>
+                <dt>Последний отказ синтеза</dt>
+                <dd>{proactiveDebug.lastSynthesisReject}</dd>
+              </div>
+            )}
             {proactiveDebug.lastInitiativeMove && (
               <div>
                 <dt>Последний move</dt>

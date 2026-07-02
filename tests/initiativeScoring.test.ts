@@ -220,6 +220,73 @@ describe("initiativeScoring", () => {
     expect(decision.allowed).toBe(false);
   });
 
+  it("allows practical advice even when topic strongly overlaps recent initiatives", () => {
+    rememberProactiveTopic(
+      "desktop character activeWindow permissions typescript multifactor",
+    );
+
+    const decision = scoreInitiativeLocally({
+      description: [
+        "Смысловая цепочка: desktop character activeWindow permissions typescript multifactor context.",
+        "Инициативный ход: ide_invite.",
+        "Конкретный заход: проверь activeWindow permissions в typescript.",
+        "Режим реплики: совет.",
+      ].join("\n"),
+      scene: "focus",
+      chatClosedAgoMs: 10 * 60_000,
+      userActivityAgoMs: 60_000,
+      dailyCap: 99,
+      riskTolerance: 0,
+      plannedCheckMinSilenceMs: 120_000,
+      practicalAdviceReady: true,
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.reason).toBe("конкретный совет по текущему контексту");
+  });
+
+  it("blocks non-advice initiatives on strong topic overlap", () => {
+    rememberProactiveTopic(
+      "desktop character activeWindow permissions typescript multifactor",
+    );
+
+    const decision = scoreInitiativeLocally({
+      description:
+        "desktop character activeWindow permissions typescript multifactor initiative check",
+      scene: "idle",
+      chatClosedAgoMs: 60 * 60_000,
+      userActivityAgoMs: 5 * 60_000,
+      dailyCap: 99,
+      riskTolerance: 0,
+      plannedCheckMinSilenceMs: 120_000,
+      practicalAdviceReady: false,
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe("тема слишком похожа на недавнюю инициативу");
+  });
+
+  it("allows engine-approved advice to bypass strong topic overlap", () => {
+    rememberProactiveTopic(
+      "desktop character activeWindow permissions typescript multifactor",
+    );
+
+    const decision = scoreInitiativeLocally({
+      description:
+        "desktop character activeWindow permissions typescript multifactor initiative check",
+      scene: "idle",
+      chatClosedAgoMs: 60 * 60_000,
+      userActivityAgoMs: 5 * 60_000,
+      dailyCap: 99,
+      riskTolerance: 0,
+      plannedCheckMinSilenceMs: 120_000,
+      engineApproved: true,
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.reason).not.toBe("тема слишком похожа на недавнюю инициативу");
+  });
+
   it("blocks planned check when no fresh topics remain at normal initiative level", () => {
     const decision = scoreInitiativeLocally({
       description: [

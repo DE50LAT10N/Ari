@@ -89,7 +89,7 @@ export type ProactivePackageOptions = {
 };
 
 export type ClipboardSnippet = {
-  kind: "code" | "stacktrace" | "url" | "text";
+  kind: "code" | "stacktrace" | "diagnostic" | "url" | "text";
   text: string;
   at: number;
 };
@@ -146,7 +146,7 @@ function collectClipboardSnippets(now: number): ClipboardSnippet[] {
     .slice(-4)
     .map((entry) => ({
       kind: entry.clipKind,
-      text: entry.snippet.slice(0, 120),
+      text: entry.snippet.slice(0, 220),
       at: entry.at,
     }));
 }
@@ -587,8 +587,22 @@ export function buildProactiveInitiativeContext(input: {
         isAdvice && synthesis.practicalHook
           ? `Конкретный заход: ${synthesis.practicalHook}`
           : "",
-        isAdvice && synthesis.adviceSteps?.length
+        isAdvice &&
+        synthesis.adviceSteps?.length &&
+        synthesis.initiativeMove !== "context_fact" &&
+        synthesis.selectedAdviceCandidate?.kind !== "clarifying_probe" &&
+        !synthesis.adviceSteps.every(
+          (step) =>
+            step.trim() === synthesis.practicalHook?.trim() ||
+            synthesis.practicalHook?.includes(step.trim()),
+        )
           ? `Конкретные шаги (обязательно отрази один): ${synthesis.adviceSteps.join(" | ")}.`
+          : "",
+        isAdvice &&
+        (synthesis.selectedAdviceCandidate?.kind === "clarifying_probe" ||
+          synthesis.initiativeMove === "clipboard_probe" ||
+          synthesis.initiativeMove === "ide_invite")
+          ? "Это уточняющий вопрос: задай его один раз своими словами, без повтора той же фразы дважды и без «я бы начала с шага»."
           : "",
         isAdvice
           ? "Свяжи минимум два фактора из цепочки в одну рекомендацию: «сделай X, потому что в твоей ситуации это решает Y и Z»; не один изолированный файл или факт."
@@ -615,6 +629,9 @@ export function buildProactiveInitiativeContext(input: {
     isAdvice ? PRACTICAL_INITIATIVE_RULE : PROACTIVE_SMALLTALK_RULE,
     isAdvice
       ? "Если есть данные из поиска или документов — встрой 1–2 проверяемых факта, команду или шаг, но формулируй как Ari, не как справочник."
+      : "",
+    isAdvice && bundle.clipboardSnippets.length > 0
+      ? "В буфере обмена есть свежий фрагмент — строй совет от него: процитируй кусок и дай проверяемый шаг по тому, что пользователь только что копировал."
       : "",
     adviceTypeHint,
     adviceBrief ? `Почему сейчас: ${adviceBrief}` : "",

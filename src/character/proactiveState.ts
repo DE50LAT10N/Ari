@@ -407,13 +407,18 @@ export function registerProactiveReplySubject(
   const anchorTrimmed = anchor?.trim();
   if (anchorTrimmed) {
     rememberProactiveTopic(anchorTrimmed);
-    return;
   }
   const snippet = replyText
     .replace(/<emotion>[^<]+<\/emotion>/gi, "")
     .trim()
     .slice(0, 160);
-  if (snippet.length >= 12) {
+  const weekdayMatch = snippet.match(
+    /понедельник|вторник|сред[аы]|четверг|пятниц[ауы]|суббот[ауы]|воскресень[ея]/i,
+  );
+  if (weekdayMatch) {
+    rememberProactiveTopic(weekdayMatch[0]);
+  }
+  if (!anchorTrimmed && snippet.length >= 12) {
     rememberProactiveTopic(snippet);
   }
 }

@@ -1,7 +1,12 @@
 import type { ActiveWindowInfo } from "../platform/activeWindow";
-import type {
-  ProactiveLlmBundle,
-  ProactiveSignalFact,
+import {
+  describeClipboardSemantics,
+  isClipboardSemanticallyRich,
+} from "../platform/clipboardSemantics";
+import {
+  buildFileClarifyingQuestion,
+  type ProactiveLlmBundle,
+  type ProactiveSignalFact,
 } from "./proactiveLlmEngine";
 
 function cleanText(value?: string, max = 180): string {
@@ -39,11 +44,20 @@ export function buildVisibleAdviceFallback(input: {
     return null;
   }
 
+  if (hook && /\?/.test(hook)) {
+    return hook.startsWith("Хм") ? hook : `Хм. ${hook}`;
+  }
+
   const step =
-    hook ||
-    (windowTitle
-      ? `сверь текущий экран «${windowTitle}» с последним действием`
-      : "сначала проверь самый свежий конкретный сигнал, а не весь клубок сразу");
+    hook && hook !== anchor
+      ? hook
+      : windowTitle
+        ? `сверь текущий экран «${windowTitle}» с последним действием`
+        : "сначала проверь самый свежий конкретный сигнал, а не весь клубок сразу";
+
+  if (step === anchor || anchor.includes(step) || step.includes(anchor)) {
+    return `Хм. ${anchor}.`;
+  }
 
   return [
     `Хм. Вижу рабочий след: ${anchor}.`,
@@ -72,10 +86,14 @@ export function buildVisibleClarifyingFallback(
   }
 
   if (clip) {
+    if (isClipboardSemanticallyRich(clip.detail)) {
+      const semantics = describeClipboardSemantics(clip.detail);
+      return `В буфере «${cleanText(clip.detail, 80)}». Я бы зацепилась за ${cleanText(semantics, 120)}: проверь, какой переход или gate между этими элементами сейчас должен сработать.`;
+    }
     return `В буфере «${cleanText(clip.detail, 80)}» — это текущая отладка или просто пример? Уточни, и я дам точный следующий шаг.`;
   }
   if (file) {
-    return `Сейчас фокус на ${cleanText(file.detail, 80)} — что именно хочешь сдвинуть: ошибку, рефакторинг или проверку?`;
+    return `${buildFileClarifyingQuestion(cleanText(file.detail, 80))} Уточни, и я дам точный следующий шаг.`;
   }
   if (screen) {
     return `На экране вижу «${cleanText(screen.detail, 80)}» — что из этого сейчас главная цель?`;

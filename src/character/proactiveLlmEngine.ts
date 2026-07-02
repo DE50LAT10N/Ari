@@ -2,6 +2,11 @@ import { completeLlmJson } from "../llm/llmClient";
 import type { AppSettings } from "../settings/appSettings";
 import { isLiteLlmModel } from "../llm/modelRouter";
 import { redactSecrets } from "../platform/secretRedaction";
+import {
+  clipboardPrimaryAnchors,
+  describeClipboardSemantics,
+  isClipboardSemanticallyRich,
+} from "../platform/clipboardSemantics";
 import { pruneWorkingMemory } from "../memory/workingMemory";
 import { formatGoalLedgerForPrompt } from "../tasks/goalLedger";
 import type { AdviceUrgency } from "./adviceUrgency";
@@ -71,7 +76,7 @@ export type ProactiveLlmBundle = {
   shouldSend: boolean;
   rejectReason?: string;
   overlapsBanned: boolean;
-  source: "llm";
+  source: "llm" | "rejected";
   initiativeMove?: ProactiveInitiativeMove;
   groundFactIds?: string[];
   topicLinks?: ProactiveTopicLink[];
@@ -83,7 +88,9 @@ export type ProactiveLlmBundle = {
 type ProactiveLlmSystemRejectReason =
   | "llm offline"
   | "llm synthesis failed"
-  | "llm synthesis rejected";
+  | "llm synthesis rejected"
+  | "llm synthesis overlaps banned"
+  | "llm synthesis low usefulness";
 
 export type ProactiveLlmInput = {
   bundle: InitiativeSignalBundle;
@@ -134,6 +141,7 @@ const USEFULNESS_MIN = 0.45;
 const bundleCache = new Map<string, { at: number; value: ProactiveLlmBundle }>();
 
 let lastBundleSnapshot: ProactiveLlmBundle | null = null;
+let lastRejectedSnapshot: ProactiveLlmBundle | null = null;
 let lastFactsSnapshot: ProactiveSignalFact[] = [];
 
 export function getLastProactiveSignalFacts(): ProactiveSignalFact[] {
@@ -188,11 +196,23 @@ function factFingerprint(
 export function resetProactiveLlmCacheForTests(): void {
   bundleCache.clear();
   lastBundleSnapshot = null;
+  lastRejectedSnapshot = null;
   lastFactsSnapshot = [];
 }
 
 export function getLastProactiveLlmBundle(): ProactiveLlmBundle | null {
   return lastBundleSnapshot;
+}
+
+export function getLastProactiveSynthesisReject(): ProactiveLlmBundle | null {
+  return lastRejectedSnapshot;
+}
+
+function isFailedSynthesisBundle(bundle: ProactiveLlmBundle): boolean {
+  if (bundle.source === "rejected") {
+    return true;
+  }
+  return !bundle.shouldSend;
 }
 
 export function setLastProactiveLlmBundle(
@@ -209,6 +229,13 @@ function rememberProactiveLlmBundle(
   bundle: ProactiveLlmBundle,
   facts: ProactiveSignalFact[],
 ): ProactiveLlmBundle {
+  if (isFailedSynthesisBundle(bundle)) {
+    lastRejectedSnapshot =
+      bundle.source === "rejected"
+        ? bundle
+        : { ...bundle, source: "rejected" };
+    return bundle;
+  }
   setLastProactiveLlmBundle(bundle, facts);
   return bundle;
 }
@@ -226,7 +253,45 @@ function createRejectedProactiveLlmBundle(
     shouldSend: false,
     rejectReason: reason,
     overlapsBanned: false,
-    source: "llm",
+    source: "rejected",
+  };
+}
+
+function isSubstantiveClipboardFact(
+  fact?: ProactiveSignalFact | null,
+): fact is ProactiveSignalFact {
+  return Boolean(
+    fact?.kind === "clipboard" &&
+      (isClipboardSemanticallyRich(fact.detail) ||
+        /error|exception|warning|failed|cannot|denied|not found|traceback|panic|function|const|class|import|def |https?:\/\/|www\.|\u043e\u0448\u0438\u0431|\u043f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434|\u0434\u0438\u0430\u0433\u043d\u043e\u0441\u0442/i.test(
+        fact.detail,
+      )),
+  );
+}
+
+function buildClipboardFallbackCandidate(
+  clip: ProactiveSignalFact,
+  file?: ProactiveSignalFact,
+): AdviceCandidate {
+  const quote = clip.detail.slice(0, 180);
+  const isUrl = /https?:\/\/|www\./i.test(clip.detail);
+  const semantics = describeClipboardSemantics(clip.detail);
+  const semanticInstruction = semantics
+    ? ` Используй элементы из буфера как якорь: ${semantics}.`
+    : "";
+  const actionText = file
+    ? `Разбери буфер «${quote}» как свежую подсказку к ${file.detail}.${semanticInstruction} Дай гипотезу по связи этих элементов, один ближайший fix/шаг и короткую проверку результата. Не уходи в общий комментарий по файлу и не задавай уточняющий вопрос.`
+    : `Разбери буфер «${quote}».${semanticInstruction} Дай гипотезу по связи этих элементов, один ближайший fix/шаг и короткую проверку результата. Не задавай уточняющий вопрос.`;
+  return {
+    id: "clipboard-fallback",
+    kind: isUrl ? "docs_lookup" : "debug_next_step",
+    evidenceIds: [clip.id, file?.id].filter(Boolean) as string[],
+    actionText,
+    expectedUtility: 0.82,
+    interruptionCost: 0.18,
+    confidence: 0.72,
+    reason: "содержательный буфер дает достаточно фактов для конкретного совета",
+    score: 0.72,
   };
 }
 
@@ -239,6 +304,13 @@ export function buildAdviceFallbackBundle(
     return null;
   }
   const candidate = input.adviceCandidate ?? null;
+  const clipboardFact = facts.find((fact) => fact.kind === "clipboard");
+  const fileFact = facts.find((fact) => fact.kind === "file");
+  const fallbackCandidate =
+    !candidate && isSubstantiveClipboardFact(clipboardFact)
+      ? buildClipboardFallbackCandidate(clipboardFact, fileFact)
+      : null;
+  const effectiveCandidate = candidate ?? fallbackCandidate;
   const groundingFacts = facts.filter((fact) =>
     ["file", "clipboard", "task", "query", "reference", "urgency", "screen", "hypothesis", "wm"].includes(
       fact.kind,
@@ -248,22 +320,22 @@ export function buildAdviceFallbackBundle(
     return null;
   }
 
-  const primaryFact = groundingFacts[0];
-  const evidenceIds = candidate?.evidenceIds.length
-    ? candidate.evidenceIds
+  const primaryFact = clipboardFact ?? groundingFacts[0];
+  const evidenceIds = effectiveCandidate?.evidenceIds.length
+    ? effectiveCandidate.evidenceIds
     : groundingFacts.slice(0, 3).map((fact) => fact.id);
   const actionText =
-    candidate?.actionText ??
+    effectiveCandidate?.actionText ??
     (primaryFact
       ? `Сделай один следующий шаг от факта: ${primaryFact.detail}`
       : "Сделай один следующий шаг по текущему рабочему контексту.");
   const anchor =
     input.candidateTopics?.[0] ??
-    candidate?.kind ??
+    effectiveCandidate?.kind ??
     primaryFact?.detail.slice(0, 80) ??
     "текущий рабочий контекст";
   const linkedThemes = [
-    candidate?.kind,
+    effectiveCandidate?.kind,
     ...groundingFacts.map((fact) => fact.detail.slice(0, 60)),
   ]
     .filter((item): item is string => Boolean(item?.trim()))
@@ -273,26 +345,26 @@ export function buildAdviceFallbackBundle(
     tone: "advice",
     linkedThemes,
     mergedAnchor: anchor.slice(0, 180),
-    narrativeBrief: candidate
-      ? `Planner выбрал ${candidate.kind}: ${candidate.reason}`
+    narrativeBrief: effectiveCandidate
+      ? `Planner выбрал ${effectiveCandidate.kind}: ${effectiveCandidate.reason}`
       : `Совет опирается на текущие факты: ${groundingFacts
           .slice(0, 2)
           .map((fact) => fact.label)
           .join(", ")}`,
     practicalHook: actionText.slice(0, 220),
     adviceSteps: [actionText.slice(0, 180)],
-    usefulnessScore: Math.max(0.62, candidate?.expectedUtility ?? 0.62),
+    usefulnessScore: Math.max(0.62, effectiveCandidate?.expectedUtility ?? 0.62),
     shouldSend: true,
     rejectReason: `fallback after ${reason}`,
     overlapsBanned: false,
     source: "llm",
     initiativeMove: "concrete_step",
     groundFactIds: evidenceIds,
-    primaryChainSummary: candidate
-      ? `${candidate.reason}: ${actionText.slice(0, 160)}`
+    primaryChainSummary: effectiveCandidate
+      ? `${effectiveCandidate.reason}: ${actionText.slice(0, 160)}`
       : actionText.slice(0, 200),
-    linkConfidence: candidate?.confidence ?? 0.58,
-    selectedAdviceCandidate: candidate ?? undefined,
+    linkConfidence: effectiveCandidate?.confidence ?? 0.58,
+    selectedAdviceCandidate: effectiveCandidate ?? undefined,
   };
 }
 
@@ -307,9 +379,10 @@ export function buildClarifyingProbeBundle(
 
   const clip = facts.find((fact) => fact.kind === "clipboard");
   const file = facts.find((fact) => fact.kind === "file");
+  const query = facts.find((fact) => fact.kind === "query");
   const screen = facts.find((fact) => fact.kind === "screen");
   const wm = facts.find((fact) => fact.kind === "wm");
-  const probeFact = clip ?? file ?? screen ?? wm;
+  const probeFact = clip ?? file ?? query ?? screen ?? wm;
   if (!probeFact) {
     return null;
   }
@@ -318,11 +391,16 @@ export function buildClarifyingProbeBundle(
   let practicalHook: string;
   if (clip) {
     initiativeMove = "clipboard_probe";
-    const quote = clip.detail.slice(0, 80);
-    practicalHook = `В буфере «${quote}» — это текущая отладка или просто пример? Уточни, и я дам точный следующий шаг.`;
+    const quote = clip.detail.slice(0, 140);
+    const substantive = isSubstantiveClipboardFact(clip);
+    practicalHook = substantive
+      ? `В буфере «${quote}». Первый ход: выдели ключевую ошибку или символ, свяжи её с ближайшим файлом/последним изменением и проверь одну гипотезу, а не перезапускай всё подряд.`
+      : `В буфере «${quote}» — это текущая отладка или просто пример? Уточни, и я дам точный следующий шаг.`;
   } else if (file) {
     initiativeMove = "ide_invite";
-    practicalHook = `Сейчас фокус на ${file.detail} — что именно хочешь сдвинуть: ошибку, рефакторинг или проверку?`;
+    practicalHook = buildFileClarifyingQuestion(file.detail);
+  } else if (query) {
+    practicalHook = `Ты искал «${query.detail.slice(0, 80)}» — это связано с тем, что делаешь в IDE сейчас, или отдельная задача?`;
   } else if (screen) {
     practicalHook = `На экране вижу «${probeFact.detail.slice(0, 80)}» — что из этого сейчас главная цель?`;
   } else {
@@ -347,7 +425,7 @@ export function buildClarifyingProbeBundle(
     mergedAnchor: probeFact.detail.slice(0, 120),
     narrativeBrief: `Нужно уточнение по ${probeFact.label}, чтобы связать цель и ситуацию в конкретный совет.`,
     practicalHook: practicalHook.slice(0, 220),
-    adviceSteps: [practicalHook.slice(0, 180)],
+    adviceSteps: [],
     usefulnessScore: 0.58,
     shouldSend: true,
     rejectReason: `clarifying probe after ${reason}`,
@@ -367,6 +445,30 @@ export function tryAdviceFallbackChain(
   reason: ProactiveLlmSystemRejectReason | string,
 ): ProactiveLlmBundle | null {
   const candidate = input.adviceCandidate;
+  const thinContext = isThinAdviceContext(facts);
+  const substantiveClipboard = facts.some((fact) =>
+    isSubstantiveClipboardFact(fact),
+  );
+  const substantivePlanner =
+    candidate &&
+    candidate.kind !== "clarifying_probe" &&
+    candidate.kind !== "uncertainty_probe" &&
+    !/сделай один следующий шаг от факта/i.test(candidate.actionText);
+
+  if (substantiveClipboard && !substantivePlanner) {
+    const fallback = buildAdviceFallbackBundle(input, facts, reason);
+    if (fallback) {
+      return fallback;
+    }
+  }
+
+  if (thinContext && !substantivePlanner && !substantiveClipboard) {
+    const clarifying = buildClarifyingProbeBundle(input, facts, reason);
+    if (clarifying) {
+      return clarifying;
+    }
+  }
+
   if (
     candidate &&
     candidate.kind !== "clarifying_probe" &&
@@ -395,7 +497,9 @@ export function collectProactiveSignalFacts(
     if (!trimmed) {
       return;
     }
-    facts.push({ id, kind, label, detail: trimmed.slice(0, 200) });
+    const maxLength =
+      kind === "clipboard" ? 320 : kind === "reference" ? 260 : 200;
+    facts.push({ id, kind, label, detail: trimmed.slice(0, maxLength) });
   };
 
   if (bundle.editorFile) {
@@ -411,7 +515,7 @@ export function collectProactiveSignalFacts(
       "clipboard",
       `clip:${clip.kind}${suffix}`,
       `Буфер (${clip.kind})`,
-      redactSecrets(clip.text).slice(0, 200),
+      redactSecrets(clip.text).slice(0, 320),
     );
   }
 
@@ -516,6 +620,16 @@ export function collectProactiveSignalFacts(
       `hypothesis:${hypotheses[0]?.kind ?? "unknown"}`,
       "Вывод советчика",
       hypothesisSummary,
+    );
+  }
+
+  if (bundle.advisor.activitySummary.inputFrictionScore >= 1) {
+    const friction = bundle.advisor.activitySummary;
+    push(
+      "hypothesis",
+      "hypothesis:input-friction",
+      "Паттерн застревания",
+      `input friction ${friction.inputFrictionScore.toFixed(1)}: паузы ${friction.recentInputPauses}, возвраты ${friction.recentInputReturns}, набор ${friction.recentKeyboardBursts}, исправления ${friction.recentCorrectionChurns}, команды ${friction.recentCommandLoops}; вероятно, нужен ответ до поиска`,
     );
   }
 
@@ -852,9 +966,63 @@ const GENERIC_ADVICE_PATTERNS = [
   /сделай один следующий шаг/i,
   /загляни(?: ещё раз)?/i,
   /посмотри(?: ещё раз)?/i,
+  /посмотри[^.?!]{0,80}(комментари|comments?|примечан|заметк)/i,
+  /взглян[иу][^.?!]{0,80}(комментари|comments?|примечан|заметк)/i,
+  /нет ли[^.?!]{0,80}(комментари|comments?|примечан|заметк)/i,
+  /обзор[^.?!]{0,80}(файл|раздел|секци)/i,
+  /пройдись[^.?!]{0,80}(по файлу|по раздел)/i,
+  /выдели главные моменты/i,
   /сверь текущий экран/i,
   /проверь самый свежий/i,
+  /провер(?:им|ь).*ещё раз/i,
+  /мало ли что/i,
+  /вдруг там.*ошибк/i,
+  /загляни.*\bв\b/i,
+  /давай проверим/i,
 ];
+
+const STRONG_GROUNDING_FACT_KINDS = new Set<ProactiveSignalFactKind>([
+  "clipboard",
+  "urgency",
+  "query",
+  "task",
+  "reference",
+  "hypothesis",
+]);
+
+export function hasStrongAdviceContext(facts: ProactiveSignalFact[]): boolean {
+  return facts.some((fact) => STRONG_GROUNDING_FACT_KINDS.has(fact.kind));
+}
+
+export function isThinAdviceContext(facts: ProactiveSignalFact[]): boolean {
+  const groundingFacts = facts.filter((fact) =>
+    GROUNDING_FACT_KINDS.has(fact.kind),
+  );
+  return groundingFacts.length > 0 && !hasStrongAdviceContext(facts);
+}
+
+export function isGenericAdviceText(text: string): boolean {
+  return GENERIC_ADVICE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function hashStringSeed(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+export function buildFileClarifyingQuestion(fileDetail: string): string {
+  const file = fileDetail.replace(/\s+/g, " ").trim().slice(0, 80);
+  const templates = [
+    `Сейчас фокус на ${file} — дописываешь запись к релизу или правишь уже существующий блок?`,
+    `Вижу ${file} — что именно хочешь сдвинуть: формат, содержание или проверку перед коммитом?`,
+    `По ${file}: это черновик для следующей версии или финальная правка? Скажи — подскажу, что не забыть проверить.`,
+    `Ты в ${file} — какой результат нужен сейчас: один конкретный пункт, секция или полный проход по файлу?`,
+  ];
+  return templates[hashStringSeed(file) % templates.length];
+}
 
 function countFactsReferencedInText(
   text: string,
@@ -895,15 +1063,60 @@ export function isSingleFactorGenericAdvice(
   if (groundingFacts.length < 2) {
     return false;
   }
-  const isGenericTemplate = GENERIC_ADVICE_PATTERNS.some((pattern) =>
-    pattern.test(reply),
-  );
+  const isGenericTemplate = isGenericAdviceText(reply);
   const isFallbackGeneric = Boolean(
     bundle.rejectReason?.includes("fallback after") &&
       bundle.initiativeMove === "concrete_step",
   );
   const refCount = countFactsReferencedInText(reply, groundingFacts);
   return (isGenericTemplate || isFallbackGeneric) && refCount < 2;
+}
+
+export function isThinContextGenericAdvice(
+  reply: string,
+  facts: ProactiveSignalFact[],
+  bundle: ProactiveLlmBundle,
+): boolean {
+  if (bundle.tone !== "advice" || !isThinAdviceContext(facts)) {
+    return false;
+  }
+  if (isGenericAdviceText(reply)) {
+    return true;
+  }
+  return Boolean(
+    bundle.rejectReason?.includes("fallback after") &&
+      ["ide_invite", "concrete_step"].includes(bundle.initiativeMove ?? ""),
+  );
+}
+
+export function replyMissesClipboardGrounding(
+  reply: string,
+  facts: ProactiveSignalFact[],
+): boolean {
+  const clipFacts = facts.filter((fact) => fact.kind === "clipboard");
+  if (!clipFacts.length) {
+    return false;
+  }
+  return !clipFacts.some((fact) => textMentionsFact(reply, fact));
+}
+
+function replyMissesClipboardSemanticAnchor(
+  reply: string,
+  facts: ProactiveSignalFact[],
+): boolean {
+  const richClipFacts = facts.filter(
+    (fact) =>
+      fact.kind === "clipboard" && isClipboardSemanticallyRich(fact.detail),
+  );
+  if (!richClipFacts.length) {
+    return false;
+  }
+  const lower = reply.toLowerCase();
+  return !richClipFacts.some((fact) =>
+    clipboardPrimaryAnchors(fact.detail).some((anchor) =>
+      lower.includes(anchor.toLowerCase()),
+    ),
+  );
 }
 
 function formatFactsForPrompt(facts: ProactiveSignalFact[]): string {
@@ -941,7 +1154,15 @@ function formatClipboardFactsForPrompt(facts: ProactiveSignalFact[]): string {
     return "";
   }
   return clips
-    .map((fact) => `- [${fact.id}] ${fact.detail}`)
+    .map((fact) => {
+      const semantics = describeClipboardSemantics(fact.detail);
+      return [
+        `- [${fact.id}] ${fact.detail}`,
+        semantics ? `  anchors: ${semantics}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
     .join("\n");
 }
 
@@ -979,6 +1200,12 @@ function bundleSynthesisRegenIssues(
   if (bundleReferencesSingleFactor(bundle, facts)) {
     issues.push("single-factor");
   }
+  if (
+    bundle.practicalHook &&
+    replyMissesClipboardSemanticAnchor(bundle.practicalHook, facts)
+  ) {
+    issues.push("нет конкретных элементов из буфера в practicalHook");
+  }
   return issues;
 }
 
@@ -991,7 +1218,19 @@ function bundleSystemPrompt(isAdvice: boolean, requireHook: boolean): string {
       ? "Режим: advice. Свяжи минимум два фактора (цель + ситуация + ограничение) в одну рекомендацию: «сделай X, потому что в твоей ситуации это решает Y и Z». narrativeBrief — одно предложение в этой форме. primaryChainSummary — назови минимум два фактора и как они вместе определяют совет. practicalHook — конкретный заход с цитатой из факта. adviceSteps — 2–4 проверяемых шага; не numbered list. Запрещён одиночный совет «сделай шаг от файла X»."
       : "Режим: smalltalk. Одна живая нить без советов и next step. Можно выбрать контекстное наблюдение или боковую тему: музыка, игры, еда, настроение, странная бытовая мысль, культурный/новостной повод. Не утверждай конкретную свежую новость без live-проверки. Предпочитай утверждение/наблюдение; не заканчивай вопросом.",
     isAdvice
+      ? "Если есть факт clipboard — это главный ориентир: процитируй фрагмент из буфера и построй совет вокруг того, что пользователь только что копировал или отлаживал."
+      : "",
+    isAdvice
+      ? "Если в clipboard есть anchors/идентификаторы/узлы/связи вроде Gates{...} или Input -> Cmd, practicalHook обязан назвать 1–3 этих элемента и объяснить, какую связь или gate проверить. Запрещены советы уровня «посмотри файл», «скопируй сюда», «сделай перерыв» без разбора элементов буфера."
+      : "",
+    isAdvice
       ? "Если есть RAG/reference/web facts, извлеки из них вероятное решение проблемы. Не ограничивайся «поищи/проверь»: дай гипотезу, конкретный fix/команду/настройку и короткую проверку исхода."
+      : "",
+    isAdvice
+      ? "Если есть факт «Паттерн застревания» или input friction, действуй как ранний советчик: назови вероятное узкое место, один проверяемый шаг и критерий результата. Не задавай уточняющий вопрос, если можно дать безопасную проверку."
+      : "",
+    isAdvice
+      ? "Если единственный конкретный факт — имя файла или окно IDE, не выдумывай обзор комментариев/разделов/заметок. Верни shouldSend=false или один короткий уточняющий вопрос о месте застревания."
       : "",
     requireHook
       ? "Обязательно practicalHook с цитатой из fact + initiativeMove + groundFactIds + topicLinks."
@@ -1169,18 +1408,34 @@ export async function synthesizeProactiveBundle(
     if (parsed) {
       const adviceNeedsFallback =
         enriched.tone === "advice" &&
-        (!parsed.shouldSend || parsed.overlapsBanned);
+        (!parsed.shouldSend ||
+          parsed.overlapsBanned ||
+          parsed.usefulnessScore < USEFULNESS_MIN);
       if (adviceNeedsFallback) {
-        const fallback = tryAdviceFallbackChain(
-          enriched,
-          facts,
-          parsed.overlapsBanned
-            ? "llm synthesis overlaps banned"
-            : "llm synthesis rejected",
-        );
+        const rejectLabel = parsed.overlapsBanned
+          ? "llm synthesis overlaps banned"
+          : parsed.usefulnessScore < USEFULNESS_MIN
+            ? "llm synthesis low usefulness"
+            : "llm synthesis rejected";
+        const fallback = tryAdviceFallbackChain(enriched, facts, rejectLabel);
         if (fallback) {
           bundleCache.set(fingerprint, { at: Date.now(), value: fallback });
           return rememberProactiveLlmBundle(fallback, facts);
+        }
+        if (enriched.tone === "advice") {
+          const clarifying = buildClarifyingProbeBundle(
+            enriched,
+            facts,
+            rejectLabel,
+          );
+          if (clarifying) {
+            bundleCache.set(fingerprint, { at: Date.now(), value: clarifying });
+            return rememberProactiveLlmBundle(clarifying, facts);
+          }
+          return rememberProactiveLlmBundle(
+            createRejectedProactiveLlmBundle(enriched.tone, rejectLabel),
+            facts,
+          );
         }
       }
       bundleCache.set(fingerprint, { at: Date.now(), value: parsed });
@@ -1331,6 +1586,29 @@ export function localReplyQualityCheck(
     isSingleFactorGenericAdvice(trimmed, facts, bundle)
   ) {
     issues.push("single-factor generic");
+  }
+
+  if (
+    bundle.tone === "advice" &&
+    !isClarifyingBundle &&
+    isThinContextGenericAdvice(trimmed, facts, bundle)
+  ) {
+    issues.push("thin-context generic");
+  }
+
+  if (
+    bundle.tone === "advice" &&
+    !isClarifyingBundle &&
+    replyMissesClipboardGrounding(trimmed, facts)
+  ) {
+    issues.push("missing clipboard quote");
+  }
+  if (
+    bundle.tone === "advice" &&
+    !isClarifyingBundle &&
+    replyMissesClipboardSemanticAnchor(trimmed, facts)
+  ) {
+    issues.push("missing clipboard semantic anchor");
   }
 
   if (issues.length) {

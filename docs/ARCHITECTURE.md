@@ -73,7 +73,9 @@ flowchart TD
   Scenario[resolveScenario] --> Package
 ```
 
-All LLM proactive paths (check-in, advisor, memory callback, tasks, distraction, PC reactions) share the same package: signal block, practical advice rule, liveliness hints, anchor, and banned-topic list before `generateReply`.
+All LLM proactive paths (check-in, advisor, memory callback, tasks, distraction, PC reactions) share the same package: signal block, practical advice rule, liveliness hints, anchor, and banned-topic list before `generateReply`. Advice/smalltalk arbitration is centralized in `proactiveEngine.ts`: smalltalk keeps its existing cadence path, while advice can preempt when actionable work signals are starved.
+
+The advisor does not store raw keyboard input. It can record aggregate `input_friction` signals only: long pauses, rapid returns, long active dwell, keyboard bursts, correction churn, and save/undo command loops in an allowed coding window. These signals contain window/file metadata and numeric counters, never typed characters.
 
 App-initiated speech (PC reactions, scenario initiatives, avatar menu) uses [`proactiveBridge.ts`](src/character/proactiveBridge.ts): enqueue from `App.tsx`, drain in `ChatPanel` → `buildProactiveInitiativePackage` → `launchProactiveInitiative`.
 
@@ -90,6 +92,7 @@ App-initiated speech (PC reactions, scenario initiatives, avatar menu) uses [`pr
 | `desktop-character.tasks.v1` | Unified tasks |
 | `desktop-character.initiative-daily.v1` | Daily initiative count |
 | `desktop-character.initiative-adaptive.v1` | Adaptive weights |
+| `desktop-character.activity-signals.v1` | Clipboard/file/query/error signals plus aggregate `input_friction` timings |
 | `desktop-character.emotion-history.v1` | Recent emotions |
 | `desktop-character.retrieval-telemetry.v1` | Last 12 retrieval passes |
 | `desktop-character.scenario-times.v1` | Scenario cooldowns |

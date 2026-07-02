@@ -100,7 +100,7 @@ describe("advicePrepareGate", () => {
     expect(fallback?.usefulnessScore).toBeGreaterThan(0.45);
   });
 
-  it("builds clarifying probe before generic when clipboard is present", () => {
+  it("builds substantive clipboard fallback before generic when clipboard can answer", () => {
     recordClipboardSignal({
       clipKind: "stacktrace",
       snippet: "TypeError: Cannot read properties of undefined",
@@ -128,7 +128,10 @@ describe("advicePrepareGate", () => {
 
     expect(clarifying?.shouldSend).toBe(true);
     expect(clarifying?.initiativeMove).toBe("clipboard_probe");
-    expect(chained?.rejectReason).toContain("clarifying probe");
+    expect(chained?.rejectReason).toContain("fallback");
+    expect(chained?.initiativeMove).toBe("concrete_step");
+    expect(chained?.selectedAdviceCandidate?.kind).toBe("debug_next_step");
+    expect(chained?.practicalHook).toMatch(/TypeError|буфер/i);
     expect(buildAdviceFallbackBundle(
       { bundle, tone: "advice", sessionMinutes: 8 },
       facts.filter((fact) => fact.kind !== "clipboard"),

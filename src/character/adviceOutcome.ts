@@ -2,6 +2,7 @@ import type { AdviceFeedback, AdviceLedgerEntry } from "./adviceLedger";
 import type { AdviceCandidateKind } from "./advicePlanner";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import type { ProactiveSignalFact } from "./proactiveLlmEngine";
+import { recordRelevanceOutcome } from "./relevanceRanker";
 
 export type AdviceOutcome =
   | "helped"
@@ -341,10 +342,12 @@ export function reconcilePendingAdviceOutcomes(input: {
   const entries = readOutcomes(now);
   let changed = false;
   let newlyIgnored = 0;
+  const newlyInferred: AdviceOutcomeRecord[] = [];
   const next = entries.map((entry) => {
     const inferred = inferPassiveOutcome(entry, input.afterState, now);
     if (inferred) {
       changed = true;
+      newlyInferred.push(inferred);
       if (
         !entry.outcome &&
         (inferred.outcome === "ignored" || inferred.outcome === "stale")
@@ -357,6 +360,9 @@ export function reconcilePendingAdviceOutcomes(input: {
   });
   if (changed) {
     saveOutcomes(next);
+  }
+  for (const inferred of newlyInferred) {
+    recordRelevanceOutcome(inferred);
   }
   if (newlyIgnored > 0 && typeof window !== "undefined") {
     window.dispatchEvent(

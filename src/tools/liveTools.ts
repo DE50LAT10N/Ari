@@ -22,9 +22,9 @@ type LiveToolPlanResponse = {
 const LIVE_TOOL_KEYWORDS =
   /(?:который час|сколько времени|сейчас час|какое время|какая дата|какой день|сегодня число|что сейчас|погод|найди|поиск|загугли|погугли|в интернете|актуальн|новост|курс|цена|когда вышел|что такое|кто такой|подскажи|объясни|расскажи|что значит|как сделать|как работает|почему|зачем|https?:\/\/|www\.)/i;
 
-/** Date/time, URL, weather — needs LLM tool picker. Generic questions use direct web fallback. */
+/** Date/time, URL, weather, live rates — needs LLM tool picker. */
 const EXPLICIT_LIVE_TOOL_PLANNER =
-  /(?:который час|сколько времени|сейчас час|какое время|какая дата|какой день|сегодня число|погод|https?:\/\/|www\.)/i;
+  /(?:который час|сколько времени|сейчас час|какое время|какая дата|какой день|сегодня число|погод|курс|цена|https?:\/\/|www\.)/i;
 
 export function shouldConsiderLiveTools(userMessage: string): boolean {
   return LIVE_TOOL_KEYWORDS.test(userMessage.trim());
@@ -38,6 +38,9 @@ export function isQuestionLikeMessage(userMessage: string): boolean {
   const normalized = userMessage.trim();
   if (!normalized) {
     return false;
+  }
+  if (/(?:курс|цена|погод|сколько стоит|актуальн|новост)/i.test(normalized)) {
+    return true;
   }
   if (
     /(?:подскажи|объясни|расскажи|что такое|как сделать|как работает|почему|зачем|когда|где|кто такой|можешь ли|что значит)/i.test(
@@ -117,7 +120,44 @@ export type WebSearchResult = {
   snippet: string;
 };
 
+export function parseDuckDuckGoLiteResults(
+  html: string,
+  limit = 5,
+): WebSearchResult[] {
+  const results: WebSearchResult[] = [];
+  const tagPattern = /<a\b[^>]*class=['"]result-link['"][^>]*>/gi;
+  let tagMatch: RegExpExecArray | null;
+  while (
+    (tagMatch = tagPattern.exec(html)) !== null &&
+    results.length < limit
+  ) {
+    const tag = tagMatch[0];
+    const hrefMatch = tag.match(/href=['"]([^'"]+)['"]/i);
+    const url = hrefMatch ? decodeDuckDuckGoUrl(hrefMatch[1]) : "";
+    const start = tagMatch.index + tag.length;
+    const endMatch = html.slice(start).match(/^([\s\S]*?)<\/a>/i);
+    const title = endMatch ? stripHtmlToText(endMatch[1]).slice(0, 200) : "";
+    if (!url || !title) {
+      continue;
+    }
+    const after = html.slice(tagMatch.index, tagMatch.index + 1600);
+    const snippetMatch = after.match(
+      /class=['"]result-snippet['"][^>]*>([\s\S]*?)<\//i,
+    );
+    const snippet = snippetMatch
+      ? stripHtmlToText(snippetMatch[1]).slice(0, 320)
+      : "";
+    results.push({ title, url, snippet });
+  }
+  return results;
+}
+
 export function parseDuckDuckGoResults(html: string, limit = 5): WebSearchResult[] {
+  const liteResults = parseDuckDuckGoLiteResults(html, limit);
+  if (liteResults.length > 0) {
+    return liteResults;
+  }
+
   const results: WebSearchResult[] = [];
   const blockPattern =
     /<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
@@ -139,12 +179,23 @@ export function parseDuckDuckGoResults(html: string, limit = 5): WebSearchResult
 }
 
 function decodeDuckDuckGoUrl(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith("//")) {
-    return `https:${trimmed}`;
-  }
+  const trimmed = raw
+    .trim()
+    .replace(/&amp;/g, "&");
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-    return trimmed;
+    try {
+      const parsed = new URL(trimmed);
+      const uddg = parsed.searchParams.get("uddg");
+      if (uddg) {
+        return decodeURIComponent(uddg);
+      }
+      return parsed.toString();
+    } catch {
+      return trimmed;
+    }
+  }
+  if (trimmed.startsWith("//")) {
+    return decodeDuckDuckGoUrl(`https:${trimmed}`);
   }
   try {
     const parsed = new URL(trimmed, "https://duckduckgo.com");
@@ -158,30 +209,60 @@ function decodeDuckDuckGoUrl(raw: string): string {
   }
 }
 
+const WEB_SEARCH_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+  "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+};
+
+async function fetchDuckDuckGoSearchHtml(query: string): Promise<string> {
+  const encoded = encodeURIComponent(query.trim().slice(0, 200));
+
+  const liteResponse = await httpFetch(
+    `https://lite.duckduckgo.com/lite/?q=${encoded}`,
+    {
+      method: "GET",
+      headers: WEB_SEARCH_HEADERS,
+    },
+  );
+  if (liteResponse.status >= 200 && liteResponse.status < 300) {
+    if (parseDuckDuckGoLiteResults(liteResponse.body, 1).length > 0) {
+      return liteResponse.body;
+    }
+  }
+
+  const htmlResponse = await httpFetch(
+    `https://html.duckduckgo.com/html/?q=${encoded}`,
+    {
+      method: "POST",
+      headers: {
+        ...WEB_SEARCH_HEADERS,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: `q=${encoded}`,
+    },
+  );
+  if (htmlResponse.status < 200 || htmlResponse.status >= 300) {
+    throw new Error(`Поиск вернул статус ${htmlResponse.status}`);
+  }
+  return htmlResponse.body;
+}
+
 export async function webSearch(
   query: string,
   _settings: AppSettings,
 ): Promise<string> {
-  const encoded = encodeURIComponent(query.trim().slice(0, 200));
-  const response = await withTimeout(
-    httpFetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: `q=${encoded}`,
-    }),
+  const html = await withTimeout(
+    fetchDuckDuckGoSearchHtml(query),
     25_000,
     "Веб-поиск",
   );
 
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`Поиск вернул статус ${response.status}`);
-  }
-
-  const results = parseDuckDuckGoResults(response.body, 5);
+  const results = parseDuckDuckGoResults(html, 5);
   if (!results.length) {
-    return `По запросу «${query}» ничего не найдено.`;
+    throw new Error(
+      `По запросу «${query}» не удалось получить результаты поиска.`,
+    );
   }
 
   return results

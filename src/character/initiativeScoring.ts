@@ -412,6 +412,22 @@ function initiativeTopicOverlapText(description: string): string {
     .toLowerCase();
 }
 
+/** Anchor-focused overlap for practical advice (avoids boilerplate false positives). */
+function practicalAdviceOverlapText(description: string): string {
+  const anchorLines = description
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) =>
+      /^(смысловая цепочка|конкретный заход|инициативный ход|выбранный planner|текущий файл|почему сейчас|режим реплики:\s*совет)/i.test(
+        line,
+      ),
+    );
+  if (anchorLines.length > 0) {
+    return initiativeTopicOverlapText(anchorLines.join("\n"));
+  }
+  return initiativeTopicOverlapText(description).slice(0, 480);
+}
+
 export function scoreInitiativeLocally({
   description,
   scene,
@@ -426,6 +442,7 @@ export function scoreInitiativeLocally({
   adaptiveEnabled = false,
   plannedCheckFreshTopics,
   practicalAdviceReady = false,
+  engineApproved = false,
 }: {
   description: string;
   scene: PresenceScene;
@@ -440,9 +457,13 @@ export function scoreInitiativeLocally({
   adaptiveEnabled?: boolean;
   plannedCheckFreshTopics?: boolean;
   practicalAdviceReady?: boolean;
+  engineApproved?: boolean;
 }): LocalInitiativeDecision {
+  const adviceBypass = practicalAdviceReady || engineApproved;
   const normalized = description.toLowerCase();
-  const overlapText = initiativeTopicOverlapText(description);
+  const overlapText = adviceBypass
+    ? practicalAdviceOverlapText(description)
+    : initiativeTopicOverlapText(description);
   const dailyCount = getDailyInitiativeCount();
   const ignoredCount = getRecentIgnoredInitiativeCount();
   const recentlyIgnored = ignoredCount > 0;
@@ -456,34 +477,46 @@ export function scoreInitiativeLocally({
     /доступны свежие темы:\s*да/i.test(normalized);
   const skipBroadTopicOverlap =
     plannedCheckReady && freshTopicsAvailable;
+  const overlapsRecentThematicTopic = (topic: string): boolean => {
+    const normalized = topic.toLowerCase().trim();
+    if (!normalized) {
+      return false;
+    }
+    const words = normalized
+      .split(/\W+/)
+      .filter((word) => word.length > 4);
+    if (words.length === 1 && overlapText.includes(words[0] ?? "")) {
+      return true;
+    }
+    const overlap = words.filter((word) => overlapText.includes(word)).length;
+    return words.length > 1 && overlap >= 2;
+  };
+  const stronglyOverlapsRecentThematicTopic = (topic: string): boolean => {
+    const normalized = topic.toLowerCase().trim();
+    if (!normalized) {
+      return false;
+    }
+    const words = normalized
+      .split(/\W+/)
+      .filter((word) => word.length > 4);
+    if (words.length === 1 && overlapText.includes(words[0] ?? "")) {
+      return true;
+    }
+    const overlap = words.filter((word) => overlapText.includes(word)).length;
+    return words.length > 2 && overlap >= 3;
+  };
   const repeated = skipBroadTopicOverlap
     ? false
-    : recentTopics.some((topic) => {
-        const words = topic
-          .toLowerCase()
-          .split(/\W+/)
-          .filter((word) => word.length > 4);
-        const overlap = words.filter((word) => overlapText.includes(word))
-          .length;
-        return words.length > 1 && overlap >= 2;
-      });
+    : recentTopics.some(overlapsRecentThematicTopic);
   const stronglyRepeated = skipBroadTopicOverlap
     ? false
-    : recentTopics.some((topic) => {
-        const words = topic
-          .toLowerCase()
-          .split(/\W+/)
-          .filter((word) => word.length > 4);
-        const overlap = words.filter((word) => overlapText.includes(word))
-          .length;
-        return words.length > 2 && overlap >= 3;
-      });
+    : recentTopics.some(stronglyOverlapsRecentThematicTopic);
 
   let risk: InitiativeRisk = "low";
   if (scene === "focus" || chatClosedAgoMs < 5 * 60_000) risk = "medium";
   const minUserSilenceMs = plannedCheckReady
     ? Math.min(60_000, plannedCheckMinSilenceMs)
-    : practicalAdviceReady
+    : adviceBypass
       ? Math.min(15_000, plannedCheckMinSilenceMs)
     : 60_000;
   if (
@@ -495,7 +528,7 @@ export function scoreInitiativeLocally({
   }
 
   let value: InitiativeValue = "low";
-  if (practicalAdviceReady) {
+  if (adviceBypass) {
     value = "high";
   } else if (openLoopHint && /(срок|напомин|незаверш|обещал)/i.test(openLoopHint)) {
     value = "high";
@@ -517,7 +550,7 @@ export function scoreInitiativeLocally({
     };
   }
 
-  if (stronglyRepeated) {
+  if (stronglyRepeated && !adviceBypass) {
     return {
       allowed: false,
       reason: "тема слишком похожа на недавнюю инициативу",
@@ -548,7 +581,7 @@ export function scoreInitiativeLocally({
     allowed = true;
   }
   if (
-    practicalAdviceReady &&
+    adviceBypass &&
     riskTolerance >= 0 &&
     dailyCount < dailyCap &&
     !ignoredTooMuchForAdvice &&
@@ -557,10 +590,10 @@ export function scoreInitiativeLocally({
     allowed = true;
   }
 
-  const reason = repeated
+  const reason = adviceBypass && allowed
+    ? "конкретный совет по текущему контексту"
+    : repeated
     ? "тема похожа на недавнюю инициативу"
-    : practicalAdviceReady && allowed
-      ? "конкретный совет по текущему контексту"
     : plannedCheckReady && allowed && riskTolerance >= 0
       ? "плановая проверка после тишины"
       : recentlyIgnored

@@ -48,6 +48,15 @@ SGD update: `η=0.08`, weight clip ±2.5. Labels: user reply = positive; pending
 
 **Per-kind daily caps** (`initiativeConfig.ts` → `dailyInitiativeKindCap`).
 
+**Relevance ranker** (`relevanceRanker.ts`):
+
+- Scores `try_advice`, `try_smalltalk`, `silent`, and concrete advice candidate kinds with logistic weights.
+- Features: active tool family, structured clipboard, diagnostic/error signals, input friction, stuck score, query/task context, cadence skew, LLM availability.
+- Advice candidates are reranked after heuristic planning, so the planner still creates safe options while the ranker learns which option is timely.
+- Explicit feedback (`useful`, `miss`, `too_generic`, `not_now`) applies a full SGD update.
+- Passive outcomes from `adviceOutcome.ts` (`resolved`, `helped`, `ignored`, `stale`, `interrupted`) apply a softer update weighted by confidence, so Ari adapts to real follow-up without overfitting on noisy context changes.
+- Learned weights and recent training events are stored locally in `desktop-character.relevance-ranker.v1` and `desktop-character.relevance-ranker-events.v1`.
+
 ## Intent classification
 
 Regex rules (`userIntent.ts`): `task_command`, `request_action`, `emotional_support`, `technical_help`, `feedback`, `question`, `smalltalk`. Highest weight wins; confidence = rule weight.

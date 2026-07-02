@@ -1,6 +1,10 @@
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import type { ProactiveSignalFact } from "./proactiveLlmEngine";
 import {
+  describeClipboardSemantics,
+  isClipboardSemanticallyRich,
+} from "../platform/clipboardSemantics";
+import {
   deriveScreenState,
   describeScreenState,
   screenStateHasTestFailure,
@@ -11,7 +15,9 @@ export type AdvisorHypothesisKind =
   | "terminal_error"
   | "test_failure"
   | "docs_to_code"
+  | "clipboard_solution"
   | "stale_context"
+  | "stuck_before_search"
   | "scope_creep"
   | "refocus"
   | "rest"
@@ -75,6 +81,7 @@ export function buildAdvisorHypotheses(
   );
   const queryFacts = facts.filter((fact) => fact.kind === "query");
   const fileFacts = factIds(facts, (fact) => fact.kind === "file");
+  const clipboardFacts = facts.filter((fact) => fact.kind === "clipboard");
 
   if (screenState.visibleProblem) {
     const isTestFailure = screenStateHasTestFailure(screenState);
@@ -110,6 +117,45 @@ export function buildAdvisorHypotheses(
     });
   }
 
+  const clipboardFactScore = (fact: ProactiveSignalFact): number => {
+    if (
+      /error|exception|failed|cannot|denied|not found|ошиб|traceback|panic/i.test(
+        fact.detail,
+      )
+    ) {
+      return 5;
+    }
+    if (isClipboardSemanticallyRich(fact.detail)) {
+      return 4;
+    }
+    if (/function|const|class|import|def |https?:\/\/|www\./i.test(fact.detail)) {
+      return 3;
+    }
+    return fact.detail.length >= 24 ? 1 : 0;
+  };
+  const latestClip = [...clipboardFacts]
+    .reverse()
+    .sort((left, right) => clipboardFactScore(right) - clipboardFactScore(left))[0];
+  if (latestClip && clipboardFactScore(latestClip) > 0) {
+    const diagnostic =
+      /error|exception|failed|cannot|denied|not found|ошиб|traceback|panic/i.test(
+        latestClip.detail,
+      );
+    const semantics = describeClipboardSemantics(latestClip.detail);
+    const semanticClaim = semantics ? ` Элементы: ${semantics}` : "";
+    push({
+      id: "clipboard-solution",
+      kind: diagnostic ? "terminal_error" : "clipboard_solution",
+      claim: diagnostic
+        ? `В буфере диагностический фрагмент, его можно разобрать без уточнения: ${latestClip.detail.slice(0, 140)}`
+        : `В буфере содержательный фрагмент, по нему можно дать следующий шаг: ${latestClip.detail.slice(0, 140)}.${semanticClaim}`,
+      evidenceFactIds: [latestClip.id, ...fileFacts],
+      confidence: diagnostic ? 0.86 : semantics ? 0.82 : 0.68,
+      risk: "low",
+      suggestedMove: "advise",
+    });
+  }
+
   if (bundle.taskActivityLink?.shouldAsk) {
     push({
       id: "stale-context",
@@ -119,6 +165,25 @@ export function buildAdvisorHypotheses(
       confidence: bundle.taskActivityLink.confidence === "weak" ? 0.58 : 0.7,
       risk: "medium",
       suggestedMove: "ask",
+    });
+  }
+
+  if (
+    bundle.editorFile &&
+    bundle.advisor.activitySummary.inputFrictionScore >= 1
+  ) {
+    const friction = bundle.advisor.activitySummary;
+    push({
+      id: "stuck-before-search",
+      kind: "stuck_before_search",
+      claim: `Похоже, пользователь застревает в ${bundle.editorFile} до поиска: input friction ${friction.inputFrictionScore.toFixed(1)}, паузы ${friction.recentInputPauses}, возвраты ${friction.recentInputReturns}, исправления ${friction.recentCorrectionChurns}, bursts ${friction.recentKeyboardBursts}`,
+      evidenceFactIds: [
+        ...fileFacts,
+        ...factIds(facts, (fact) => fact.kind === "session" || fact.kind === "urgency"),
+      ],
+      confidence: 0.62 + Math.min(0.22, friction.inputFrictionScore * 0.06),
+      risk: "medium",
+      suggestedMove: "advise",
     });
   }
 

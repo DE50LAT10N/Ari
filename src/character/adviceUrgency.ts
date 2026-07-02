@@ -108,11 +108,26 @@ export function scoreAdviceUrgency(
     subjectKey = stack.text.slice(0, 80);
   }
 
+  const diagnosticClip = freshClipboard.find((clip) => clip.kind === "diagnostic");
+  if (diagnosticClip && !stack) {
+    score += 4;
+    reasons.push(`свежая диагностика в буфере: ${diagnosticClip.text.slice(0, 70)}`);
+    subjectKey = subjectKey ?? diagnosticClip.text.slice(0, 80);
+  }
+
   const codeClip = freshClipboard.find((clip) => clip.kind === "code");
-  if (codeClip && !stack) {
-    score += 2;
+  if (codeClip && !stack && !diagnosticClip) {
+    score += 3;
     reasons.push("фрагмент кода в буфере");
     subjectKey = subjectKey ?? codeClip.text.slice(0, 60);
+  }
+
+  if (!stack && !diagnosticClip && !codeClip && freshClipboard.length > 0) {
+    const genericClip = freshClipboard[freshClipboard.length - 1];
+    const boost = genericClip.kind === "url" ? 3 : 2;
+    score += boost;
+    reasons.push(`содержательный буфер (${genericClip.kind}): ${genericClip.text.slice(0, 70)}`);
+    subjectKey = subjectKey ?? genericClip.text.slice(0, 80);
   }
 
   const repeated = bundle.advisor.repeatedErrorSignature;
@@ -125,6 +140,19 @@ export function scoreAdviceUrgency(
   if (bundle.advisor.stuckScore >= 0.45 && bundle.editorFile) {
     score += 3;
     reasons.push(`застрял на ${bundle.editorFile}`);
+    subjectKey = subjectKey ?? bundle.editorFile;
+  }
+
+  if (
+    bundle.editorFile &&
+    bundle.advisor.activitySummary.inputFrictionScore >= 1
+  ) {
+    const friction = bundle.advisor.activitySummary;
+    const boost = friction.inputFrictionScore >= 2 ? 3 : 2;
+    score += boost;
+    reasons.push(
+      `похоже на застревание до поиска: ${friction.recentInputPauses} пауз, ${friction.recentInputReturns} возвратов, ${friction.recentCorrectionChurns} исправлений в ${bundle.editorFile}`,
+    );
     subjectKey = subjectKey ?? bundle.editorFile;
   }
 
@@ -303,14 +331,22 @@ export function shouldOfferLlmAdvice(urgency: AdviceUrgency): boolean {
   return urgency.level !== "none";
 }
 
-export function isAdviceReady(
+function bypassesLowUrgencyAdviceCap(urgency: AdviceUrgency): boolean {
+  return urgency.reasons.some((reason) =>
+    /свеж(ий|ая) буфер|фрагмент кода|ошибка в буфере|недавнее действие|недавний вопрос|смена фокуса|актуальный поиск/i.test(
+      reason,
+    ),
+  );
+}
+
+export function getAdviceReadinessBlockReason(
   urgency: AdviceUrgency,
   sinceAdviceAttemptMs: number,
   now = Date.now(),
   adviceIntervalMs = urgency.effectiveIntervalMs,
-): boolean {
+): string | null {
   if (!shouldOfferLlmAdvice(urgency)) {
-    return false;
+    return "срочность none";
   }
   const effectiveIntervalMs = Math.min(adviceIntervalMs, urgency.effectiveIntervalMs);
   if (sinceAdviceAttemptMs < effectiveIntervalMs) {
@@ -320,7 +356,10 @@ export function isAdviceReady(
       now,
     );
     if (recentSentAdvice > 0) {
-      return false;
+      const waitSec = Math.ceil(
+        (effectiveIntervalMs - sinceAdviceAttemptMs) / 1000,
+      );
+      return `интервал совета (~${waitSec} с)`;
     }
   }
   if (urgency.level === "low") {
@@ -329,16 +368,16 @@ export function isAdviceReady(
       now - 25 * 60_000,
       now,
     );
-    if (recentAdvice >= 1) {
-      return false;
+    if (recentAdvice >= 1 && !bypassesLowUrgencyAdviceCap(urgency)) {
+      return "low: уже был совет за 25 мин";
     }
   }
   if (urgency.level !== "high") {
     if (countRecentAdviceStreak(now) >= 2) {
-      return false;
+      return "серия из 2+ советов подряд";
     }
     if (isAdviceSkewedToday(getProactiveToneSnapshot(now))) {
-      return false;
+      return "перекос в сторону советов сегодня";
     }
   }
   if (
@@ -347,11 +386,146 @@ export function isAdviceReady(
       urgency.subjectKey,
       effectiveIntervalMs,
       now,
-    )
+    ) &&
+    !bypassesLowUrgencyAdviceCap(urgency)
   ) {
-    return false;
+    return "тот же якорь недавно советовали";
   }
-  return true;
+  return null;
+}
+
+export type CadencePressureLevel = "none" | "low" | "medium" | "high";
+
+export function computeCadencePressure(
+  urgency: AdviceUrgency,
+  sinceAdviceAttemptMs: number,
+  now = Date.now(),
+  adviceIntervalMs = urgency.effectiveIntervalMs,
+): { level: CadencePressureLevel; reasons: string[] } {
+  const reasons: string[] = [];
+  if (!shouldOfferLlmAdvice(urgency)) {
+    return { level: "none", reasons };
+  }
+
+  const blockReason = getAdviceReadinessBlockReason(
+    urgency,
+    sinceAdviceAttemptMs,
+    now,
+    adviceIntervalMs,
+  );
+  if (!blockReason) {
+    return { level: "none", reasons };
+  }
+  reasons.push(blockReason);
+
+  if (
+    blockReason.includes("серия") ||
+    blockReason.includes("якорь") ||
+    blockReason.includes("перекос")
+  ) {
+    return { level: "high", reasons };
+  }
+  if (blockReason.includes("25 мин")) {
+    return { level: "medium", reasons };
+  }
+  if (blockReason.includes("интервал")) {
+    return { level: "low", reasons };
+  }
+  return { level: "medium", reasons };
+}
+
+export function isAdviceReady(
+  urgency: AdviceUrgency,
+  sinceAdviceAttemptMs: number,
+  now = Date.now(),
+  adviceIntervalMs = urgency.effectiveIntervalMs,
+): boolean {
+  return (
+    getAdviceReadinessBlockReason(
+      urgency,
+      sinceAdviceAttemptMs,
+      now,
+      adviceIntervalMs,
+    ) === null
+  );
+}
+
+export type AdviceReadinessSnapshot = {
+  ready: boolean;
+  label: string;
+  blockReason: string | null;
+  intervalWaitSec: number;
+};
+
+export function describeAdviceReadiness(
+  urgency: AdviceUrgency | null,
+  options: {
+    advisorEnabled: boolean;
+    llmOnline: boolean;
+    sinceAdviceAttemptMs: number;
+    adviceIntervalMs: number;
+    now?: number;
+  },
+): AdviceReadinessSnapshot {
+  const now = options.now ?? Date.now();
+  const intervalWaitSec = Math.max(
+    0,
+    Math.ceil((options.adviceIntervalMs - options.sinceAdviceAttemptMs) / 1000),
+  );
+
+  if (!options.advisorEnabled) {
+    return {
+      ready: false,
+      label: "советник выкл",
+      blockReason: "советник выкл",
+      intervalWaitSec,
+    };
+  }
+  if (!options.llmOnline) {
+    return {
+      ready: false,
+      label: "llm offline",
+      blockReason: "llm offline",
+      intervalWaitSec,
+    };
+  }
+  if (!urgency || urgency.level === "none") {
+    return {
+      ready: false,
+      label: "нет срочности",
+      blockReason: "срочность none",
+      intervalWaitSec,
+    };
+  }
+
+  const blockReason = getAdviceReadinessBlockReason(
+    urgency,
+    options.sinceAdviceAttemptMs,
+    now,
+    options.adviceIntervalMs,
+  );
+  if (blockReason) {
+    return {
+      ready: false,
+      label: blockReason,
+      blockReason,
+      intervalWaitSec,
+    };
+  }
+  if (intervalWaitSec > 0) {
+    return {
+      ready: false,
+      label: `~${intervalWaitSec} с (интервал)`,
+      blockReason: "ждёт интервал",
+      intervalWaitSec,
+    };
+  }
+  return {
+    ready: true,
+    label: "готов",
+    blockReason: null,
+    intervalWaitSec: 0,
+  };
 }
 
 export function planSignalDrivenAdvice(

@@ -120,6 +120,8 @@ export function buildAdvisorContext(
     1,
     (activitySummary.repeatedErrorCount >= 2 ? 0.45 : 0) +
       (activitySummary.longestFileDwellMs >= 45 * 60_000 ? 0.25 : 0) +
+      (activitySummary.inputFrictionScore >= 2 ? 0.22 : 0) +
+      (activitySummary.inputFrictionScore >= 1 ? 0.08 : 0) +
       ((activeFocusSession?.blockers?.length ?? 0) > 0 ? 0.15 : 0) +
       (review.stuck.length > 0 ? 0.1 : 0) +
       (focusPrefs.averageCompletionRate < 0.55 ? 0.15 : 0),
@@ -175,6 +177,9 @@ export function describeAdvisorFlags(ctx: AdvisorContext): string {
   const flags = [
     ctx.breakDue ? "breakDue" : null,
     ctx.stuckScore >= 0.5 ? `stuck=${ctx.stuckScore.toFixed(2)}` : null,
+    ctx.activitySummary.inputFrictionScore >= 1
+      ? `inputFriction=${ctx.activitySummary.inputFrictionScore.toFixed(1)}`
+      : null,
     ctx.contextThrash ? "contextThrash" : null,
     ctx.scopeCreep ? "scopeCreep" : null,
     ctx.progressWin ? "progressWin" : null,

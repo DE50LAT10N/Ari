@@ -26,6 +26,7 @@ const HIGH_RISK_ARCHETYPES: AdviceArchetype[] = [
   "one_file_focus",
   "story_meta",
   "generic_encouragement",
+  "clarifying_probe",
 ];
 
 export function normalizeAdviceText(value?: string): string {
@@ -86,6 +87,12 @@ export function classifyAdviceArchetype(
   if (/спроси|уточни|где\s+именно|что\s+именно/.test(normalized)) {
     return "clarifying_probe";
   }
+  if (
+    /\?/.test(normalized) &&
+    /фокус|дописыва|правишь|релиз|файл|буфере|уточни/.test(normalized)
+  ) {
+    return "clarifying_probe";
+  }
 
   switch (candidateKind) {
     case "refocus":
@@ -95,6 +102,8 @@ export function classifyAdviceArchetype(
     case "rest":
       return "rest";
     case "debug_next_step":
+    case "terminal_error_triage":
+    case "test_failure_triage":
       return "debug_step";
     case "task_bridge":
       return "task_bridge";

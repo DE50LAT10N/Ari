@@ -8,6 +8,10 @@ import {
   type AdviceObservedState,
 } from "../src/character/adviceOutcome";
 import type { AdviceLedgerEntry } from "../src/character/adviceLedger";
+import {
+  describeRelevanceRankerForDiagnostics,
+  resetRelevanceRankerForTests,
+} from "../src/character/relevanceRanker";
 
 function setupStorage(): void {
   const storage = new Map<string, string>();
@@ -43,6 +47,7 @@ describe("adviceOutcome", () => {
   beforeEach(() => {
     setupStorage();
     resetAdviceOutcomesForTests();
+    resetRelevanceRankerForTests();
   });
 
   it("turns explicit useful feedback into a helped outcome", () => {
@@ -86,6 +91,7 @@ describe("adviceOutcome", () => {
 
     expect(outcomes[0]?.outcome).toBe("resolved");
     expect(outcomes[0]?.reason).toMatch(/исчез/i);
+    expect(describeRelevanceRankerForDiagnostics().learnedEvents).toBe(1);
   });
 
   it("does not infer an outcome before the observation window matures", () => {

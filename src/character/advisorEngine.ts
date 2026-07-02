@@ -350,14 +350,17 @@ export function selectAdvisorAngle(ctx: AdvisorContext): AdvisorAngle | null {
     return null;
   }
 
-  if (ctx.breakDue) {
-    return "rest";
-  }
   if (ctx.repeatedErrorSignature && ctx.stuckScore >= 0.45) {
+    return "debug_help";
+  }
+  if (ctx.activitySummary.inputFrictionScore >= 1 && ctx.dominantFile) {
     return "debug_help";
   }
   if (ctx.stuckScore >= 0.6) {
     return "debug_help";
+  }
+  if (ctx.breakDue) {
+    return "rest";
   }
   if (ctx.contextThrash) {
     return "refocus";

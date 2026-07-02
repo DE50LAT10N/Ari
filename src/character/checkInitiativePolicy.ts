@@ -18,6 +18,8 @@ export function evaluateProactiveTick(input: {
   adviceSkewedToday?: boolean;
   smalltalkSkewedToday?: boolean;
   adviceToday?: number;
+  sinceAdviceAttemptMs?: number;
+  adviceCooldownMs?: number;
 }): ProactiveTickAction {
   if (input.loading || !input.idleGateOpen) {
     return "silent";
@@ -28,6 +30,12 @@ export function evaluateProactiveTick(input: {
   }
   const streak = input.recentAdviceStreak ?? 0;
   const skewed = input.adviceSkewedToday ?? false;
+  const adviceCooldownMs = input.adviceCooldownMs ?? 0;
+  const sinceAdviceAttemptMs = input.sinceAdviceAttemptMs ?? Number.POSITIVE_INFINITY;
+  const recentAdviceCooldown =
+    streak >= 1 &&
+    adviceCooldownMs > 0 &&
+    sinceAdviceAttemptMs < Math.max(adviceCooldownMs * 0.55, 90_000);
   if (
     input.adviceReady &&
     (input.adviceUrgencyLevel === "medium" ||
@@ -50,6 +58,9 @@ export function evaluateProactiveTick(input: {
       (input.adviceUrgencyLevel === "low" && (streak >= 1 || skewed)) ||
       (input.adviceUrgencyLevel === "high" && streak >= 3))
   ) {
+    if (recentAdviceCooldown) {
+      return "silent";
+    }
     if (
       input.adviceReady &&
       (input.adviceToday ?? 0) === 0 &&
@@ -61,6 +72,9 @@ export function evaluateProactiveTick(input: {
   }
   if (input.adviceReady) {
     return "try_advice";
+  }
+  if (recentAdviceCooldown) {
+    return "silent";
   }
   return "try_smalltalk";
 }

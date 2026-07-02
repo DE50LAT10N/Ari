@@ -7,7 +7,9 @@ use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 use serde::{Deserialize, Serialize};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 mod gigachat_http;
 mod http_fetch;
@@ -19,6 +21,61 @@ use ollama_env::{apply_ollama_models_path, start_ollama_with_environment, stop_o
 use project_companion::{
     binder_list_files, binder_read_file, git_file_diff, git_recent_commits, git_status_summary,
 };
+
+struct KeyboardTelemetryState {
+    last_poll_ms: Option<u64>,
+    last_down: [bool; 256],
+}
+
+impl Default for KeyboardTelemetryState {
+    fn default() -> Self {
+        Self {
+            last_poll_ms: None,
+            last_down: [false; 256],
+        }
+    }
+}
+
+static KEYBOARD_TELEMETRY: Lazy<Mutex<KeyboardTelemetryState>> =
+    Lazy::new(|| Mutex::new(KeyboardTelemetryState::default()));
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyboardActivitySnapshot {
+    observed_ms: u64,
+    printable_key_count: u32,
+    backspace_count: u32,
+    delete_count: u32,
+    escape_count: u32,
+    enter_count: u32,
+    tab_count: u32,
+    navigation_count: u32,
+    modifier_count: u32,
+    undo_count: u32,
+    save_count: u32,
+    burst_count: u32,
+    active: bool,
+}
+
+impl Default for KeyboardActivitySnapshot {
+    fn default() -> Self {
+        Self {
+            observed_ms: 0,
+            printable_key_count: 0,
+            backspace_count: 0,
+            delete_count: 0,
+            escape_count: 0,
+            enter_count: 0,
+            tab_count: 0,
+            navigation_count: 0,
+            modifier_count: 0,
+            undo_count: 0,
+            save_count: 0,
+            burst_count: 0,
+            active: false,
+        }
+    }
+}
 
 #[tauri::command]
 fn restart_ollama(models_dir: Option<String>) -> Result<String, String> {
@@ -124,6 +181,86 @@ fn get_user_idle_seconds() -> Result<u64, String> {
 #[tauri::command]
 fn get_user_idle_seconds() -> Result<u64, String> {
     Ok(0)
+}
+
+fn is_printable_vk(vk: i32) -> bool {
+    matches!(
+        vk,
+        0x20 | 0x30..=0x39 | 0x41..=0x5A | 0xBA..=0xC0 | 0xDB..=0xDF
+    )
+}
+
+fn is_navigation_vk(vk: i32) -> bool {
+    matches!(vk, 0x21..=0x28)
+}
+
+fn is_modifier_vk(vk: i32) -> bool {
+    matches!(vk, 0x10..=0x12 | 0xA0..=0xA5)
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn get_keyboard_activity_snapshot() -> Result<KeyboardActivitySnapshot, String> {
+    use windows_sys::Win32::{
+        System::SystemInformation::GetTickCount64,
+        UI::Input::KeyboardAndMouse::GetAsyncKeyState,
+    };
+
+    let now = unsafe { GetTickCount64() };
+    let mut state = KEYBOARD_TELEMETRY
+        .lock()
+        .map_err(|_| "Keyboard telemetry lock poisoned".to_string())?;
+    let observed_ms = state
+        .last_poll_ms
+        .map(|last| now.saturating_sub(last))
+        .unwrap_or(0);
+
+    let ctrl_down = unsafe { (GetAsyncKeyState(0x11) as u16 & 0x8000) != 0 };
+    let mut snapshot = KeyboardActivitySnapshot {
+        observed_ms,
+        ..KeyboardActivitySnapshot::default()
+    };
+
+    let mut key_down_count = 0_u32;
+    for vk in 0x08..=0xFE {
+        let down = unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 };
+        let index = vk as usize;
+        let pressed = down && !state.last_down[index];
+        state.last_down[index] = down;
+        if !pressed {
+            continue;
+        }
+
+        key_down_count += 1;
+        match vk {
+            0x08 => snapshot.backspace_count += 1,
+            0x2E => snapshot.delete_count += 1,
+            0x1B => snapshot.escape_count += 1,
+            0x0D => snapshot.enter_count += 1,
+            0x09 => snapshot.tab_count += 1,
+            0x53 if ctrl_down => snapshot.save_count += 1,
+            0x5A if ctrl_down => snapshot.undo_count += 1,
+            _ if is_printable_vk(vk) => snapshot.printable_key_count += 1,
+            _ if is_navigation_vk(vk) => snapshot.navigation_count += 1,
+            _ if is_modifier_vk(vk) => snapshot.modifier_count += 1,
+            _ => {}
+        }
+    }
+
+    snapshot.burst_count = if observed_ms > 0 && key_down_count >= 12 {
+        1
+    } else {
+        0
+    };
+    snapshot.active = key_down_count > 0;
+    state.last_poll_ms = Some(now);
+    Ok(snapshot)
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn get_keyboard_activity_snapshot() -> Result<KeyboardActivitySnapshot, String> {
+    Ok(KeyboardActivitySnapshot::default())
 }
 
 
@@ -894,6 +1031,7 @@ pub fn run() {
             stop_ollama_and_exit,
             exit_ari,
             get_user_idle_seconds,
+            get_keyboard_activity_snapshot,
             get_active_window,
             capture_active_window,
             perform_safe_action,

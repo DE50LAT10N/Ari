@@ -1,6 +1,12 @@
 import { redactSecrets } from "../platform/secretRedaction";
+import { isClipboardSemanticallyRich } from "../platform/clipboardSemantics";
 
-export type ClipboardSignalKind = "code" | "stacktrace" | "url" | "text";
+export type ClipboardSignalKind =
+  | "code"
+  | "stacktrace"
+  | "diagnostic"
+  | "url"
+  | "text";
 
 export type ActivitySignal =
   | {
@@ -34,6 +40,27 @@ export type ActivitySignal =
       signature: string;
       count: number;
       at: number;
+    }
+  | {
+      id: string;
+      kind: "input_friction";
+      frictionKind:
+        | "long_pause"
+        | "rapid_return"
+        | "active_dwell"
+        | "keyboard_burst"
+        | "correction_churn"
+        | "command_loop";
+      process: string;
+      title?: string;
+      file?: string;
+      idleSeconds?: number;
+      dwellMs?: number;
+      keyCount?: number;
+      correctionCount?: number;
+      commandCount?: number;
+      burstCount?: number;
+      at: number;
     };
 
 export type ActivitySignalSummary = {
@@ -46,16 +73,26 @@ export type ActivitySignalSummary = {
   topQueryThemes: string[];
   recentQueryTopics: string[];
   clipboardKinds: Partial<Record<ClipboardSignalKind, number>>;
+  latestClipboard?: Extract<ActivitySignal, { kind: "clipboard" }>;
+  substantiveClipboardCount: number;
   fileFocusCount: number;
   contextChurn: number;
   longestFileDwellMs: number;
   longestFile?: string;
+  inputFrictionScore: number;
+  recentInputPauses: number;
+  recentInputReturns: number;
+  recentKeyboardBursts: number;
+  recentCorrectionChurns: number;
+  recentCommandLoops: number;
+  lastInputFriction?: Extract<ActivitySignal, { kind: "input_friction" }>;
 };
 
 const STORAGE_KEY = "desktop-character.activity-signals.v1";
 const MAX_ENTRIES = 60;
 const TTL_MS = 8 * 60 * 60 * 1000;
 const RECENT_QUERY_WINDOW_MS = 2 * 60 * 60 * 1000;
+const INPUT_FRICTION_WINDOW_MS = 35 * 60 * 1000;
 const REPEATED_ERROR_THRESHOLD = 2;
 
 let cache: ActivitySignal[] | null = null;
@@ -145,7 +182,7 @@ export function recordClipboardSignal(input: {
   snippet: string;
   at?: number;
 }): void {
-  const snippet = redactSecrets(input.snippet.trim()).slice(0, 280);
+  const snippet = redactSecrets(input.snippet.trim()).slice(0, 520);
   if (!snippet) {
     return;
   }
@@ -216,6 +253,78 @@ export function recordQueryTopic(input: {
   });
 }
 
+export function recordInputFriction(input: {
+  frictionKind:
+    | "long_pause"
+    | "rapid_return"
+    | "active_dwell"
+    | "keyboard_burst"
+    | "correction_churn"
+    | "command_loop";
+  process: string;
+  title?: string;
+  file?: string;
+  idleSeconds?: number;
+  dwellMs?: number;
+  keyCount?: number;
+  correctionCount?: number;
+  commandCount?: number;
+  burstCount?: number;
+  at?: number;
+}): void {
+  const process = input.process.trim().slice(0, 120);
+  if (!process) {
+    return;
+  }
+  const at = input.at ?? Date.now();
+  const entries = pruneActivitySignals(at);
+  const last = [...entries]
+    .reverse()
+    .find(
+      (entry): entry is Extract<ActivitySignal, { kind: "input_friction" }> =>
+        entry.kind === "input_friction" &&
+        entry.frictionKind === input.frictionKind &&
+        entry.process === process &&
+        (entry.file ?? entry.title) === (input.file ?? input.title),
+    );
+  if (last && at - last.at < 3 * 60_000) {
+    return;
+  }
+  pushSignal({
+    id: crypto.randomUUID(),
+    kind: "input_friction",
+    frictionKind: input.frictionKind,
+    process,
+    title: input.title?.slice(0, 200),
+    file: input.file?.slice(0, 160),
+    idleSeconds:
+      input.idleSeconds !== undefined
+        ? Math.max(0, Math.round(input.idleSeconds))
+        : undefined,
+    dwellMs:
+      input.dwellMs !== undefined
+        ? Math.max(0, Math.round(input.dwellMs))
+        : undefined,
+    keyCount:
+      input.keyCount !== undefined
+        ? Math.max(0, Math.round(input.keyCount))
+        : undefined,
+    correctionCount:
+      input.correctionCount !== undefined
+        ? Math.max(0, Math.round(input.correctionCount))
+        : undefined,
+    commandCount:
+      input.commandCount !== undefined
+        ? Math.max(0, Math.round(input.commandCount))
+        : undefined,
+    burstCount:
+      input.burstCount !== undefined
+        ? Math.max(0, Math.round(input.burstCount))
+        : undefined,
+    at,
+  });
+}
+
 export function getActivitySignals(limit = MAX_ENTRIES): ActivitySignal[] {
   return pruneActivitySignals().slice(-limit);
 }
@@ -233,18 +342,36 @@ export function summarizeActivitySignals(
   const processCounts = new Map<string, number>();
   const queryCounts = new Map<string, number>();
   const clipboardKinds: Partial<Record<ClipboardSignalKind, number>> = {};
+  let latestClipboard: Extract<ActivitySignal, { kind: "clipboard" }> | undefined;
+  let substantiveClipboardCount = 0;
   let repeatedErrorSignature: string | undefined;
   let repeatedErrorCount = 0;
   let longestFileDwellMs = 0;
   let longestFile: string | undefined;
   let contextChurn = 0;
   let lastFileKey: string | undefined;
+  let inputFrictionScore = 0;
+  let recentInputPauses = 0;
+  let recentInputReturns = 0;
+  let recentKeyboardBursts = 0;
+  let recentCorrectionChurns = 0;
+  let recentCommandLoops = 0;
+  let lastInputFriction:
+    | Extract<ActivitySignal, { kind: "input_friction" }>
+    | undefined;
 
   for (const entry of recentSignals) {
     switch (entry.kind) {
       case "clipboard":
         clipboardKinds[entry.clipKind] =
           (clipboardKinds[entry.clipKind] ?? 0) + 1;
+        latestClipboard = entry;
+        if (
+          ["code", "stacktrace", "diagnostic", "url"].includes(entry.clipKind) ||
+          isClipboardSemanticallyRich(entry.snippet)
+        ) {
+          substantiveClipboardCount += 1;
+        }
         break;
       case "file_focus": {
         const key = entry.file ?? entry.title ?? entry.process;
@@ -273,6 +400,29 @@ export function summarizeActivitySignals(
         if (!repeatedErrorSignature || entry.count >= repeatedErrorCount) {
           repeatedErrorSignature = entry.signature;
           repeatedErrorCount = entry.count;
+        }
+        break;
+      case "input_friction":
+        if (now - entry.at <= INPUT_FRICTION_WINDOW_MS) {
+          lastInputFriction = entry;
+          if (entry.frictionKind === "long_pause") {
+            recentInputPauses += 1;
+            inputFrictionScore += 1.2;
+          } else if (entry.frictionKind === "rapid_return") {
+            recentInputReturns += 1;
+            inputFrictionScore += 1;
+          } else if (entry.frictionKind === "keyboard_burst") {
+            recentKeyboardBursts += 1;
+            inputFrictionScore += 1.1;
+          } else if (entry.frictionKind === "correction_churn") {
+            recentCorrectionChurns += 1;
+            inputFrictionScore += 1.5;
+          } else if (entry.frictionKind === "command_loop") {
+            recentCommandLoops += 1;
+            inputFrictionScore += 1.2;
+          } else {
+            inputFrictionScore += 0.6;
+          }
         }
         break;
       default:
@@ -324,11 +474,20 @@ export function summarizeActivitySignals(
     topQueryThemes,
     recentQueryTopics,
     clipboardKinds,
+    latestClipboard,
+    substantiveClipboardCount,
     fileFocusCount: recentSignals.filter((entry) => entry.kind === "file_focus")
       .length,
     contextChurn,
     longestFileDwellMs,
     longestFile,
+    inputFrictionScore: Math.min(5, Number(inputFrictionScore.toFixed(2))),
+    recentInputPauses,
+    recentInputReturns,
+    recentKeyboardBursts,
+    recentCorrectionChurns,
+    recentCommandLoops,
+    lastInputFriction,
   };
 }
 
@@ -341,6 +500,8 @@ export function formatActivitySignalsForDiagnostics(limit = 6): string[] {
         return `[file] ${entry.file ?? entry.title ?? entry.process} (${Math.round(entry.dwellMs / 60_000)}m)`;
       case "query_topic":
         return `[query:${entry.source}] ${entry.topic}`;
+      case "input_friction":
+        return `[input:${entry.frictionKind}] ${entry.file ?? entry.title ?? entry.process}`;
       case "repeated_error":
         return `[error×${entry.count}] ${entry.signature.slice(0, 80)}`;
       default:

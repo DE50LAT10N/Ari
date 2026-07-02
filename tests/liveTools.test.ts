@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseDuckDuckGoLiteResults,
   parseDuckDuckGoResults,
   needsExplicitLiveToolPlanner,
   shouldConsiderLiveTools,
@@ -28,6 +29,26 @@ describe("liveTools", () => {
     expect(results[0]?.url).toBe("https://example.com/page");
   });
 
+  it("parseDuckDuckGoLiteResults extracts lite layout links", () => {
+    const html = `
+      <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fcbr.ru%2Fcurrency_base%2Fdaily%2F&amp;rut=1" class='result-link'>Официальные курсы валют</a>
+    `;
+    const results = parseDuckDuckGoLiteResults(html, 3);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.title).toBe("Официальные курсы валют");
+    expect(results[0]?.url).toBe("https://cbr.ru/currency_base/daily/");
+  });
+
+  it("needsExplicitLiveToolPlanner matches datetime, weather, rates, and URLs", () => {
+    expect(needsExplicitLiveToolPlanner("который сейчас час")).toBe(true);
+    expect(needsExplicitLiveToolPlanner("какая погода в Москве")).toBe(true);
+    expect(needsExplicitLiveToolPlanner("курс доллара")).toBe(true);
+    expect(needsExplicitLiveToolPlanner("смотри https://example.com")).toBe(
+      true,
+    );
+    expect(needsExplicitLiveToolPlanner("подскажи про Rust")).toBe(false);
+  });
+
   it("shouldConsiderLiveTools matches search and time phrases", () => {
     expect(shouldConsiderLiveTools("который сейчас час")).toBe(true);
     expect(shouldConsiderLiveTools("найди в интернете курс доллара")).toBe(
@@ -35,18 +56,6 @@ describe("liveTools", () => {
     );
     expect(shouldConsiderLiveTools("подскажи про Rust")).toBe(true);
     expect(shouldConsiderLiveTools("привет, как дела?")).toBe(false);
-  });
-
-  it("needsExplicitLiveToolPlanner matches only datetime, weather, and URLs", () => {
-    expect(needsExplicitLiveToolPlanner("который сейчас час")).toBe(true);
-    expect(needsExplicitLiveToolPlanner("какая погода в Москве")).toBe(true);
-    expect(needsExplicitLiveToolPlanner("смотри https://example.com")).toBe(
-      true,
-    );
-    expect(needsExplicitLiveToolPlanner("подскажи про Rust")).toBe(false);
-    expect(needsExplicitLiveToolPlanner("найди в интернете курс доллара")).toBe(
-      false,
-    );
   });
 });
 
