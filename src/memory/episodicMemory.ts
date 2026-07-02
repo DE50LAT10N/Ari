@@ -1,3 +1,4 @@
+import { normalizeComparableText } from "../platform/textNormalize";
 import { notifyNew } from "../character/notifications";
 import {
   addTask,
@@ -114,7 +115,7 @@ function notifyChanged(): void {
 }
 
 function comparable(text: string): string {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return normalizeComparableText(text);
 }
 
 function taskToOpenLoop(task: Task): OpenLoop {

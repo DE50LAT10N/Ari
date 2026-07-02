@@ -1,4 +1,3 @@
-import { backupBeforeUpdate } from "./dataBackup";
 import { logError, logInfo } from "./logger";
 
 export async function checkForAppUpdates(): Promise<void> {
@@ -9,6 +8,7 @@ export async function checkForAppUpdates(): Promise<void> {
       return;
     }
     logInfo("Update available", { version: update.version });
+    const { backupBeforeUpdate } = await import("./dataBackup");
     await backupBeforeUpdate();
     await update.downloadAndInstall();
     const { relaunch } = await import("@tauri-apps/plugin-process");

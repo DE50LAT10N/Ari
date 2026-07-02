@@ -39,3 +39,7 @@ export function redactSecrets(text: string): string {
     .replace(LONG_HEX_PATTERN, REDACTED)
     .replace(LONG_BASE64_PATTERN, REDACTED);
 }
+
+export function redactAndTruncate(text: string, maxLength: number): string {
+  return redactSecrets(text).slice(0, maxLength);
+}

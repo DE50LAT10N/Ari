@@ -1,3 +1,5 @@
+import { loadJsonArray, saveJsonTail } from "../platform/jsonStorage";
+
 export type RetrievalSearchMode = "linear" | "ivf" | "none";
 
 export type RetrievalPassRecord = {
@@ -17,23 +19,10 @@ export type RetrievalPassRecord = {
 
 const RETRIEVAL_KEY = "desktop-character.retrieval-telemetry.v1";
 
-function readPasses(): RetrievalPassRecord[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(RETRIEVAL_KEY) ?? "[]") as unknown;
-    return Array.isArray(parsed) ? (parsed as RetrievalPassRecord[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writePasses(passes: RetrievalPassRecord[]): void {
-  localStorage.setItem(RETRIEVAL_KEY, JSON.stringify(passes.slice(-12)));
-}
-
 export function recordRetrievalPass(record: Omit<RetrievalPassRecord, "at">): void {
-  const next = readPasses();
+  const next = loadJsonArray<RetrievalPassRecord>(RETRIEVAL_KEY);
   next.push({ ...record, at: Date.now() });
-  writePasses(next);
+  saveJsonTail(RETRIEVAL_KEY, next, 12);
 }
 
 export type RetrievalHealthSnapshot = {
@@ -44,7 +33,7 @@ export type RetrievalHealthSnapshot = {
 };
 
 export function getRetrievalHealthSnapshot(): RetrievalHealthSnapshot {
-  const lastPasses = readPasses().slice(-5);
+  const lastPasses = loadJsonArray<RetrievalPassRecord>(RETRIEVAL_KEY).slice(-5);
   if (!lastPasses.length) {
     return {
       lastPasses: [],

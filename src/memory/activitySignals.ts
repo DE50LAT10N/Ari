@@ -1,4 +1,4 @@
-import { redactSecrets } from "../platform/secretRedaction";
+import { redactAndTruncate } from "../platform/secretRedaction";
 import { isClipboardSemanticallyRich } from "../platform/clipboardSemantics";
 
 export type ClipboardSignalKind =
@@ -151,7 +151,7 @@ function errorSignature(text: string): string {
           line,
         ),
     );
-  return redactSecrets(lines.slice(0, 3).join(" | ")).slice(0, 200);
+  return redactAndTruncate(lines.slice(0, 3).join(" | "), 200);
 }
 
 function trackRepeatedError(signature: string, now = Date.now()): void {
@@ -182,7 +182,7 @@ export function recordClipboardSignal(input: {
   snippet: string;
   at?: number;
 }): void {
-  const snippet = redactSecrets(input.snippet.trim()).slice(0, 520);
+  const snippet = redactAndTruncate(input.snippet.trim(), 520);
   if (!snippet) {
     return;
   }
@@ -230,7 +230,7 @@ export function recordQueryTopic(input: {
   source: "chat" | "browser";
   at?: number;
 }): void {
-  const topic = redactSecrets(input.topic.trim()).slice(0, 160);
+  const topic = redactAndTruncate(input.topic.trim(), 160);
   if (!topic || topic.length < 4) {
     return;
   }

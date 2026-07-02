@@ -118,6 +118,10 @@ One-shot multimodal call (`visionClient.ts`); low temperature (0.2); redaction v
 |------|-------|
 | chat | main chat model |
 | json, validator, initiativeGate | fastJsonModel or main |
+
+## Code-grounded advice
+
+When `adviceCodeReadingEnabled` is on and an active ProjectBinder is configured, proactive advice can read the current file from disk (sandboxed to the binder root, extension allowlist, 512 KB cap) and inject a bounded excerpt into the advice synthesis and prompt. This prevents advice that is based only on the filename/window title.
 | memoryExtraction, summarization | memoryModel or main |
 | vision | vision model |
 | embedding | embedding model |

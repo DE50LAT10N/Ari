@@ -1,3 +1,4 @@
+import { clamp } from "../../platform/mathUtils";
 import type { CharacterEmotion } from "../../types/character";
 import type { MoodTrigger } from "../moodTriggers";
 import type { MoodImpactRuleId, MoodImpactVector } from "./impactRules";
@@ -21,11 +22,11 @@ export type MoodEvent = {
   impactRuleId?: MoodImpactRuleId;
 };
 
-function clamp01(value: number): number {
+function clampIntensity(value: number): number {
   if (!Number.isFinite(value) || Number.isNaN(value)) {
     return 0;
   }
-  return Math.max(0, Math.min(2, value));
+  return clamp(value, 0, 2);
 }
 
 export function emotionToMoodEvent(input: {
@@ -41,8 +42,8 @@ export function emotionToMoodEvent(input: {
     id: `emotion:${input.emotion}:${timestamp}`,
     type: "emotion",
     source: input.source ?? "assistant_reply",
-    intensity: clamp01(input.intensity ?? 1),
-    confidence: clamp01(input.confidence ?? 1),
+    intensity: clampIntensity(input.intensity ?? 1),
+    confidence: clampIntensity(input.confidence ?? 1),
     timestamp,
     metadata: input.metadata,
     impactRuleId: `emotion:${input.emotion}`,
@@ -69,8 +70,8 @@ export function interactionToMoodEvent(input: {
     id: `interaction:${input.interaction}:${timestamp}`,
     type: "interaction",
     source: "ui_interaction",
-    intensity: clamp01(input.intensity ?? 1),
-    confidence: clamp01(input.confidence ?? 1),
+    intensity: clampIntensity(input.intensity ?? 1),
+    confidence: clampIntensity(input.confidence ?? 1),
     timestamp,
     metadata: input.metadata,
     impactRuleId: `interaction:${input.interaction}`,
@@ -92,8 +93,8 @@ export function triggerToMoodEvent(input: {
     id: `trigger:${input.trigger.kind}:${timestamp}`,
     type: "trigger",
     source: "user_message",
-    intensity: clamp01(input.intensity ?? 1),
-    confidence: clamp01(confidence),
+    intensity: clampIntensity(input.intensity ?? 1),
+    confidence: clampIntensity(confidence),
     timestamp,
     metadata: { ...input.metadata, kind: input.trigger.kind },
     impactRuleId: `trigger:${input.trigger.kind}`,

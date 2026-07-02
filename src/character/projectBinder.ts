@@ -1,6 +1,7 @@
 import {
   listBinderFiles,
   readBinderFile,
+  DEFAULT_BINDER_EXTENSIONS,
   type BinderFileEntry,
 } from "../platform/projectCompanion";
 
@@ -16,22 +17,6 @@ export type ProjectBinder = {
 
 const STORAGE_KEY = "desktop-character.project-binder.v1";
 const ACTIVE_KEY = "desktop-character.project-binder.active.v1";
-
-const DEFAULT_EXTENSIONS = [
-  "md",
-  "txt",
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "json",
-  "rs",
-  "toml",
-  "css",
-  "html",
-  "yaml",
-  "yml",
-];
 
 function notify(): void {
   window.dispatchEvent(new Event("ari-project-binder-changed"));
@@ -89,7 +74,7 @@ export function upsertProjectBinder(input: {
         : (input.id ?? crypto.randomUUID()),
     name: input.name.trim().slice(0, 120) || "Проект",
     rootPath: input.rootPath.trim(),
-    allowedExtensions: input.allowedExtensions ?? DEFAULT_EXTENSIONS,
+    allowedExtensions: input.allowedExtensions ?? DEFAULT_BINDER_EXTENSIONS,
     pinnedPaths:
       existingIndex >= 0 ? projects[existingIndex].pinnedPaths : [],
     createdAt: existingIndex >= 0 ? projects[existingIndex].createdAt : now,
@@ -104,15 +89,35 @@ export function upsertProjectBinder(input: {
   return project;
 }
 
+export function normalizeProjectRelativePath(relativePath: string): string {
+  return relativePath
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.?\//, "");
+}
+
 export function pinProjectFile(projectId: string, relativePath: string): void {
   const projects = loadAll();
   const index = projects.findIndex((project) => project.id === projectId);
   if (index < 0) return;
-  const normalized = relativePath.trim().replace(/\\/g, "/");
+  const normalized = normalizeProjectRelativePath(relativePath);
   if (!normalized || projects[index].pinnedPaths.includes(normalized)) return;
   projects[index] = {
     ...projects[index],
     pinnedPaths: [normalized, ...projects[index].pinnedPaths].slice(0, 30),
+    updatedAt: Date.now(),
+  };
+  saveAll(projects);
+}
+
+export function unpinProjectFile(projectId: string, relativePath: string): void {
+  const projects = loadAll();
+  const index = projects.findIndex((project) => project.id === projectId);
+  if (index < 0) return;
+  const normalized = normalizeProjectRelativePath(relativePath);
+  projects[index] = {
+    ...projects[index],
+    pinnedPaths: projects[index].pinnedPaths.filter((path) => path !== normalized),
     updatedAt: Date.now(),
   };
   saveAll(projects);

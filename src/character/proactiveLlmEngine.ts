@@ -1,7 +1,8 @@
 import { completeLlmJson } from "../llm/llmClient";
 import type { AppSettings } from "../settings/appSettings";
 import { isLiteLlmModel } from "../llm/modelRouter";
-import { redactSecrets } from "../platform/secretRedaction";
+import { redactAndTruncate } from "../platform/secretRedaction";
+import { hashStringDjb2 } from "../platform/hashUtils";
 import {
   clipboardPrimaryAnchors,
   describeClipboardSemantics,
@@ -50,6 +51,7 @@ export type ProactiveSignalFactKind =
   | "chat"
   | "task"
   | "query"
+  | "code"
   | "reference"
   | "wm"
   | "urgency"
@@ -107,6 +109,7 @@ export type ProactiveLlmInput = {
   requirePracticalHook?: boolean;
   moveHints?: ProactiveMoveHint[];
   ragSnippets?: string[];
+  codeExcerpts?: Array<{ file: string; text: string }>;
   topicChains?: ProactiveTopicChain[];
   topicLinks?: ProactiveTopicLink[];
   adviceCandidate?: AdviceCandidate | null;
@@ -506,6 +509,16 @@ export function collectProactiveSignalFacts(
     push("file", `file:${bundle.editorFile}`, "Файл в IDE", bundle.editorFile);
   }
 
+  if (input.codeExcerpts?.length) {
+    const excerpt = input.codeExcerpts[0];
+    push(
+      "code",
+      `code:${excerpt.file}`,
+      "Фрагмент кода (реальный файл)",
+      redactAndTruncate(excerpt.text, 200),
+    );
+  }
+
   const recentClips = bundle.clipboardSnippets.slice(-3);
   for (let index = 0; index < recentClips.length; index++) {
     const clip = recentClips[index];
@@ -515,7 +528,7 @@ export function collectProactiveSignalFacts(
       "clipboard",
       `clip:${clip.kind}${suffix}`,
       `Буфер (${clip.kind})`,
-      redactSecrets(clip.text).slice(0, 320),
+      redactAndTruncate(clip.text, 320),
     );
   }
 
@@ -605,7 +618,7 @@ export function collectProactiveSignalFacts(
       "reference",
       `reference:${index}`,
       "RAG / web reference",
-      redactSecrets(snippet).slice(0, 260),
+      redactAndTruncate(snippet, 260),
     );
   }
 
@@ -1005,14 +1018,6 @@ export function isGenericAdviceText(text: string): boolean {
   return GENERIC_ADVICE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-function hashStringSeed(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) | 0;
-  }
-  return Math.abs(hash);
-}
-
 export function buildFileClarifyingQuestion(fileDetail: string): string {
   const file = fileDetail.replace(/\s+/g, " ").trim().slice(0, 80);
   const templates = [
@@ -1021,7 +1026,7 @@ export function buildFileClarifyingQuestion(fileDetail: string): string {
     `По ${file}: это черновик для следующей версии или финальная правка? Скажи — подскажу, что не забыть проверить.`,
     `Ты в ${file} — какой результат нужен сейчас: один конкретный пункт, секция или полный проход по файлу?`,
   ];
-  return templates[hashStringSeed(file) % templates.length];
+  return templates[hashStringDjb2(file) % templates.length];
 }
 
 function countFactsReferencedInText(
@@ -1227,6 +1232,9 @@ function bundleSystemPrompt(isAdvice: boolean, requireHook: boolean): string {
       ? "Если есть RAG/reference/web facts, извлеки из них вероятное решение проблемы. Не ограничивайся «поищи/проверь»: дай гипотезу, конкретный fix/команду/настройку и короткую проверку исхода."
       : "",
     isAdvice
+      ? "Если передан фрагмент реального кода (из project binder), анализируй именно код: назови конкретные функции/символы/условия, вероятную проблему и один безопасный следующий шаг. Запрещено обсуждать «комментарии к файлу» или ограничиваться именем файла."
+      : "",
+    isAdvice
       ? "Если есть факт «Паттерн застревания» или input friction, действуй как ранний советчик: назови вероятное узкое место, один проверяемый шаг и критерий результата. Не задавай уточняющий вопрос, если можно дать безопасную проверку."
       : "",
     isAdvice
@@ -1284,6 +1292,9 @@ async function callSynthesisLlm(
             : "",
           input.ragSnippets?.length
             ? `Фрагменты RAG/reference для решения проблемы:\n${input.ragSnippets.map((snippet) => `- ${snippet.slice(0, 360)}`).join("\n")}`
+            : "",
+          input.codeExcerpts?.length
+            ? `Реальный код из файла ${input.codeExcerpts[0]!.file} (проанализируй сам код, не имя файла):\n\`\`\`\n${redactAndTruncate(input.codeExcerpts[0]!.text, 2000)}\n\`\`\``
             : "",
           input.candidateTopics?.length
             ? `Кандидаты (ярлыки, не копируй дословно):\n${input.candidateTopics.join("\n")}`

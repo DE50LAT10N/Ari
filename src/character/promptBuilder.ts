@@ -128,6 +128,7 @@ export type RuntimeContext = {
   proactiveLinkNarrative?: string;
   proactivePracticalHook?: string;
   proactiveAdviceSteps?: string[];
+  proactiveCodeExcerpt?: { file: string; text: string };
   proactiveInitiativeMove?: string;
   proactiveNoveltyGuidance?: string;
   userFactDetails?: Array<{
@@ -493,6 +494,16 @@ function createSystemPrompt(context?: RuntimeContext): string {
           : "",
         context.proactiveAdviceSteps?.length && isAdvice
           ? `Готовая суть совета (обязательно донеси её содержательно, выбери самый полезный 1 шаг и вплети его в реплику, не выкидывай конкретику): ${context.proactiveAdviceSteps.map((step) => sanitizeUntrusted(step, 160)).join(" • ")}.`
+          : "",
+        context.proactiveCodeExcerpt && isAdvice
+          ? [
+              "Если передан реальный код из файла — суди по коду: назови конкретные функции/символы/условия и один следующий шаг. Не говори про «комментарии к файлу».",
+              `Код из файла ${sanitizeUntrusted(context.proactiveCodeExcerpt.file, 120)}:`,
+              wrapUntrusted(
+                "код",
+                sanitizeUntrusted(context.proactiveCodeExcerpt.text, 2400),
+              ),
+            ].join("\n")
           : "",
         context.proactiveNoveltyGuidance && isAdvice
           ? context.proactiveNoveltyGuidance

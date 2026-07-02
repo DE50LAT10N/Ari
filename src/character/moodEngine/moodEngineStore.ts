@@ -1,3 +1,4 @@
+import { loadJson } from "../../platform/jsonStorage";
 import type { MoodAxisConfigTable } from "./axisConfig";
 import { DEFAULT_MOOD_AXES } from "./axisConfig";
 import type { MoodVector } from "./moodVector";
@@ -22,16 +23,6 @@ export type PersistedMoodEngineState = {
 
 let cache: PersistedMoodEngineState | null = null;
 
-function readJson<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 function safeTimestamp(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && !Number.isNaN(value)
     ? value
@@ -47,7 +38,7 @@ export function loadMoodEngineState(
   }
 
   const baseline = createBaselineVector(axisConfig);
-  const stored = readJson<Partial<PersistedMoodEngineState> | null>(ENGINE_KEY, null);
+  const stored = loadJson<Partial<PersistedMoodEngineState> | null>(ENGINE_KEY, null);
   if (stored?.version === 2 && stored.vector) {
     cache = {
       version: 2,
@@ -59,7 +50,7 @@ export function loadMoodEngineState(
   }
 
   // Migrate from legacy v1 mood if present (warmth/energy/irritation only).
-  const legacy = readJson<Record<string, unknown> | null>(LEGACY_KEY, null);
+  const legacy = loadJson<Record<string, unknown> | null>(LEGACY_KEY, null);
   if (legacy && typeof legacy === "object") {
     const migratedVector = deserializeVector(
       {
@@ -124,7 +115,7 @@ export function readLegacyMoodSnapshot(
   axisConfig: MoodAxisConfigTable = DEFAULT_MOOD_AXES,
 ): { updatedAt: number; vector: MoodVector } {
   const baseline = createBaselineVector(axisConfig);
-  const legacy = readJson<Record<string, unknown> | null>(LEGACY_KEY, null);
+  const legacy = loadJson<Record<string, unknown> | null>(LEGACY_KEY, null);
   if (!legacy) {
     return { updatedAt: now, vector: baseline };
   }

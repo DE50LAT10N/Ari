@@ -1,3 +1,4 @@
+import { clamp01 } from "../../platform/mathUtils";
 import type { CharacterEmotion } from "../../types/character";
 import { characterEmotions } from "../../types/character";
 import type { MoodAxisConfigTable } from "./axisConfig";
@@ -37,17 +38,12 @@ function softStep(value: number, threshold: number, width = 0.12): number {
   return 1 / (1 + Math.exp(-t));
 }
 
-function clamp01(value: number): number {
-  if (!Number.isFinite(value) || Number.isNaN(value)) return 0;
-  return Math.max(0, Math.min(1, value));
-}
-
 const EMOTION_RULES: EmotionRule[] = [
   {
     id: "annoyed",
     weight: 1,
     score: (mood) => ({
-      score: 0.2 + softStep(mood.irritation ?? 0, 0.22, 0.08) * 1.4,
+      score: 0.18 + softStep(mood.irritation ?? 0, 0.14, 0.07) * 1.5,
       reason: ["irritation high"],
     }),
   },
@@ -74,9 +70,9 @@ const EMOTION_RULES: EmotionRule[] = [
     weight: 1,
     score: (mood) => ({
       score:
-        0.08 +
-        softStep(mood.energy ?? 0, 0.62, 0.1) *
-          (0.6 + softStep(mood.warmth ?? 0, 0.35, 0.12)),
+        0.14 +
+        softStep(mood.energy ?? 0, 0.52, 0.1) *
+          (0.65 + softStep(mood.warmth ?? 0, 0.28, 0.1)),
       reason: ["energy high + warmth"],
     }),
   },
@@ -85,9 +81,9 @@ const EMOTION_RULES: EmotionRule[] = [
     weight: 1,
     score: (mood) => ({
       score:
-        0.12 +
-        softStep(mood.warmth ?? 0, 0.42, 0.12) *
-          (0.7 + softStep(mood.energy ?? 0, 0.45, 0.12)),
+        0.14 +
+        softStep(mood.warmth ?? 0, 0.32, 0.1) *
+          (0.75 + softStep(mood.energy ?? 0, 0.38, 0.1)),
       reason: ["warm + medium energy"],
     }),
   },
@@ -96,9 +92,9 @@ const EMOTION_RULES: EmotionRule[] = [
     weight: 1,
     score: (mood) => ({
       score:
-        0.1 +
-        softStep(mood.energy ?? 0, 0.55, 0.12) *
-          (0.6 + softStep(0.18 - (mood.irritation ?? 0), 0, 0.12)),
+        0.12 +
+        softStep(mood.energy ?? 0, 0.46, 0.1) *
+          (0.65 + softStep(0.16 - (mood.irritation ?? 0), 0, 0.1)),
       reason: ["high energy + low irritation"],
     }),
   },
@@ -118,9 +114,9 @@ const EMOTION_RULES: EmotionRule[] = [
     weight: 1,
     score: (mood) => ({
       score:
-        0.1 +
-        softStep(mood.warmth ?? 0, 0.56, 0.1) *
-          (0.7 + softStep(0.18 - (mood.irritation ?? 0), 0, 0.1)),
+        0.12 +
+        softStep(mood.warmth ?? 0, 0.48, 0.08) *
+          (0.75 + softStep(0.14 - (mood.irritation ?? 0), 0, 0.08)),
       reason: ["very warm + calm"],
     }),
   },
@@ -181,9 +177,9 @@ const EMOTION_RULES: EmotionRule[] = [
     weight: 1,
     score: (mood) => ({
       score:
-        0.08 +
-        softStep(mood.warmth ?? 0, 0.45, 0.12) *
-          softStep(mood.energy ?? 0, 0.48, 0.12),
+        0.12 +
+        softStep(mood.warmth ?? 0, 0.36, 0.1) *
+          softStep(mood.energy ?? 0, 0.4, 0.1),
       reason: ["warm + energized"],
     }),
   },
@@ -202,7 +198,7 @@ const EMOTION_RULES: EmotionRule[] = [
     id: "shy",
     weight: 1,
     score: (mood) => ({
-      score: 0.06 + softStep(mood.warmth ?? 0, 0.62, 0.1) * softStep(0.4 - (mood.energy ?? 0), 0.12, 0.12),
+      score: 0.1 + softStep(mood.warmth ?? 0, 0.58, 0.08) * softStep(0.42 - (mood.energy ?? 0), 0.1, 0.1),
       reason: ["very warm + quieter energy"],
     }),
   },
@@ -210,7 +206,7 @@ const EMOTION_RULES: EmotionRule[] = [
     id: "blush",
     weight: 1,
     score: (mood) => ({
-      score: 0.06 + softStep(mood.warmth ?? 0, 0.7, 0.08),
+      score: 0.1 + softStep(mood.warmth ?? 0, 0.58, 0.07),
       reason: ["extremely warm"],
     }),
   },

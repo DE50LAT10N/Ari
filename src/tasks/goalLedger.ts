@@ -1,3 +1,4 @@
+import { clamp } from "../platform/mathUtils";
 import { loadJsonArray, saveJsonArray } from "../platform/jsonStorage";
 import { overlapScore, queryWordSet } from "../memory/memoryScoring";
 
@@ -29,7 +30,7 @@ function notify(): void {
 }
 
 function clampProgress(value: number): number {
-  return Math.max(0, Math.min(100, Math.round(value)));
+  return clamp(Math.round(value), 0, 100);
 }
 
 function loadRaw(): Goal[] {

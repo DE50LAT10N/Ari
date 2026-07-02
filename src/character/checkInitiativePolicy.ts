@@ -1,5 +1,3 @@
-import { allowsGenericCompanionInitiative } from "./initiativeConfig";
-
 import type { AdviceUrgencyLevel } from "./adviceUrgency";
 
 export type ProactiveTickAction =
@@ -97,22 +95,4 @@ export function afterAdviceAttempt(input: {
     return "retry_advice_later";
   }
   return "try_smalltalk";
-}
-
-export function companionSilenceGateReady(input: {
-  activityAgoMs: number;
-  plannedSilenceMs: number;
-  immersedCompanion: boolean;
-  companionSilenceMs: number;
-  companionSilenceMinMs: number;
-}): boolean {
-  return allowsGenericCompanionInitiative(
-    input.activityAgoMs,
-    input.plannedSilenceMs,
-    {
-      immersedCompanion: input.immersedCompanion,
-      companionSilenceMs: input.companionSilenceMs,
-      companionSilenceMinMs: input.companionSilenceMinMs,
-    },
-  );
 }

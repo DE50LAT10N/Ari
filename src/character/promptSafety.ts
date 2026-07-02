@@ -1,3 +1,5 @@
+import { truncateWithEllipsis } from "../platform/textUtils";
+
 const MAX_UNTRUSTED_LENGTH = 2400;
 
 const INJECTION_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
@@ -33,7 +35,7 @@ export function sanitizeUntrusted(text: string, maxLength = MAX_UNTRUSTED_LENGTH
     next = next.replace(pattern, replacement);
   }
   if (next.length > maxLength) {
-    next = `${next.slice(0, maxLength)}…`;
+    next = truncateWithEllipsis(next, maxLength);
   }
   return next;
 }

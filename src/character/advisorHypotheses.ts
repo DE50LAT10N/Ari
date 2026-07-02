@@ -1,3 +1,4 @@
+import { clamp } from "../platform/mathUtils";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import type { ProactiveSignalFact } from "./proactiveLlmEngine";
 import {
@@ -42,7 +43,7 @@ function factIds(
 }
 
 function clampConfidence(value: number): number {
-  return Math.max(0, Math.min(0.95, value));
+  return clamp(value, 0, 0.95);
 }
 
 function queryLooksRelatedToFile(query: string, file?: string): boolean {

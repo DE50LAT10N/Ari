@@ -1,6 +1,9 @@
+import { clampSignedUnit } from "../platform/mathUtils";
+import { hashStringDjb2 } from "../platform/hashUtils";
 import type { CharacterEmotion } from "../types/character";
 import { describeMoodBehaviorForPrompt } from "./moodBehavior";
 import { dayKey } from "./datetime";
+import { classifyMood } from "./moodEngine/moodClassifier";
 
 export type CharacterMood = {
   warmth: number;
@@ -19,16 +22,8 @@ const neutralMood: CharacterMood = {
   updatedAt: Date.now(),
 };
 
-function clamp(value: number): number {
-  return Math.max(-1, Math.min(1, value));
-}
-
 function hashDay(seed: string): number {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-  }
-  return (hash % 1000) / 1000;
+  return (hashStringDjb2(seed) % 1000) / 1000;
 }
 
 function getDailyMoodDrift(): Pick<CharacterMood, "warmth" | "energy" | "irritation"> {
@@ -66,14 +61,14 @@ export function decayMood(mood: CharacterMood): CharacterMood {
   const relationship = loadRelationshipBondWarmth();
 
   return {
-    warmth: clamp(
+    warmth: clampSignedUnit(
       0.25 +
         drift.warmth +
         relationship +
         (mood.warmth - 0.25 - drift.warmth - relationship) * factor,
     ),
-    energy: clamp(0.45 + drift.energy + (mood.energy - 0.45 - drift.energy) * factor),
-    irritation: clamp(mood.irritation * factor + drift.irritation * 0.35),
+    energy: clampSignedUnit(0.45 + drift.energy + (mood.energy - 0.45 - drift.energy) * factor),
+    irritation: clampSignedUnit(mood.irritation * factor + drift.irritation * 0.35),
     updatedAt: Date.now(),
   };
 }
@@ -131,9 +126,9 @@ export function loadMood(): CharacterMood {
 
 export function saveMood(mood: CharacterMood): CharacterMood {
   const stable = {
-    warmth: clamp(mood.warmth),
-    energy: clamp(mood.energy),
-    irritation: clamp(mood.irritation),
+    warmth: clampSignedUnit(mood.warmth),
+    energy: clampSignedUnit(mood.energy),
+    irritation: clampSignedUnit(mood.irritation),
     updatedAt: Date.now(),
   };
   moodCache = stable;
@@ -213,14 +208,14 @@ export const INTERACTION_MOOD_SHIFTS: Record<
     "click",
     Pick<CharacterMood, "warmth" | "energy" | "irritation">
   > = {
-  click: { warmth: 0.04, energy: 0.06, irritation: 0.02 },
-  "repeated-clicks": { warmth: -0.1, energy: 0.2, irritation: 0.34 },
-  return: { warmth: 0.24, energy: 0.13, irritation: -0.15 },
-  headpat: { warmth: 0.3, energy: 0.09, irritation: -0.2 },
-  chat_positive: { warmth: 0.15, energy: 0.09, irritation: -0.09 },
-  help_request: { warmth: 0.16, energy: 0.14, irritation: -0.07 },
-  ignored_initiative: { warmth: -0.15, energy: -0.08, irritation: 0.26 },
-  long_silence: { warmth: -0.04, energy: -0.08, irritation: 0.06 },
+  click: { warmth: 0.09, energy: 0.14, irritation: 0.05 },
+  "repeated-clicks": { warmth: -0.22, energy: 0.38, irritation: 0.55 },
+  return: { warmth: 0.42, energy: 0.24, irritation: -0.28 },
+  headpat: { warmth: 0.48, energy: 0.18, irritation: -0.36 },
+  chat_positive: { warmth: 0.28, energy: 0.16, irritation: -0.14 },
+  help_request: { warmth: 0.3, energy: 0.24, irritation: -0.12 },
+  ignored_initiative: { warmth: -0.28, energy: -0.14, irritation: 0.44 },
+  long_silence: { warmth: -0.1, energy: -0.16, irritation: 0.12 },
 };
 
 export function applyRepeatedIgnoreMood(
@@ -262,17 +257,11 @@ export function moodAmbientReactionChance(
 
 export function moodPreferredEmotion(mood: CharacterMood): CharacterEmotion | null {
   const current = decayMood(mood);
-  const hour = new Date().getHours();
-  if (current.irritation > 0.42) return "annoyed";
-  if (current.energy < 0.22 || (hour >= 23 || hour < 6)) return "sleepy";
-  if (current.energy < 0.28) return "bored";
-  if (current.warmth > 0.58) return "empathetic";
-  if (current.energy > 0.7 && current.warmth > 0.32 && current.irritation < 0.16) {
-    return "amused";
+  const classified = classifyMood(current, { now: Date.now() });
+  if (classified.emotion === "neutral" && classified.confidence < 0.2) {
+    return null;
   }
-  if (current.energy > 0.66) return "curious";
-  if (current.warmth > 0.45 && current.irritation < 0.12) return "happy";
-  return null;
+  return classified.emotion;
 }
 
 function describeMood(mood: CharacterMood): string {

@@ -57,11 +57,6 @@ export function proactiveAdviceIntervalMs(settings: AppSettings): number {
   );
 }
 
-/** @deprecated use proactiveAdviceIntervalMs / proactiveSmalltalkIntervalMs */
-export function proactiveIntervalMs(settings: AppSettings): number {
-  return proactiveAdviceIntervalMs(settings);
-}
-
 export function idleLineProbability(settings: AppSettings): number {
   switch (settings.initiativeLevel) {
     case "silent":

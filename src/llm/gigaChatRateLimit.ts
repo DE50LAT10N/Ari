@@ -1,3 +1,5 @@
+import { delay } from "../platform/asyncTimeout";
+
 const MIN_GIGACHAT_REQUEST_GAP_MS = 2_500;
 const MAX_GIGACHAT_COOLDOWN_MS = 5 * 60_000;
 
@@ -6,10 +8,6 @@ let lastStartAt = -MIN_GIGACHAT_REQUEST_GAP_MS;
 let cooldownUntil = 0;
 let throttleFailures = 0;
 let queuedRequests = 0;
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
-}
 
 async function waitForGigaChatTurn(): Promise<void> {
   const cooldownWait = cooldownUntil - Date.now();

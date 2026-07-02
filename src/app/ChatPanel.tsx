@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent } from "react";
 import {
   loadChatHistory,
   saveChatHistory,
@@ -57,10 +57,7 @@ import {
   scoreAdviceUrgency,
   setLastAdviceUrgency,
 } from "../character/adviceUrgency";
-import {
-  runAdviceCycle,
-  type AdviceDecision,
-} from "../character/adviceEngine";
+import type { AdviceDecision } from "../character/adviceEngine";
 import {
   buildInitiativeSignalBundle,
   buildProactiveInitiativePackage,
@@ -101,10 +98,6 @@ import {
   type PresenceScene,
 } from "../character/presence";
 import { streamLlm } from "../llm/llmClient";
-import {
-  analyzeScreenCapture,
-  compareScreenCaptures,
-} from "../llm/visionClient";
 import {
   visionModeLabels,
   visionModePrompt,
@@ -151,21 +144,20 @@ import {
   type PomodoroState,
 } from "../character/pomodoro";
 import { exitAri, stopOllamaAndExit } from "../platform/ollamaProcess";
-import {
-  captureActiveWindow,
-  cropScreenCapture,
-  type ScreenCapture,
-} from "../platform/screenCapture";
-import { getRagSearchMode, searchRag } from "../rag/ragClient";
+import type { ScreenCapture } from "../platform/screenCapture";
 import type { AppSettings } from "../settings/appSettings";
 import type { ChatMessage } from "../types/chat";
 import type {
   CharacterEmotion,
   CharacterState,
 } from "../types/character";
-import { SettingsPanel } from "./SettingsPanel";
+const SettingsPanel = lazy(() =>
+  import("./SettingsPanel").then((module) => ({ default: module.SettingsPanel })),
+);
+const VisionCropper = lazy(() =>
+  import("./VisionCropper").then((module) => ({ default: module.VisionCropper })),
+);
 import { ARI_USER_TYPING_EVENT } from "./avatarMotion";
-import { VisionCropper } from "./VisionCropper";
 import {
   classifyResponseMode,
 } from "../character/responseModes";
@@ -243,21 +235,7 @@ import {
   buildConversationTopics,
   pickPlannedInitiativeAnchor,
 } from "../character/advisorEngine";
-import {
-  buildGateContextFromBundle,
-  buildClarifyingProbeBundle,
-  collectProactiveSignalFacts,
-  getLastProactiveLlmBundle,
-  getLastProactiveSignalFacts,
-  isGenericAdviceText,
-  isThinAdviceContext,
-  isThinContextGenericAdvice,
-  localReplyQualityCheck,
-  tryAdviceFallbackChain,
-  setLastProactiveLlmBundle,
-  synthesizeProactiveBundle,
-  validateProactiveReplyLlm,
-} from "../character/proactiveLlmEngine";
+import { loadCurrentCodeExcerpt } from "../character/codeContext";
 import {
   buildAdviceTopicKey,
   getRecentAdviceFeedback,
@@ -322,23 +300,18 @@ import {
   VOICE_CHANGED_EVENT,
 } from "../character/blipVoiceManager";
 import { isBlipVoiceEnabled } from "../settings/appSettings";
+import type { SafeActionProposal } from "../tools/safeActions";
+import { describeSafeActionDetail } from "../tools/safeActions";
+import type { LiveToolPlan } from "../tools/liveTools";
 import {
-  executeSafeAction,
-  describeSafeActionDetail,
-  extractSafeAction,
-  logFailedAction,
-  logRejectedAction,
-  type SafeActionProposal,
-} from "../tools/safeActions";
-import {
-  formatLiveToolContext,
-  isQuestionLikeMessage,
-  planLiveToolUse,
-  type LiveToolPlan,
-  needsExplicitLiveToolPlanner,
-  runLiveTool,
-  shouldAutoWebSearch,
-} from "../tools/liveTools";
+  loadAdviceEngine,
+  loadLiveTools,
+  loadProactiveLlmEngine,
+  loadRagClient,
+  loadSafeActions,
+  loadScreenCapture,
+  loadVisionClient,
+} from "./chatRuntimeLoaders";
 import { yieldToMain, withTimeout } from "../platform/asyncTimeout";
 import { rememberReplyPhrases } from "../character/phraseMemory";
 import { isQuietModeActive } from "../character/quietMode";
@@ -659,6 +632,20 @@ function resolveAdviceVisibleFallback(input: {
   if (direct) {
     return direct;
   }
+  return null;
+}
+
+async function resolveAdviceVisibleFallbackAsync(input: {
+  practicalHook?: string;
+  linkNarrative?: string;
+  signalSummary?: string;
+  activeWindow?: ActiveWindowInfo | null;
+}): Promise<string | null> {
+  const direct = resolveAdviceVisibleFallback(input);
+  if (direct) {
+    return direct;
+  }
+  const { getLastProactiveLlmBundle } = await loadProactiveLlmEngine();
   const bundle = getLastProactiveLlmBundle();
   if (!bundle || bundle.tone !== "advice") {
     return null;
@@ -1192,6 +1179,7 @@ export function ChatPanel({
     capture: ScreenCapture,
     mode: VisionMode,
   ) {
+    const { analyzeScreenCapture } = await loadVisionClient();
     const title = capture.title || "без названия";
     const previous = lastVisionObservationRef.current;
     const previousText =
@@ -1258,6 +1246,8 @@ export function ChatPanel({
 
     autoVisionBusyRef.current = true;
     try {
+      const { captureActiveWindow } = await loadScreenCapture();
+      const { analyzeScreenCapture } = await loadVisionClient();
       const capture = await captureActiveWindow();
       const processName = activeWindow.processName || capture.processName;
       const title = capture.title || activeWindow.title || "без названия";
@@ -1355,6 +1345,8 @@ export function ChatPanel({
     let visionPaused = false;
 
     try {
+      const { captureActiveWindow } = await loadScreenCapture();
+      const visionClient = await loadVisionClient();
       const capture = await captureActiveWindow();
       if (selectRegion) {
         setPendingCrop(capture);
@@ -1369,7 +1361,7 @@ export function ChatPanel({
         }
         const beforeTitle = compareBaseline.title || "первый снимок";
         const afterTitle = capture.title || "второй снимок";
-        const observations = await compareScreenCaptures(
+        const observations = await visionClient.compareScreenCaptures(
           compareBaseline,
           capture,
           visionModePrompt("compare"),
@@ -1420,6 +1412,7 @@ export function ChatPanel({
     setVisionLoading(true);
     isLoadingRef.current = true;
     try {
+      const { cropScreenCapture } = await loadScreenCapture();
       await analyzeCapturedWindow(
         await cropScreenCapture(capture, selection),
         "overview",
@@ -1479,6 +1472,7 @@ export function ChatPanel({
       proactiveLinkNarrative?: string;
       proactivePracticalHook?: string;
       proactiveAdviceSteps?: string[];
+      proactiveCodeExcerpt?: { file: string; text: string };
       proactiveInitiativeMove?: string;
       proactiveAdviceCandidateKind?: string;
       proactiveNoveltyGuidance?: string;
@@ -1575,6 +1569,9 @@ export function ChatPanel({
     restartAmbientStream();
 
     try {
+      const proactiveLlm = options.proactive
+        ? await loadProactiveLlmEngine()
+        : null;
       const lastUserMessage = [...baseHistory]
         .reverse()
         .find(({ role }) => role === "user")?.content ?? "";
@@ -1610,7 +1607,9 @@ export function ChatPanel({
           proactive: Boolean(options.proactive),
           ragEnabled: settings.ragEnabled,
         });
-      let rawMemory: Awaited<ReturnType<typeof searchRag>> = [];
+      let rawMemory: Awaited<
+        ReturnType<Awaited<ReturnType<typeof loadRagClient>>["searchRag"]>
+      > = [];
       let rawUserMemory: Awaited<
         ReturnType<typeof selectUserMemoryContext>
       > = { facts: [], summaries: [] as UserMemorySummary[] };
@@ -1628,7 +1627,11 @@ export function ChatPanel({
         await yieldToMain();
       }
       type ContextBundle = [
-        PromiseSettledResult<Awaited<ReturnType<typeof searchRag>>>,
+        PromiseSettledResult<
+          Awaited<
+            ReturnType<Awaited<ReturnType<typeof loadRagClient>>["searchRag"]>
+          >
+        >,
         PromiseSettledResult<
           Awaited<ReturnType<typeof selectUserMemoryContext>>
         >,
@@ -1645,10 +1648,16 @@ export function ChatPanel({
         { status: "fulfilled", value: { episodes: [], openLoops: [] } },
       ];
       let contextResults: ContextBundle;
+      const ragClient =
+        settings.ragEnabled && memoryQuery.trim()
+          ? await loadRagClient()
+          : null;
       try {
         contextResults = await withTimeout(
           Promise.allSettled([
-            searchRag(memoryQuery, settings),
+            ragClient
+              ? ragClient.searchRag(memoryQuery, settings)
+              : Promise.resolve([]),
             retrieveUserMemory
               ? selectUserMemoryContext(
                   memoryQuery,
@@ -1686,7 +1695,7 @@ export function ChatPanel({
       } else {
         logError("Episodic memory retrieval failed", contextResults[2].reason);
       }
-      const ragMode = getRagSearchMode();
+      const ragMode = ragClient?.getRagSearchMode() ?? "none";
       const memoryMode = getMemorySemanticSearchMode();
       const searchMode: RetrievalSearchMode =
         ragMode === "ivf" || memoryMode === "ivf"
@@ -1734,8 +1743,16 @@ export function ChatPanel({
 
       let liveToolContext: string | undefined;
       const ragFound = memory.length > 0;
-      const needsExplicitTool = needsExplicitLiveToolPlanner(lastUserMessage);
-      const needsWebFallback = shouldAutoWebSearch(lastUserMessage, {
+      const liveToolsModule =
+        settings.webToolsEnabled &&
+        isLlmProviderOnline(settings, ollamaOnline) &&
+        lastUserMessage.trim()
+          ? await loadLiveTools()
+          : null;
+      const needsExplicitTool =
+        liveToolsModule?.needsExplicitLiveToolPlanner(lastUserMessage) ?? false;
+      const needsWebFallback =
+        liveToolsModule?.shouldAutoWebSearch(lastUserMessage, {
         ragEnabled: settings.ragEnabled,
         ragMatchCount: memory.length,
       });
@@ -1755,6 +1772,7 @@ export function ChatPanel({
         isLlmProviderOnline(settings, ollamaOnline)
       ) {
         try {
+          const proactiveTools = liveToolsModule ?? (await loadLiveTools());
           const proactiveBundle = buildInitiativeSignalBundle(settings, {
             processName: activeWindow?.processName,
             windowTitle: activeWindow?.title,
@@ -1774,11 +1792,11 @@ export function ChatPanel({
             );
             setLiveToolStatus("ищу в интернете…");
             const raw = await withTimeout(
-              runLiveTool({ tool: "web_search", query }, settings),
+              proactiveTools.runLiveTool({ tool: "web_search", query }, settings),
               30_000,
               "Проактивный поиск",
             );
-            liveToolContext = formatLiveToolContext(
+            liveToolContext = proactiveTools.formatLiveToolContext(
               { tool: "web_search", query },
               raw,
             );
@@ -1790,6 +1808,7 @@ export function ChatPanel({
         }
       }
       if (
+        liveToolsModule &&
         settings.webToolsEnabled &&
         !options.proactive &&
         isLlmProviderOnline(settings, ollamaOnline) &&
@@ -1799,7 +1818,7 @@ export function ChatPanel({
         try {
           let plan: LiveToolPlan | null = null;
           if (needsExplicitTool) {
-            plan = await planLiveToolUse(lastUserMessage, settings);
+            plan = await liveToolsModule.planLiveToolUse(lastUserMessage, settings);
           }
           if (!plan && needsWebFallback && !ragFound) {
             plan = {
@@ -1811,8 +1830,8 @@ export function ChatPanel({
             if (plan.tool === "web_search") {
               setLiveToolStatus("ищу в интернете…");
             }
-            const raw = await runLiveTool(plan, settings);
-            liveToolContext = formatLiveToolContext(plan, raw);
+            const raw = await liveToolsModule.runLiveTool(plan, settings);
+            liveToolContext = liveToolsModule.formatLiveToolContext(plan, raw);
           }
         } catch (toolError) {
           logError("Live tool failed", toolError);
@@ -1845,7 +1864,8 @@ export function ChatPanel({
         .map((message) => message.content)
         .slice(-5);
       const workSession = describeActiveFocusSession(getActiveFocusSession());
-      const userAskedQuestion = isQuestionLikeMessage(lastUserMessage);
+      const userAskedQuestion =
+        liveToolsModule?.isQuestionLikeMessage(lastUserMessage) ?? false;
       const validationContext = {
         hasVision: Boolean(options.screenObservation),
         hasMemory:
@@ -1937,6 +1957,7 @@ export function ChatPanel({
         proactiveLinkNarrative: options.proactiveLinkNarrative,
         proactivePracticalHook: options.proactivePracticalHook,
         proactiveAdviceSteps: options.proactiveAdviceSteps,
+        proactiveCodeExcerpt: options.proactiveCodeExcerpt,
         proactiveInitiativeMove: options.proactiveInitiativeMove,
         proactiveNoveltyGuidance: options.proactiveNoveltyGuidance,
       };
@@ -2061,8 +2082,8 @@ export function ChatPanel({
         isLlmProviderOnline(settings, ollamaOnline) &&
         settings.llmProvider !== "gigachat";
       if (shouldValidateProactiveWithLlm) {
-        const proactiveBundle = getLastProactiveLlmBundle();
-        const proactiveFacts = getLastProactiveSignalFacts();
+        const proactiveBundle = proactiveLlm?.getLastProactiveLlmBundle();
+        const proactiveFacts = proactiveLlm?.getLastProactiveSignalFacts() ?? [];
         const maxProactiveRegens =
           settings.llmProvider === "gigachat"
             ? proactiveReplyTone === "advice"
@@ -2073,7 +2094,7 @@ export function ChatPanel({
           if (!proactiveBundle || !processed.content.trim()) {
             break;
           }
-          const quality = await validateProactiveReplyLlm(
+          const quality = await proactiveLlm!.validateProactiveReplyLlm(
             settings,
             proactiveBundle,
             processed.content,
@@ -2137,10 +2158,10 @@ export function ChatPanel({
         settings.llmProvider === "gigachat" &&
         processed.content.trim()
       ) {
-        const proactiveBundle = getLastProactiveLlmBundle();
-        const proactiveFacts = getLastProactiveSignalFacts();
+        const proactiveBundle = proactiveLlm?.getLastProactiveLlmBundle();
+        const proactiveFacts = proactiveLlm?.getLastProactiveSignalFacts() ?? [];
         if (proactiveBundle) {
-          const localQuality = localReplyQualityCheck(
+          const localQuality = proactiveLlm!.localReplyQualityCheck(
             proactiveBundle,
             processed.content,
             proactiveFacts,
@@ -2219,7 +2240,7 @@ export function ChatPanel({
         proactiveReplyTone === "advice" &&
         shouldSuppressProactiveReply(processed.validation.issues)
       ) {
-        const fallback = resolveAdviceVisibleFallback({
+        const fallback = await resolveAdviceVisibleFallbackAsync({
           practicalHook: options.proactivePracticalHook,
           linkNarrative: options.proactiveLinkNarrative,
           signalSummary: options.proactiveSignalSummary,
@@ -2293,7 +2314,9 @@ export function ChatPanel({
           processName: activeWindowRef.current?.processName,
           windowTitle: activeWindowRef.current?.title,
         });
-        const observedFacts = collectProactiveSignalFacts({
+        const observedFacts = (
+          await loadProactiveLlmEngine()
+        ).collectProactiveSignalFacts({
           bundle: observedBundle,
           tone: "advice",
           candidateTopics: options.initiativeAnchor
@@ -2347,27 +2370,30 @@ export function ChatPanel({
         !options.screenObservation &&
         lastUserMessage
       ) {
-        void extractSafeAction(lastUserMessage, finalReply, settings, {
-          activeWindow,
-        })
-          .then((action) => {
-            if (!action) return;
-            ariLog("reply-meta", "debug", {
-              lastActionProposal: action.title,
-            });
-            setHistory((current) =>
-              current.map((message) =>
-                message.messageId === assistantMessageId &&
-                message.role === "assistant" &&
-                !message.action
-                  ? { ...message, action }
-                  : message,
-              ),
-            );
-          })
-          .catch((actionError: unknown) => {
-            logError("Safe action extraction failed", actionError);
-          });
+        void loadSafeActions().then((safeActions) =>
+          safeActions
+            .extractSafeAction(lastUserMessage, finalReply, settings, {
+              activeWindow,
+            })
+            .then((action) => {
+              if (!action) return;
+              ariLog("reply-meta", "debug", {
+                lastActionProposal: action.title,
+              });
+              setHistory((current) =>
+                current.map((message) =>
+                  message.messageId === assistantMessageId &&
+                  message.role === "assistant" &&
+                  !message.action
+                    ? { ...message, action }
+                    : message,
+                ),
+              );
+            })
+            .catch((actionError: unknown) => {
+              logError("Safe action extraction failed", actionError);
+            }),
+        );
       }
 
       if (
@@ -2769,8 +2795,9 @@ export function ChatPanel({
       return;
     }
     updateAction(action.id, { status: "running", result: "Выполняю…" });
+    const safeActions = await loadSafeActions();
     try {
-      const result = await executeSafeAction(action, settings, {
+      const result = await safeActions.executeSafeAction(action, settings, {
         startFocus: (input) => {
           ensureGoalForFocus(input.goal);
           startProductivityFocus(input);
@@ -2788,13 +2815,15 @@ export function ChatPanel({
         actionError instanceof Error
           ? actionError.message
           : String(actionError);
-      logFailedAction(action, result);
+      safeActions.logFailedAction(action, result);
       updateAction(action.id, { status: "failed", result });
     }
   }
 
   function rejectAction(action: SafeActionProposal) {
-    logRejectedAction(action);
+    void loadSafeActions().then((safeActions) => {
+      safeActions.logRejectedAction(action);
+    });
     updateAction(action.id, {
       status: "rejected",
       result: "Действие отменено.",
@@ -2997,6 +3026,7 @@ export function ChatPanel({
           llmBundle: existingBundle,
         };
       } else {
+      const proactive = await loadProactiveLlmEngine();
       const preliminaryAnchor =
         pickPlannedInitiativeAnchor(candidateTopics, {
           recentProactive: banned,
@@ -3024,7 +3054,8 @@ export function ChatPanel({
             bundle,
             preliminaryAnchor,
           );
-          const ragHits = await searchRag(ragQuery, settings);
+          const ragClient = await loadRagClient();
+          const ragHits = await ragClient.searchRag(ragQuery, settings);
           ragSnippets = ragHits
             .slice(0, 3)
             .map((hit) => hit.text.trim().slice(0, 420))
@@ -3033,7 +3064,9 @@ export function ChatPanel({
           ragSnippets = [];
         }
       }
-      const adviceFacts = collectProactiveSignalFacts({
+      const codeExcerpt =
+        tone === "advice" ? await loadCurrentCodeExcerpt(settings, bundle) : null;
+      const adviceFacts = proactive.collectProactiveSignalFacts({
         bundle,
         tone,
         bannedTopics: banned,
@@ -3045,6 +3078,9 @@ export function ChatPanel({
         urgency: mergedOpts.urgency,
         recentChatTurns: mergedOpts.recentChatTurns,
         ragSnippets: ragSnippets.length ? ragSnippets : undefined,
+        codeExcerpts: codeExcerpt
+          ? [{ file: codeExcerpt.file, text: codeExcerpt.text }]
+          : undefined,
       });
       const adviceTopicKey = buildAdviceTopicKey({
         anchor: preliminaryAnchor,
@@ -3104,7 +3140,7 @@ export function ChatPanel({
           return null;
         }
       }
-      let llmBundle = await synthesizeProactiveBundle(settings, {
+      let llmBundle = await proactive.synthesizeProactiveBundle(settings, {
         bundle,
         tone,
         bannedTopics: banned,
@@ -3117,6 +3153,9 @@ export function ChatPanel({
         recentChatTurns: mergedOpts.recentChatTurns,
         llmOnline: true,
         ragSnippets: ragSnippets.length ? ragSnippets : undefined,
+        codeExcerpts: codeExcerpt
+          ? [{ file: codeExcerpt.file, text: codeExcerpt.text }]
+          : undefined,
         adviceCandidate: advicePlan?.selected,
       });
       if (
@@ -3124,7 +3163,7 @@ export function ChatPanel({
         !llmBundle.practicalHook &&
         !(llmBundle.adviceSteps && llmBundle.adviceSteps.length)
       ) {
-        const retry = await synthesizeProactiveBundle(settings, {
+        const retry = await proactive.synthesizeProactiveBundle(settings, {
           bundle,
           tone: "advice",
           bannedTopics: banned,
@@ -3137,6 +3176,9 @@ export function ChatPanel({
           recentChatTurns: mergedOpts.recentChatTurns,
           llmOnline: true,
           requirePracticalHook: true,
+          codeExcerpts: codeExcerpt
+            ? [{ file: codeExcerpt.file, text: codeExcerpt.text }]
+            : undefined,
           adviceCandidate: advicePlan?.selected,
         });
         if (retry.practicalHook || retry.adviceSteps?.length) {
@@ -3146,14 +3188,14 @@ export function ChatPanel({
       if (
         tone === "advice" &&
         llmBundle.shouldSend &&
-        isThinAdviceContext(adviceFacts)
+        proactive.isThinAdviceContext(adviceFacts)
       ) {
         const hookText = llmBundle.practicalHook ?? "";
         if (
-          isThinContextGenericAdvice(hookText, adviceFacts, llmBundle) ||
-          isGenericAdviceText(hookText)
+          proactive.isThinContextGenericAdvice(hookText, adviceFacts, llmBundle) ||
+          proactive.isGenericAdviceText(hookText)
         ) {
-          const clarifying = buildClarifyingProbeBundle(
+          const clarifying = proactive.buildClarifyingProbeBundle(
             {
               bundle,
               tone: "advice",
@@ -3173,7 +3215,7 @@ export function ChatPanel({
           );
           if (clarifying) {
             llmBundle = clarifying;
-            setLastProactiveLlmBundle(clarifying, adviceFacts);
+            proactive.setLastProactiveLlmBundle(clarifying, adviceFacts);
           }
         }
       }
@@ -3197,7 +3239,7 @@ export function ChatPanel({
             issue.kind === "repeat_text" || issue.kind === "repeat_archetype",
         );
         if (isNearDuplicate) {
-          const rotated = buildClarifyingProbeBundle(
+          const rotated = proactive.buildClarifyingProbeBundle(
             {
               bundle,
               tone: "advice",
@@ -3229,7 +3271,7 @@ export function ChatPanel({
             !rotatedNovelty.some((issue) => issue.kind === "repeat_text")
           ) {
             llmBundle = rotated;
-            setLastProactiveLlmBundle(rotated, adviceFacts);
+            proactive.setLastProactiveLlmBundle(rotated, adviceFacts);
           } else {
             recordInitiativeSuppressed("duplicate advice — defer to smalltalk");
             return null;
@@ -3238,7 +3280,7 @@ export function ChatPanel({
       }
       if (!llmBundle.shouldSend) {
         if (tone === "advice") {
-          const fallbackBundle = tryAdviceFallbackChain(
+          const fallbackBundle = proactive.tryAdviceFallbackChain(
             {
               bundle,
               tone,
@@ -3258,7 +3300,7 @@ export function ChatPanel({
           );
           if (fallbackBundle) {
             llmBundle = fallbackBundle;
-            setLastProactiveLlmBundle(fallbackBundle, adviceFacts);
+            proactive.setLastProactiveLlmBundle(fallbackBundle, adviceFacts);
           } else {
             recordInitiativeSuppressed(
               llmBundle.rejectReason ?? "llm bundle rejected",
@@ -3279,6 +3321,9 @@ export function ChatPanel({
             ? llmBundle.linkedThemes
             : candidateTopics,
         llmBundle,
+        proactiveCodeExcerpt: codeExcerpt
+          ? { file: codeExcerpt.file, text: codeExcerpt.text }
+          : undefined,
       };
       }
     }
@@ -3305,6 +3350,7 @@ export function ChatPanel({
         signalSummary: pkg.proactiveSignalSummary,
       });
     }
+    const proactive = pkg.llmBundle ? await loadProactiveLlmEngine() : null;
     const result = await attemptInitiative(pkg.eventDescription, pkg.initiativeKind, {
       initiativeAnchor: pkg.initiativeAnchor,
       softInitiativeAnchor: pkg.softInitiativeAnchor ?? true,
@@ -3315,7 +3361,7 @@ export function ChatPanel({
       advisorAngle: pkg.advisorAngle,
       proactiveSignalSummary: pkg.proactiveSignalSummary,
       gateContext: pkg.llmBundle
-        ? buildGateContextFromBundle(pkg.llmBundle)
+        ? proactive!.buildGateContextFromBundle(pkg.llmBundle)
         : undefined,
       proactiveLinkNarrative:
         pkg.llmBundle?.primaryChainSummary ??
@@ -3362,6 +3408,7 @@ export function ChatPanel({
       proactiveLinkNarrative?: string;
       proactivePracticalHook?: string;
       proactiveAdviceSteps?: string[];
+      proactiveCodeExcerpt?: { file: string; text: string };
       proactiveInitiativeMove?: string;
       proactiveAdviceCandidateKind?: string;
       proactiveNoveltyGuidance?: string;
@@ -3533,6 +3580,7 @@ export function ChatPanel({
         proactiveLinkNarrative: options.proactiveLinkNarrative,
         proactivePracticalHook: options.proactivePracticalHook,
         proactiveAdviceSteps: options.proactiveAdviceSteps,
+        proactiveCodeExcerpt: options.proactiveCodeExcerpt,
         proactiveInitiativeMove: options.proactiveInitiativeMove,
         proactiveAdviceCandidateKind: options.proactiveAdviceCandidateKind,
         proactiveNoveltyGuidance: options.proactiveNoveltyGuidance,
@@ -3667,6 +3715,7 @@ export function ChatPanel({
 
       if (tickAction === "try_advice") {
         const adviceUrgency = engineDecision.adviceUrgency;
+        const { runAdviceCycle } = await loadAdviceEngine();
         const decision = await runAdviceCycle({
           settings,
           bundle: signalBundle,
@@ -4920,17 +4969,19 @@ export function ChatPanel({
       )}
 
       {settingsOpen ? (
-        <SettingsPanel
-          settings={settings}
-          onChange={onSettingsChange}
-          onClose={() => {
-            setSettingsOpen(false);
-            setSettingsSubpanel(null);
-            settingsButtonRef.current?.focus();
-          }}
-          activeWindow={activeWindow}
-          openSubpanel={settingsSubpanel}
-        />
+        <Suspense fallback={<div className="settings-loading">Загрузка настроек…</div>}>
+          <SettingsPanel
+            settings={settings}
+            onChange={onSettingsChange}
+            onClose={() => {
+              setSettingsOpen(false);
+              setSettingsSubpanel(null);
+              settingsButtonRef.current?.focus();
+            }}
+            activeWindow={activeWindow}
+            openSubpanel={settingsSubpanel}
+          />
+        </Suspense>
       ) : (
         <>
           {showFocusPrompt && pomodoro.phase === "idle" && (
@@ -4978,14 +5029,16 @@ export function ChatPanel({
             </div>
           )}
           {pendingCrop && (
-            <VisionCropper
-              capture={pendingCrop}
-              onConfirm={(selection) => void analyzeCrop(selection)}
-              onCancel={() => {
-                pendingCrop.imageBase64 = "";
-                setPendingCrop(null);
-              }}
-            />
+            <Suspense fallback={<div className="screen-vision-indicator" role="status">Загрузка…</div>}>
+              <VisionCropper
+                capture={pendingCrop}
+                onConfirm={(selection) => void analyzeCrop(selection)}
+                onCancel={() => {
+                  pendingCrop.imageBase64 = "";
+                  setPendingCrop(null);
+                }}
+              />
+            </Suspense>
           )}
           {visionLoading && (
             <div className="screen-vision-indicator" role="status">

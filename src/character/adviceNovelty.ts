@@ -1,3 +1,4 @@
+import { normalizeForOverlap } from "../platform/textNormalize";
 import type { AdviceLedgerEntry } from "./adviceLedger";
 import type { AdviceCandidate, AdviceCandidateKind } from "./advicePlanner";
 
@@ -30,12 +31,7 @@ const HIGH_RISK_ARCHETYPES: AdviceArchetype[] = [
 ];
 
 export function normalizeAdviceText(value?: string): string {
-  return (value ?? "")
-    .toLowerCase()
-    .replace(/<emotion>[^<]+<\/emotion>/gi, " ")
-    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeForOverlap(value);
 }
 
 export function classifyAdviceArchetype(

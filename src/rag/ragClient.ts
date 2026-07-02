@@ -18,6 +18,7 @@ import { embeddingNorm, cosineSimilarityWithNorms } from "../memory/memoryScorin
 import { yieldToMain } from "../platform/asyncTimeout";
 import { embedQueryCached } from "../llm/embeddingCache";
 import { withTimeout } from "../platform/asyncTimeout";
+import { httpErrorFromResponse, parseJsonSafe } from "../platform/httpUtils";
 import { searchIvfIndex, type IvfIndex } from "../memory/ivfIndex";
 import { clearStoredIvfIndex, resolveIvfIndex } from "../memory/ivfStore";
 import type { RetrievalSearchMode } from "../memory/retrievalTelemetry";
@@ -126,18 +127,15 @@ export async function embedTexts(
     "Ollama embeddings",
   );
   const raw = await response.text();
-  const body = (() => {
-    try {
-      return JSON.parse(raw) as EmbedResponse;
-    } catch {
-      return {} as EmbedResponse;
-    }
-  })();
+  const body = parseJsonSafe<EmbedResponse>(raw, {});
 
   if (!response.ok) {
     const detail =
       typeof body.error === "string" ? body.error : raw;
-    const error = formatOllamaError(response.status, detail);
+    const error = formatOllamaError(
+      response.status,
+      detail || httpErrorFromResponse(response.status, raw, "Ollama embeddings"),
+    );
     throw new Error(`Не удалось создать embeddings: ${error.message}`);
   }
 

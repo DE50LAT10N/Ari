@@ -1,10 +1,12 @@
+import { truncateWithEllipsis } from "./textUtils";
+
 export type AriLogLevel = "debug" | "info" | "warn" | "error";
 
 const MAX_STRING = 240;
 
 function trimValue(value: unknown): unknown {
   if (typeof value === "string") {
-    return value.length > MAX_STRING ? `${value.slice(0, MAX_STRING)}…` : value;
+    return value.length > MAX_STRING ? truncateWithEllipsis(value, MAX_STRING) : value;
   }
   if (Array.isArray(value)) {
     return value.map(trimValue);

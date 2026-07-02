@@ -16,6 +16,7 @@
     "generate-assets": "node scripts/generate-placeholder-assets.mjs",
     "fetch-gigachat-certs": "node scripts/fetch-gigachat-certs.mjs",
     "preview": "vite preview",
+    "lint:dead": "knip",
     "tauri": "node scripts/tauri-cli-with-preflight.mjs"
   },
   "dependencies": {
@@ -35,6 +36,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "knip": "^5.62.0",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
     "vitest": "^3.2.4"

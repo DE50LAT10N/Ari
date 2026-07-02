@@ -1,15 +1,8 @@
-function normalizeReply(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/<emotion>[^<]+<\/emotion>/gi, "")
-    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+import { normalizeForOverlap } from "../platform/textNormalize";
 
 function wordSet(text: string): Set<string> {
   return new Set(
-    normalizeReply(text)
+    normalizeForOverlap(text)
       .split(" ")
       .filter((word) => word.length >= 3),
   );
@@ -35,12 +28,12 @@ export function isTooSimilarToRecent(
   recentReplies: string[],
   threshold = 0.72,
 ): boolean {
-  const normalized = normalizeReply(reply);
+  const normalized = normalizeForOverlap(reply);
   if (!normalized) {
     return false;
   }
   return recentReplies.some((recent) => {
-    const normalizedRecent = normalizeReply(recent);
+    const normalizedRecent = normalizeForOverlap(recent);
     if (!normalizedRecent) {
       return false;
     }

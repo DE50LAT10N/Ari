@@ -1,3 +1,4 @@
+import { loadJsonArray, saveJsonTail } from "../platform/jsonStorage";
 import { getDailyInitiativeCount } from "../character/initiativeScoring";
 import type { ProactiveReplyTone } from "../character/proactiveTone";
 
@@ -24,17 +25,8 @@ type ToneEntry = {
   at: number;
 };
 
-function readList<T>(key: string): T[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(key) ?? "[]") as unknown;
-    return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
-    return [];
-  }
-}
-
 function writeList<T>(key: string, values: T[], max: number): void {
-  localStorage.setItem(key, JSON.stringify(values.slice(-max)));
+  saveJsonTail(key, values, max);
 }
 
 export function recordMemoryAutoCommit(
@@ -42,7 +34,7 @@ export function recordMemoryAutoCommit(
   importance: string,
   confidence: number,
 ): void {
-  const next = readList<AutoCommitEntry>(AUTO_COMMIT_KEY);
+  const next = loadJsonArray<AutoCommitEntry>(AUTO_COMMIT_KEY);
   next.push({
     text: text.slice(0, 160),
     importance,
@@ -53,25 +45,25 @@ export function recordMemoryAutoCommit(
 }
 
 export function recordMemoryInboxCandidate(text: string): void {
-  const next = readList<{ text: string; at: number }>(INBOX_KEY);
+  const next = loadJsonArray<{ text: string; at: number }>(INBOX_KEY);
   next.push({ text: text.slice(0, 160), at: Date.now() });
   writeList(INBOX_KEY, next, 20);
 }
 
 export function recordContextTrim(note: string): void {
-  const next = readList<{ note: string; at: number }>(TRIM_KEY);
+  const next = loadJsonArray<{ note: string; at: number }>(TRIM_KEY);
   next.push({ note, at: Date.now() });
   writeList(TRIM_KEY, next, 12);
 }
 
 export function recordInitiativeSuppressed(reason: string): void {
-  const next = readList<SuppressEntry>(SUPPRESS_KEY);
+  const next = loadJsonArray<SuppressEntry>(SUPPRESS_KEY);
   next.push({ reason: reason.slice(0, 180), at: Date.now() });
   writeList(SUPPRESS_KEY, next, 24);
 }
 
 export function recordProactiveToneEmitted(tone: ProactiveReplyTone): void {
-  const next = readList<ToneEntry>(TONE_KEY);
+  const next = loadJsonArray<ToneEntry>(TONE_KEY);
   next.push({ tone, at: Date.now() });
   writeList(TONE_KEY, next, 80);
 }
@@ -112,7 +104,7 @@ export function getProactiveToneSnapshot(now = Date.now()): ProactiveToneSnapsho
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
   const todayMs = todayStart.getTime();
-  const recent = readList<ToneEntry>(TONE_KEY);
+  const recent = loadJsonArray<ToneEntry>(TONE_KEY);
   const today = recent.filter((entry) => entry.at >= todayMs);
   return {
     adviceToday: today.filter((entry) => entry.tone === "advice").length,
@@ -136,14 +128,14 @@ export function getMemoryHealthSnapshot(): MemoryHealthSnapshot {
   todayStart.setHours(0, 0, 0, 0);
   const todayMs = todayStart.getTime();
 
-  const autoCommits = readList<AutoCommitEntry>(AUTO_COMMIT_KEY);
+  const autoCommits = loadJsonArray<AutoCommitEntry>(AUTO_COMMIT_KEY);
   return {
     autoCommitsToday: autoCommits.filter((entry) => entry.at >= todayMs).length,
     lastAutoCommits: autoCommits.slice(-5),
-    lastInboxCandidates: readList<{ text: string; at: number }>(INBOX_KEY).slice(-5),
-    lastContextTrims: readList<{ note: string; at: number }>(TRIM_KEY).slice(-4),
+    lastInboxCandidates: loadJsonArray<{ text: string; at: number }>(INBOX_KEY).slice(-5),
+    lastContextTrims: loadJsonArray<{ note: string; at: number }>(TRIM_KEY).slice(-4),
     initiativesToday: getDailyInitiativeCount(),
-    lastSuppressions: readList<SuppressEntry>(SUPPRESS_KEY).slice(-5),
+    lastSuppressions: loadJsonArray<SuppressEntry>(SUPPRESS_KEY).slice(-5),
     proactiveTone: getProactiveToneSnapshot(),
   };
 }

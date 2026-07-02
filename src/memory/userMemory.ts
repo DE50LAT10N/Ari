@@ -1,3 +1,4 @@
+import { normalizeComparableText } from "../platform/textNormalize";
 import { putMany, waitForTransaction } from "./idbUtils";
 
 export type UserMemoryFact = {
@@ -110,7 +111,7 @@ function notifyMemoryChanged(): void {
 }
 
 function comparable(text: string): string {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return normalizeComparableText(text);
 }
 
 export async function initializeUserMemory(): Promise<void> {

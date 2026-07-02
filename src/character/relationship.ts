@@ -1,3 +1,4 @@
+import { clampUnit } from "../platform/mathUtils";
 import type { CharacterEmotion } from "../types/character";
 
 export type BondLevel =
@@ -62,10 +63,6 @@ const MILESTONE_LINES: Record<
   },
 };
 
-function clamp(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
-
 export function computeBondScore(relationship: CharacterRelationship): number {
   return (
     relationship.familiarity * 0.4 +
@@ -94,9 +91,9 @@ export function loadRelationship(): CharacterRelationship {
     if (!stored) return applyRelationshipDecay(initialRelationship);
 
     const relationship = {
-      familiarity: clamp(stored.familiarity ?? 0.08),
-      trust: clamp(stored.trust ?? 0.12),
-      playfulness: clamp(stored.playfulness ?? 0.2),
+      familiarity: clampUnit(stored.familiarity ?? 0.08),
+      trust: clampUnit(stored.trust ?? 0.12),
+      playfulness: clampUnit(stored.playfulness ?? 0.2),
       exchanges: Math.max(0, stored.exchanges ?? 0),
       updatedAt: stored.updatedAt ?? Date.now(),
       lastBondLevel: stored.lastBondLevel,
@@ -118,9 +115,9 @@ function applyRelationshipDecay(
   const decay = Math.min(0.1, (daysSince - 1) * 0.012);
   return {
     ...relationship,
-    familiarity: clamp(relationship.familiarity - decay * 0.55),
-    trust: clamp(relationship.trust - decay * 0.45),
-    playfulness: clamp(relationship.playfulness - decay * 0.35),
+    familiarity: clampUnit(relationship.familiarity - decay * 0.55),
+    trust: clampUnit(relationship.trust - decay * 0.45),
+    playfulness: clampUnit(relationship.playfulness - decay * 0.35),
   };
 }
 
@@ -138,9 +135,9 @@ function saveRelationship(
 ): CharacterRelationship {
   const stable = {
     ...relationship,
-    familiarity: clamp(relationship.familiarity),
-    trust: clamp(relationship.trust),
-    playfulness: clamp(relationship.playfulness),
+    familiarity: clampUnit(relationship.familiarity),
+    trust: clampUnit(relationship.trust),
+    playfulness: clampUnit(relationship.playfulness),
     updatedAt: Date.now(),
   };
   localStorage.setItem(RELATIONSHIP_KEY, JSON.stringify(stable));

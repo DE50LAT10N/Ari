@@ -1,10 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, lazy, Suspense, type CSSProperties } from "react";
 import "./styles.css";
 import { Avatar } from "./Avatar";
-import { ChatPanel } from "./ChatPanel";
 import { NotificationToast } from "./NotificationToast";
-import { AriTaskBoard } from "./AriTaskBoard";
-import { OnboardingPanel } from "./OnboardingPanel";
 import {
   hideMainWindow,
   restoreWindowLayout,
@@ -126,8 +123,21 @@ import {
 } from "../character/ambientThoughts";
 import { applyMoodTriggerToMood } from "../character/moodTriggers";
 
+const ChatPanel = lazy(() =>
+  import("./ChatPanel").then((module) => ({ default: module.ChatPanel })),
+);
+const AriTaskBoard = lazy(() =>
+  import("./AriTaskBoard").then((module) => ({ default: module.AriTaskBoard })),
+);
+const OnboardingPanel = lazy(() =>
+  import("./OnboardingPanel").then((module) => ({
+    default: module.OnboardingPanel,
+  })),
+);
+
 const INITIATIVE_EMOTION_COOLDOWN_MS = 15_000;
 const MODEL_EMOTION_COOLDOWN_MS = 4_000;
+const MOOD_EMOTION_COOLDOWN_MS = 800;
 const TYPING_PERK_COOLDOWN_MS = 4500;
 
 function pickProximityReaction(
@@ -148,6 +158,7 @@ export function App() {
   const [settings, setSettings] = useState(loadSettings);
   const settingsRef = useRef(settings);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatPanelMounted, setChatPanelMounted] = useState(false);
   const [emotion, setEmotion] = useState<CharacterEmotion>("neutral");
   const [ambientEmotion, setAmbientEmotion] = useState<CharacterEmotion | null>(
     null,
@@ -159,6 +170,26 @@ export function App() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  useEffect(() => {
+    if (chatOpen) {
+      setChatPanelMounted(true);
+    }
+  }, [chatOpen]);
+
+  useEffect(() => {
+    if (!settings.proactiveEnabled || chatPanelMounted) {
+      return;
+    }
+    const mountChatPanel = () => setChatPanelMounted(true);
+    if (typeof requestIdleCallback === "function") {
+      const idleId = requestIdleCallback(mountChatPanel, { timeout: 2500 });
+      return () => cancelIdleCallback(idleId);
+    }
+    const timeoutId = window.setTimeout(mountChatPanel, 1200);
+    return () => clearTimeout(timeoutId);
+  }, [settings.proactiveEnabled, chatPanelMounted]);
+
   const [ambientBubble, setAmbientBubble] = useState<string | null>(null);
   const [ambientBubbleSession, setAmbientBubbleSession] = useState(0);
   const ambientBubbleTextRef = useRef<string | null>(null);
@@ -348,6 +379,28 @@ export function App() {
     recordEmotion(softened, reason);
   }, []);
 
+  const applyMoodEmotionToAvatar = useCallback((nextEmotion: CharacterEmotion) => {
+    if (!settingsRef.current.avatarLivelinessEnabled) return;
+    const current = emotionRef.current;
+    if (nextEmotion === current) return;
+
+    const elapsed = Date.now() - lastBaseEmotionChangeAtRef.current;
+    if (elapsed < MOOD_EMOTION_COOLDOWN_MS) return;
+
+    lastBaseEmotionChangeAtRef.current = Date.now();
+    if (emotionTransitionTimerRef.current) {
+      window.clearTimeout(emotionTransitionTimerRef.current);
+    }
+
+    const path = emotionTransitionPath(current, nextEmotion);
+    setEmotion(path[0]!);
+    if (path.length > 1 && path[1] !== path[0]) {
+      emotionTransitionTimerRef.current = window.setTimeout(() => {
+        setEmotion(path[1]!);
+      }, EMOTION_BRIDGE_MS);
+    }
+  }, []);
+
   const applyInteractionMood = useCallback(
     (
       interaction:
@@ -361,23 +414,30 @@ export function App() {
         | "long_silence",
       intensity = 1,
     ) => {
-      setMood((current) => {
-        if (!isMoodEngineEnabled(settingsRef.current)) {
-          return applyInteractionToMood(current, interaction);
+      if (!isMoodEngineEnabled(settingsRef.current)) {
+        const next = applyInteractionToMood(moodRef.current, interaction);
+        setMood(next);
+        const preferred = moodPreferredEmotion(next);
+        if (preferred) {
+          applyMoodEmotionToAvatar(preferred);
         }
-        const result = updateMoodFromEvents({
-          settings: settingsRef.current,
-          events: [interactionToMoodEvent({ interaction, intensity })],
-        });
-        return {
-          warmth: result.nextMood.warmth ?? current.warmth,
-          energy: result.nextMood.energy ?? current.energy,
-          irritation: result.nextMood.irritation ?? current.irritation,
-          updatedAt: Date.now(),
-        };
+        return;
+      }
+
+      const result = updateMoodFromEvents({
+        settings: settingsRef.current,
+        events: [interactionToMoodEvent({ interaction, intensity })],
+        options: { applyDecay: false },
       });
+      setMood({
+        warmth: result.nextMood.warmth ?? moodRef.current.warmth,
+        energy: result.nextMood.energy ?? moodRef.current.energy,
+        irritation: result.nextMood.irritation ?? moodRef.current.irritation,
+        updatedAt: Date.now(),
+      });
+      applyMoodEmotionToAvatar(result.classification.emotion);
     },
-    [],
+    [applyMoodEmotionToAvatar],
   );
 
   const handleProactiveMessage = useCallback(() => {
@@ -831,31 +891,38 @@ export function App() {
     const handleAdviceIgnored = (event: Event) => {
       const count =
         (event as CustomEvent<{ count?: number }>).detail?.count ?? 1;
-      setMood((current) => {
-        if (!isMoodEngineEnabled(settingsRef.current)) {
-          return applyRepeatedIgnoreMood(current, count);
+      if (!isMoodEngineEnabled(settingsRef.current)) {
+        const next = applyRepeatedIgnoreMood(moodRef.current, count);
+        setMood(next);
+        const preferred = moodPreferredEmotion(next);
+        if (preferred) {
+          applyMoodEmotionToAvatar(preferred);
         }
-        const result = updateMoodFromEvents({
-          settings: settingsRef.current,
-          events: [
-            interactionToMoodEvent({
-              interaction: "ignored_initiative",
-              intensity: Math.min(3, Math.max(1, count)),
-            }),
-          ],
-        });
-        return {
-          warmth: result.nextMood.warmth ?? current.warmth,
-          energy: result.nextMood.energy ?? current.energy,
-          irritation: result.nextMood.irritation ?? current.irritation,
-          updatedAt: Date.now(),
-        };
+        return;
+      }
+
+      const result = updateMoodFromEvents({
+        settings: settingsRef.current,
+        events: [
+          interactionToMoodEvent({
+            interaction: "ignored_initiative",
+            intensity: Math.min(3, Math.max(1, count)),
+          }),
+        ],
+        options: { applyDecay: false },
       });
+      setMood({
+        warmth: result.nextMood.warmth ?? moodRef.current.warmth,
+        energy: result.nextMood.energy ?? moodRef.current.energy,
+        irritation: result.nextMood.irritation ?? moodRef.current.irritation,
+        updatedAt: Date.now(),
+      });
+      applyMoodEmotionToAvatar(result.classification.emotion);
     };
     window.addEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
     return () =>
       window.removeEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
-  }, []);
+  }, [applyMoodEmotionToAvatar]);
 
   useEffect(() => {
     if (!settings.pomodoroEnabled) return;
@@ -1331,54 +1398,60 @@ export function App() {
       >
         ◢
       </button>
-      <ChatPanel
-        isOpen={chatOpen}
-        settings={settings}
-        onSettingsChange={setSettings}
-        onEmotionChange={handleEmotionChange}
-        onStateChange={setCharacterState}
-        ollamaOnline={ollamaOnline}
-        activeWindow={lastActiveWindow}
-        onProactiveMessage={handleProactiveMessage}
-        onCollapseChat={handleCollapseChat}
-        mood={mood}
-        emotion={ambientEmotion ?? emotion}
-        attention={attention}
-        scene={scene}
-        lifecycle={lifecycle}
-        userIdleSeconds={userIdleSeconds}
-        pomodoro={pomodoro}
-        characterState={characterState}
-        onAmbientBubble={handleAmbientBubble}
-        onProactiveEmitted={handleProactiveEmitted}
-        onMoodInteraction={(interaction) => applyInteractionMood(interaction)}
-        onMoodTrigger={(trigger) =>
-          setMood((current) => {
-            if (!isMoodEngineEnabled(settingsRef.current)) {
-              return applyMoodTriggerToMood(current, trigger);
+      {chatPanelMounted && (
+        <Suspense fallback={null}>
+          <ChatPanel
+            isOpen={chatOpen}
+            settings={settings}
+            onSettingsChange={setSettings}
+            onEmotionChange={handleEmotionChange}
+            onStateChange={setCharacterState}
+            ollamaOnline={ollamaOnline}
+            activeWindow={lastActiveWindow}
+            onProactiveMessage={handleProactiveMessage}
+            onCollapseChat={handleCollapseChat}
+            mood={mood}
+            emotion={ambientEmotion ?? emotion}
+            attention={attention}
+            scene={scene}
+            lifecycle={lifecycle}
+            userIdleSeconds={userIdleSeconds}
+            pomodoro={pomodoro}
+            characterState={characterState}
+            onAmbientBubble={handleAmbientBubble}
+            onProactiveEmitted={handleProactiveEmitted}
+            onMoodInteraction={(interaction) => applyInteractionMood(interaction)}
+            onMoodTrigger={(trigger) =>
+              setMood((current) => {
+                if (!isMoodEngineEnabled(settingsRef.current)) {
+                  return applyMoodTriggerToMood(current, trigger);
+                }
+                const event = triggerToMoodEvent({ trigger });
+                if (!event) {
+                  return decayMood(current);
+                }
+                const result = updateMoodFromEvents({
+                  settings: settingsRef.current,
+                  events: [event],
+                });
+                return {
+                  warmth: result.nextMood.warmth ?? current.warmth,
+                  energy: result.nextMood.energy ?? current.energy,
+                  irritation: result.nextMood.irritation ?? current.irritation,
+                  updatedAt: Date.now(),
+                };
+              })
             }
-            const event = triggerToMoodEvent({ trigger });
-            if (!event) {
-              return decayMood(current);
-            }
-            const result = updateMoodFromEvents({
-              settings: settingsRef.current,
-              events: [event],
-            });
-            return {
-              warmth: result.nextMood.warmth ?? current.warmth,
-              energy: result.nextMood.energy ?? current.energy,
-              irritation: result.nextMood.irritation ?? current.irritation,
-              updatedAt: Date.now(),
-            };
-          })
-        }
-      />
+          />
+        </Suspense>
+      )}
       <NotificationToast />
-      <AriTaskBoard
-        chatOpen={chatOpen}
-        onSpeakAbout={(text) => handleAmbientBubble(text.slice(0, 220))}
-      />
+      <Suspense fallback={null}>
+        <AriTaskBoard
+          chatOpen={chatOpen}
+          onSpeakAbout={(text) => handleAmbientBubble(text.slice(0, 220))}
+        />
+      </Suspense>
       {ambientBubble && !chatOpen && (
         <div
           key={ambientBubbleSession}
@@ -1414,7 +1487,9 @@ export function App() {
         onClick={handleAvatarClick}
       />
       {!settings.onboardingCompleted && (
-        <OnboardingPanel settings={settings} onChange={setSettings} />
+        <Suspense fallback={null}>
+          <OnboardingPanel settings={settings} onChange={setSettings} />
+        </Suspense>
       )}
     </main>
   );

@@ -108,12 +108,13 @@ describe("moodEngine", () => {
       options: { applyDecay: false },
     });
     expect(out.appliedImpacts.length).toBeGreaterThan(0);
-    expect(out.nextMood.warmth).toBeCloseTo(
+    const expectedWarmth = Math.min(
+      1,
       base.warmth +
         INTERACTION_MOOD_SHIFTS.headpat.warmth +
         INTERACTION_MOOD_SHIFTS.return.warmth,
-      4,
     );
+    expect(out.nextMood.warmth).toBeCloseTo(expectedWarmth, 4);
   });
 
   it("ignores unknown event with no impact", () => {
@@ -154,6 +155,42 @@ describe("moodEngine", () => {
       events: [],
     });
     expect(out.nextMood.focus).toBeLessThan(0.8);
+  });
+
+  it("reaches annoyed after a few ignored interactions", () => {
+    const now = 1_000_000;
+    let mood = createBaselineVector(DEFAULT_MOOD_AXES);
+    for (let index = 0; index < 4; index += 1) {
+      const out = updateMood({
+        currentMood: mood,
+        currentUpdatedAt: now,
+        now,
+        axisConfig: DEFAULT_MOOD_AXES,
+        events: [interactionToMoodEvent({ interaction: "ignored_initiative", timestamp: now })],
+        options: { applyDecay: false },
+      });
+      mood = out.nextMood;
+    }
+    const cls = classifyMood(mood, { now });
+    expect(cls.emotion).toBe("annoyed");
+  });
+
+  it("reaches warm emotion after a few headpats", () => {
+    const now = 1_000_000;
+    let mood = createBaselineVector(DEFAULT_MOOD_AXES);
+    for (let index = 0; index < 3; index += 1) {
+      const out = updateMood({
+        currentMood: mood,
+        currentUpdatedAt: now,
+        now,
+        axisConfig: DEFAULT_MOOD_AXES,
+        events: [interactionToMoodEvent({ interaction: "headpat", timestamp: now })],
+        options: { applyDecay: false },
+      });
+      mood = out.nextMood;
+    }
+    const cls = classifyMood(mood, { now });
+    expect(["happy", "blush", "empathetic", "shy", "proud"]).toContain(cls.emotion);
   });
 
   it("classification has stable fallback", () => {

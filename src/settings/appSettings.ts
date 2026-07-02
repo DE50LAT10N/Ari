@@ -80,6 +80,7 @@ export type AppSettings = {
   intentClassifierEnabled: boolean;
   adaptiveInitiativeEnabled: boolean;
   moodEngineEnabled: boolean;
+  adviceCodeReadingEnabled: boolean;
   recallLexicalWeight: number;
   recallSemanticWeight: number;
   embeddingQueryCacheTtlSec: number;
@@ -166,6 +167,7 @@ export const defaultSettings: AppSettings = {
   intentClassifierEnabled: true,
   adaptiveInitiativeEnabled: false,
   moodEngineEnabled: true,
+  adviceCodeReadingEnabled: true,
   recallLexicalWeight: 0.4,
   recallSemanticWeight: 0.6,
   embeddingQueryCacheTtlSec: 300,

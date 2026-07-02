@@ -19,7 +19,7 @@ export type GitCommitEntry = {
   subject: string;
 };
 
-const DEFAULT_EXTENSIONS = [
+export const DEFAULT_BINDER_EXTENSIONS = [
   "md",
   "txt",
   "ts",
@@ -46,7 +46,7 @@ export async function listBinderFiles(
   return invoke<BinderFileEntry[]>("binder_list_files", {
     request: {
       rootPath,
-      allowedExtensions: options?.allowedExtensions ?? DEFAULT_EXTENSIONS,
+      allowedExtensions: options?.allowedExtensions ?? DEFAULT_BINDER_EXTENSIONS,
       maxDepth: options?.maxDepth ?? 6,
       limit: options?.limit ?? 200,
     },
@@ -62,7 +62,7 @@ export async function readBinderFile(
     request: {
       rootPath,
       relativePath,
-      allowedExtensions: allowedExtensions ?? DEFAULT_EXTENSIONS,
+      allowedExtensions: allowedExtensions ?? DEFAULT_BINDER_EXTENSIONS,
     },
   });
 }

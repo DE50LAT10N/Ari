@@ -1,3 +1,4 @@
+import { clampSignedUnit } from "../platform/mathUtils";
 import type { CharacterEmotion } from "../types/character";
 import {
   decayMood,
@@ -26,15 +27,15 @@ export type MoodTrigger = {
 type MoodShift = Pick<CharacterMood, "warmth" | "energy" | "irritation">;
 
 export const MOOD_SHIFT_BY_TRIGGER: Record<MoodTriggerKind, MoodShift> = {
-  rude: { warmth: -0.3, energy: 0.14, irritation: 0.46 },
-  pushy: { warmth: -0.16, energy: 0.12, irritation: 0.3 },
-  playful: { warmth: 0.12, energy: 0.32, irritation: -0.06 },
-  praise: { warmth: 0.27, energy: 0.15, irritation: -0.18 },
-  thanks: { warmth: 0.18, energy: 0.06, irritation: -0.15 },
-  affection: { warmth: 0.33, energy: 0.1, irritation: -0.2 },
-  apology: { warmth: 0.15, energy: -0.03, irritation: -0.3 },
-  user_tired: { warmth: 0.24, energy: -0.12, irritation: -0.12 },
-  user_frustrated: { warmth: 0.12, energy: 0.06, irritation: 0.12 },
+  rude: { warmth: -0.45, energy: 0.22, irritation: 0.68 },
+  pushy: { warmth: -0.28, energy: 0.2, irritation: 0.45 },
+  playful: { warmth: 0.22, energy: 0.48, irritation: -0.1 },
+  praise: { warmth: 0.42, energy: 0.24, irritation: -0.28 },
+  thanks: { warmth: 0.3, energy: 0.12, irritation: -0.24 },
+  affection: { warmth: 0.5, energy: 0.16, irritation: -0.32 },
+  apology: { warmth: 0.24, energy: -0.05, irritation: -0.42 },
+  user_tired: { warmth: 0.36, energy: -0.2, irritation: -0.2 },
+  user_frustrated: { warmth: 0.2, energy: 0.1, irritation: 0.2 },
   neutral: { warmth: 0, energy: 0, irritation: 0 },
 };
 
@@ -50,10 +51,6 @@ const EMOTION_BY_TRIGGER: Record<MoodTriggerKind, CharacterEmotion | undefined> 
   user_frustrated: "worried",
   neutral: undefined,
 };
-
-function clamp(value: number): number {
-  return Math.max(-1, Math.min(1, value));
-}
 
 function normalize(text: string): string {
   return text.trim().toLowerCase();
@@ -143,9 +140,9 @@ export function previewMoodAfterTrigger(
   const shift = MOOD_SHIFT_BY_TRIGGER[trigger.kind];
   const weight = Math.max(0.55, Math.min(1, trigger.confidence));
   return {
-    warmth: clamp(current.warmth + shift.warmth * weight),
-    energy: clamp(current.energy + shift.energy * weight),
-    irritation: clamp(current.irritation + shift.irritation * weight),
+    warmth: clampSignedUnit(current.warmth + shift.warmth * weight),
+    energy: clampSignedUnit(current.energy + shift.energy * weight),
+    irritation: clampSignedUnit(current.irritation + shift.irritation * weight),
     updatedAt: Date.now(),
   };
 }

@@ -1,12 +1,11 @@
+import { clamp } from "../../platform/mathUtils";
 import type { CharacterMood } from "../mood";
 import type { MoodAxisConfigTable } from "./axisConfig";
 import { DEFAULT_MOOD_AXES } from "./axisConfig";
 
 export type MoodVector = Record<string, number>;
 
-export function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
+export { clamp } from "../../platform/mathUtils";
 
 export function sanitizeAxisValue(
   raw: unknown,

@@ -57,6 +57,7 @@ export type ProactiveInitiativePackage = {
   advisorAngle?: AdvisorAngle;
   proactiveSignalSummary?: string;
   llmBundle?: ProactiveLlmBundle;
+  proactiveCodeExcerpt?: { file: string; text: string };
 };
 
 export type MemorySnippet = {
@@ -86,6 +87,7 @@ export type ProactivePackageOptions = {
   urgency?: AdviceUrgency;
   recentChatTurns?: Array<{ role: "user" | "assistant"; content: string }>;
   llmBundle?: ProactiveLlmBundle;
+  proactiveCodeExcerpt?: { file: string; text: string };
 };
 
 export type ClipboardSnippet = {

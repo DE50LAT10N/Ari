@@ -118,6 +118,49 @@ describe("proactiveLlmEngine", () => {
     expect(result.usefulnessScore).toBeGreaterThan(0.45);
   });
 
+  it("includes real code excerpt in synthesis prompt when provided", async () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - desktop-character - Cursor",
+      sessionMinutes: 10,
+    });
+
+    vi.mocked(completeLlmJson).mockResolvedValue({
+      tone: "advice",
+      linkedThemes: [],
+      mergedAnchor: "code",
+      narrativeBrief: "Сделай X, потому что Y и Z.",
+      primaryChainSummary: "code -> fix",
+      practicalHook: "Проверь условие в функции.",
+      adviceSteps: ["Шаг 1", "Шаг 2"],
+      usefulnessScore: 0.9,
+      shouldSend: true,
+      overlapsBanned: false,
+      groundFactIds: [],
+      topicLinks: [],
+      initiativeMove: "concrete_step",
+      linkConfidence: 0.8,
+    } as any);
+
+    await synthesizeProactiveBundle(defaultSettings, {
+      bundle,
+      tone: "advice",
+      llmOnline: true,
+      codeExcerpts: [
+        {
+          file: "ChatPanel.tsx",
+          text: "export function foo() { return 1; }",
+        },
+      ],
+    });
+
+    const calls = vi.mocked(completeLlmJson).mock.calls;
+    const userContent = (calls[0]?.[0] as any)?.find((m: any) => m.role === "user")
+      ?.content as string;
+    expect(userContent).toContain("Реальный код из файла ChatPanel.tsx");
+    expect(userContent).toContain("export function foo()");
+  });
+
   it("falls back to grounded advice when synthesis is low usefulness or overlaps banned", async () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",

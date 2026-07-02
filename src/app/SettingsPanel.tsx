@@ -21,7 +21,9 @@ import {
   getRagStats,
 } from "../rag/ragStore";
 import type { ActiveWindowInfo } from "../platform/activeWindow";
-import { AboutPanel } from "./AboutPanel";
+const AboutPanel = lazy(() =>
+  import("./AboutPanel").then((module) => ({ default: module.AboutPanel })),
+);
 import { OllamaModelPicker } from "./OllamaModelPicker";
 import {
   GigaChatEmbeddingPicker,
@@ -81,15 +83,6 @@ import {
   quietModeLabel,
 } from "../character/quietMode";
 import {
-  backupBeforeUpdate,
-  exportAriData,
-  importAriData,
-  resetAllLocalData,
-  resetOnlyMemory,
-  resetOnlyRag,
-  resetRelationshipAndMood,
-} from "../platform/dataBackup";
-import {
   loadPreferenceRules,
   removePreferenceRule,
   updatePreferenceRule,
@@ -98,7 +91,6 @@ import {
   loadScenarioPacks,
   setScenarioPackEnabled,
 } from "../character/scenarioPacks";
-import { BlipVoiceSettingsPanel } from "./BlipVoiceSettingsPanel";
 
 const MemoryPanel = lazy(() =>
   import("./MemoryPanel").then((module) => ({ default: module.MemoryPanel })),
@@ -108,8 +100,21 @@ const ProjectBinderPanel = lazy(() =>
     default: module.ProjectBinderPanel,
   })),
 );
-import { AriDiagnosticsSection } from "./AriDiagnosticsSection";
-import { ProactiveLabSection } from "./ProactiveLabSection";
+const BlipVoiceSettingsPanel = lazy(() =>
+  import("./BlipVoiceSettingsPanel").then((module) => ({
+    default: module.BlipVoiceSettingsPanel,
+  })),
+);
+const AriDiagnosticsSection = lazy(() =>
+  import("./AriDiagnosticsSection").then((module) => ({
+    default: module.AriDiagnosticsSection,
+  })),
+);
+const ProactiveLabSection = lazy(() =>
+  import("./ProactiveLabSection").then((module) => ({
+    default: module.ProactiveLabSection,
+  })),
+);
 import { SettingsCategory } from "./SettingsCategory";
 import {
   loadOpenCategories,
@@ -809,7 +814,11 @@ export function SettingsPanel({
   );
 
   if (aboutOpen) {
-    return <AboutPanel onBack={() => setAboutOpen(false)} />;
+    return (
+      <Suspense fallback={panelFallback}>
+        <AboutPanel onBack={() => setAboutOpen(false)} />
+      </Suspense>
+    );
   }
 
   if (memoryOpen) {
@@ -2180,6 +2189,25 @@ export function SettingsPanel({
               <span />
             </button>
           </label>
+          <label className="settings-toggle-row">
+            <span>Чтение кода для советов (ProjectBinder)</span>
+            <button
+              className={`toggle-switch${
+                settings.adviceCodeReadingEnabled ? " enabled" : ""
+              }`}
+              type="button"
+              role="switch"
+              aria-checked={settings.adviceCodeReadingEnabled}
+              onClick={() =>
+                onChange({
+                  ...settings,
+                  adviceCodeReadingEnabled: !settings.adviceCodeReadingEnabled,
+                })
+              }
+            >
+              <span />
+            </button>
+          </label>
           {isEmbeddingSourceConfigured(settings) && (
             <NumberSetting
               label="TTL кэша embedding-запросов (сек)"
@@ -2449,12 +2477,14 @@ export function SettingsPanel({
             </span>
           </div>
         </div>
-        <BlipVoiceSettingsPanel
-          embedded
-          settings={settings}
-          onChange={onChange}
-          onBack={() => {}}
-        />
+        <Suspense fallback={<div className="settings-loading">Загрузка голоса…</div>}>
+          <BlipVoiceSettingsPanel
+            embedded
+            settings={settings}
+            onChange={onChange}
+            onBack={() => {}}
+          />
+        </Suspense>
       </div>
 
 
@@ -2639,7 +2669,11 @@ export function SettingsPanel({
             {diagnosticsExpanded ? "Скрыть" : "Показать"}
           </button>
         </div>
-        {diagnosticsExpanded && <AriDiagnosticsSection />}
+        {diagnosticsExpanded && (
+          <Suspense fallback={<div className="settings-loading">Загрузка диагностики…</div>}>
+            <AriDiagnosticsSection />
+          </Suspense>
+        )}
       </div>
 
       <div className="settings-section-card">
@@ -2659,7 +2693,11 @@ export function SettingsPanel({
             {proactiveLabExpanded ? "Скрыть" : "Показать"}
           </button>
         </div>
-        {proactiveLabExpanded && <ProactiveLabSection settings={settings} />}
+        {proactiveLabExpanded && (
+          <Suspense fallback={<div className="settings-loading">Загрузка лаборатории…</div>}>
+            <ProactiveLabSection settings={settings} />
+          </Suspense>
+        )}
       </div>
 
 
@@ -2867,7 +2905,14 @@ export function SettingsPanel({
             <span />
           </button>
         </div>
-        <button type="button" onClick={() => void exportAriData()}>
+        <button
+          type="button"
+          onClick={() =>
+            void import("../platform/dataBackup").then((module) =>
+              module.exportAriData(),
+            )
+          }
+        >
           Export Ari data
         </button>
         <label className="settings-field">
@@ -2877,29 +2922,63 @@ export function SettingsPanel({
             accept=".zip"
             onChange={(event) => {
               const file = event.target.files?.[0];
-              if (file) void importAriData(file).then((warnings) => {
-                if (warnings.length) alert(warnings.join("\n"));
-              });
+              if (file) {
+                void import("../platform/dataBackup").then((module) =>
+                  module.importAriData(file).then((warnings) => {
+                    if (warnings.length) alert(warnings.join("\n"));
+                  }),
+                );
+              }
             }}
           />
         </label>
-        <button type="button" onClick={() => void backupBeforeUpdate()}>
+        <button
+          type="button"
+          onClick={() =>
+            void import("../platform/dataBackup").then((module) =>
+              module.backupBeforeUpdate(),
+            )
+          }
+        >
           Резервная копия перед обновлением
         </button>
-        <button type="button" onClick={() => void resetOnlyMemory()}>
+        <button
+          type="button"
+          onClick={() =>
+            void import("../platform/dataBackup").then((module) =>
+              module.resetOnlyMemory(),
+            )
+          }
+        >
           Сбросить только память
         </button>
-        <button type="button" onClick={() => void resetOnlyRag()}>
+        <button
+          type="button"
+          onClick={() =>
+            void import("../platform/dataBackup").then((module) =>
+              module.resetOnlyRag(),
+            )
+          }
+        >
           Сбросить только RAG
         </button>
-        <button type="button" onClick={() => resetRelationshipAndMood()}>
+        <button
+          type="button"
+          onClick={() =>
+            void import("../platform/dataBackup").then((module) =>
+              module.resetRelationshipAndMood(),
+            )
+          }
+        >
           Сбросить отношения и настроение
         </button>
         <button
           type="button"
           onClick={() => {
             if (confirm("Удалить все локальные данные Ari?")) {
-              void resetAllLocalData();
+              void import("../platform/dataBackup").then((module) =>
+                module.resetAllLocalData(),
+              );
             }
           }}
         >

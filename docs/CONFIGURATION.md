@@ -65,6 +65,7 @@ All settings persist in `localStorage` key `desktop-character.settings.v1`. Defa
 | `adaptiveInitiativeEnabled` | false | Online logistic learning |
 | `intentClassifierEnabled` | true | Regex intent for modes/rerank |
 | `moodEngineEnabled` | true | Enable coordinate mood engine (prompt/style + event updates) |
+| `adviceCodeReadingEnabled` | true | Allow Ari to read the current file from the active ProjectBinder (sandboxed) to give code-grounded advice |
 
 ### Advice vs smalltalk balance
 

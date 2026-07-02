@@ -1,3 +1,4 @@
+import { loadJson } from "../platform/jsonStorage";
 import type { InitiativeKind } from "./initiativeKinds";
 import type { ProactiveReplyTone } from "./proactiveTone";
 
@@ -42,16 +43,6 @@ const LEDGER_TTL_MS = 36 * 60 * 60_000;
 const TOPIC_STATE_TTL_MS = 35 * 60_000;
 const MAX_LEDGER_ENTRIES = 40;
 
-function readJson<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 function normalizeTopicPart(value?: string): string {
   return (value ?? "")
     .toLowerCase()
@@ -81,7 +72,7 @@ export function buildAdviceTopicKey(input: {
 }
 
 export function loadAdviceLedger(now = Date.now()): AdviceLedgerEntry[] {
-  const entries = readJson<AdviceLedgerEntry[]>(LEDGER_KEY, []);
+  const entries = loadJson<AdviceLedgerEntry[]>(LEDGER_KEY, []);
   const pruned = Array.isArray(entries)
     ? entries
         .filter((entry) => entry && now < entry.expiresAt)
@@ -126,7 +117,7 @@ export function refreshAdviceTopicState(
 export function loadAdviceTopicState(
   now = Date.now(),
 ): AdviceTopicState | null {
-  const state = readJson<AdviceTopicState | null>(TOPIC_STATE_KEY, null);
+  const state = loadJson<AdviceTopicState | null>(TOPIC_STATE_KEY, null);
   if (!state || now >= state.expiresAt) {
     localStorage.removeItem(TOPIC_STATE_KEY);
     return null;

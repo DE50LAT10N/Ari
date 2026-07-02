@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   afterAdviceAttempt,
-  companionSilenceGateReady,
   evaluateProactiveTick,
 } from "../src/character/checkInitiativePolicy";
 import { allowsGenericCompanionInitiative } from "../src/character/initiativeConfig";
@@ -218,14 +217,5 @@ describe("checkInitiativePolicy", () => {
         immersedCompanion: false,
       }),
     ).toBe(false);
-    expect(
-      companionSilenceGateReady({
-        activityAgoMs: 30_000,
-        plannedSilenceMs: 120_000,
-        immersedCompanion: true,
-        companionSilenceMs: 13 * 60_000,
-        companionSilenceMinMs: 12 * 60_000,
-      }),
-    ).toBe(true);
   });
 });

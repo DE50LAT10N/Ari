@@ -35,4 +35,22 @@ describe("proactive prompt", () => {
     expect(system).toContain("Не заканчивай вопросом");
     expect(system).not.toContain("Обязательный якорь реплики");
   });
+
+  it("includes code excerpt guidance for proactive advice when available", () => {
+    const messages = buildMessages([], {
+      proactive: true,
+      proactiveReplyTone: "advice",
+      initiativeKind: "process_advice",
+      proactiveCodeExcerpt: {
+        file: "ChatPanel.tsx",
+        text: "export const x = 1;",
+      },
+      eventDescription: "Совет по коду",
+    });
+
+    const system = messages[0]?.content ?? "";
+    expect(system).toContain("Если передан реальный код из файла");
+    expect(system).toContain("Код из файла ChatPanel.tsx");
+    expect(system).toContain("export const x = 1");
+  });
 });
