@@ -184,7 +184,10 @@ if (
   fail("proactive-qa", "conversation topics not wired");
 }
 
-if (chatPanel.includes("tryEmitLocalCompanionLine(context")) {
+if (
+  chatPanel.includes("resolveAdviceVisibleFallback") ||
+  chatPanel.includes("buildVisibleAdviceFallback")
+) {
   pass("proactive-qa", "local fallback after failed LLM attempt");
 } else {
   fail("proactive-qa", "missing local fallback in planned check");

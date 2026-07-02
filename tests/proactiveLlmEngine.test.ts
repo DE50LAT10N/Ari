@@ -7,11 +7,17 @@ import {
 } from "../src/memory/activitySignals";
 import { buildInitiativeSignalBundle } from "../src/character/initiativeContext";
 import {
+  buildAdviceFallbackBundle,
+  buildClarifyingProbeBundle,
   collectProactiveSignalFacts,
+  isSingleFactorGenericAdvice,
+  localReplyQualityCheck,
   resetProactiveLlmCacheForTests,
   synthesizeProactiveBundle,
+  tryAdviceFallbackChain,
   validateProactiveReplyLlm,
 } from "../src/character/proactiveLlmEngine";
+import { recordWorkingEvent } from "../src/memory/workingMemory";
 import { completeLlmJson } from "../src/llm/llmClient";
 
 vi.mock("../src/llm/llmClient", () => ({
@@ -108,7 +114,7 @@ describe("proactiveLlmEngine", () => {
     expect(result.usefulnessScore).toBeGreaterThan(0.45);
   });
 
-  it("sets shouldSend false when usefulness is low or banned overlap", async () => {
+  it("falls back to grounded advice when synthesis is low usefulness or overlaps banned", async () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "app.ts - Ari - Cursor",
@@ -133,8 +139,49 @@ describe("proactiveLlmEngine", () => {
       llmOnline: true,
     });
 
-    expect(result.shouldSend).toBe(false);
-    expect(result.overlapsBanned).toBe(true);
+    expect(result.shouldSend).toBe(true);
+    expect(result.usefulnessScore).toBeGreaterThan(0.45);
+    expect(result.practicalHook).toBeTruthy();
+  });
+
+  it("uses a single synthesis call for GigaChat advice and falls back on overlapsBanned", async () => {
+    const gigaSettings = {
+      ...defaultSettings,
+      llmProvider: "gigachat" as const,
+    };
+    const bundle = buildInitiativeSignalBundle(gigaSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ADVISOR_SIMULATION_REPORT.md - Ari - Cursor",
+      sessionMinutes: 8,
+    });
+    vi.mocked(completeLlmJson).mockResolvedValue({
+      tone: "advice",
+      linkedThemes: ["ADVISOR_SIMULATION_REPORT.md"],
+      mergedAnchor: "ADVISOR_SIMULATION_REPORT.md",
+      narrativeBrief: "повтор темы",
+      usefulnessScore: 0.1,
+      shouldSend: false,
+      overlapsBanned: true,
+      rejectReason: "пересечение с запретами",
+    });
+
+    const result = await synthesizeProactiveBundle(gigaSettings, {
+      bundle,
+      tone: "advice",
+      candidateTopics: ["ADVISOR_SIMULATION_REPORT.md"],
+      sessionMinutes: 8,
+      llmOnline: true,
+      urgency: {
+        level: "medium",
+        score: 5,
+        reasons: ["активный режим"],
+        effectiveIntervalMs: 60_000,
+      },
+    });
+
+    expect(completeLlmJson).toHaveBeenCalledTimes(1);
+    expect(result.shouldSend).toBe(true);
+    expect(result.usefulnessScore).toBeGreaterThan(0.45);
   });
 
   it("returns rejected LLM bundle instead of fallback when LLM is offline", async () => {
@@ -353,6 +400,42 @@ describe("proactiveLlmEngine", () => {
     expect(facts.some((fact) => /ChatPanel\.tsx/i.test(fact.detail))).toBe(true);
   });
 
+  it("allows advice without a trailing question for concrete_step", async () => {
+    vi.mocked(completeLlmJson).mockResolvedValue({
+      acceptable: true,
+      reason: "ok",
+      issues: [],
+    });
+
+    const result = await validateProactiveReplyLlm(
+      defaultSettings,
+      {
+        tone: "advice",
+        linkedThemes: ["ChatPanel.tsx"],
+        mergedAnchor: "ChatPanel.tsx",
+        narrativeBrief: "работа в файле",
+        practicalHook: "проверь импорт в начале файла",
+        usefulnessScore: 0.8,
+        shouldSend: true,
+        overlapsBanned: false,
+        source: "llm",
+        initiativeMove: "concrete_step",
+        groundFactIds: ["file:ChatPanel.tsx"],
+      },
+      "Хм. Сначала проверь импорт в начале ChatPanel.tsx — там чаще всего ломается.",
+      [
+        {
+          id: "file:ChatPanel.tsx",
+          kind: "file",
+          label: "Файл в IDE",
+          detail: "ChatPanel.tsx",
+        },
+      ],
+    );
+
+    expect(result.acceptable).toBe(true);
+  });
+
   it("validateProactiveReplyLlm flags meta commentary", async () => {
     vi.mocked(completeLlmJson).mockResolvedValue({
       acceptable: false,
@@ -379,5 +462,125 @@ describe("proactiveLlmEngine", () => {
 
     expect(result.acceptable).toBe(false);
     expect(result.issues.length).toBeGreaterThan(0);
+  });
+
+  it("includes grouped context and multi-factor advice rules in synthesis prompt", async () => {
+    recordWorkingEvent({
+      kind: "focus_update",
+      topic: "дописать advice pipeline",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 8,
+    });
+    vi.mocked(completeLlmJson).mockResolvedValue({
+      tone: "advice",
+      linkedThemes: ["файл и фокус"],
+      mergedAnchor: "ChatPanel.tsx",
+      narrativeBrief:
+        "Сделай X в ChatPanel.tsx, потому что focus update и сессия требуют закрыть advice pipeline.",
+      primaryChainSummary:
+        "файл ChatPanel.tsx + focus update определяют следующий шаг по advice pipeline",
+      practicalHook: "проверь блок synthesizeProactiveBundle в ChatPanel.tsx",
+      adviceSteps: ["открыть ChatPanel.tsx", "сверить fallback chain"],
+      usefulnessScore: 0.82,
+      shouldSend: true,
+      overlapsBanned: false,
+    });
+
+    await synthesizeProactiveBundle(defaultSettings, {
+      bundle,
+      tone: "advice",
+      candidateTopics: ["ChatPanel.tsx"],
+      sessionMinutes: 8,
+      llmOnline: true,
+    });
+
+    const messages = vi.mocked(completeLlmJson).mock.calls[0]?.[0];
+    expect(messages?.[0]?.content).toMatch(/минимум два фактора/i);
+    expect(messages?.[1]?.content).toMatch(/Сгруппированный контекст/);
+  });
+
+  it("prefers clarifying probe before generic fallback when probe facts exist", () => {
+    recordClipboardSignal({
+      clipKind: "stacktrace",
+      snippet: "TypeError: Cannot read properties of undefined",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 6,
+    });
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "advice",
+      sessionMinutes: 6,
+    });
+    const clarifying = buildClarifyingProbeBundle(
+      { bundle, tone: "advice", sessionMinutes: 6 },
+      facts,
+      "llm synthesis rejected",
+    );
+    const chained = tryAdviceFallbackChain(
+      { bundle, tone: "advice", sessionMinutes: 6 },
+      facts,
+      "llm synthesis rejected",
+    );
+
+    expect(clarifying?.rejectReason).toContain("clarifying probe");
+    expect(clarifying?.initiativeMove).toBe("clipboard_probe");
+    expect(chained?.selectedAdviceCandidate?.kind).toBe("clarifying_probe");
+  });
+
+  it("flags single-factor generic advice and accepts multi-factor replies", () => {
+    const genericBundle = {
+      tone: "advice" as const,
+      linkedThemes: ["CHANGELOG.md"],
+      mergedAnchor: "CHANGELOG.md",
+      narrativeBrief: "шаг от файла",
+      usefulnessScore: 0.62,
+      shouldSend: true,
+      overlapsBanned: false,
+      source: "llm" as const,
+      rejectReason: "fallback after llm synthesis rejected",
+      initiativeMove: "concrete_step" as const,
+    };
+    const facts = [
+      {
+        id: "file:CHANGELOG.md",
+        kind: "file" as const,
+        label: "Файл в IDE",
+        detail: "CHANGELOG.md",
+      },
+      {
+        id: "wm:1",
+        kind: "wm" as const,
+        label: "focus_update",
+        detail: "дописать advice pipeline",
+      },
+    ];
+
+    expect(
+      isSingleFactorGenericAdvice(
+        "Сделай один следующий шаг от факта: CHANGELOG.md",
+        facts,
+        genericBundle,
+      ),
+    ).toBe(true);
+    expect(
+      localReplyQualityCheck(
+        genericBundle,
+        "Сделай один следующий шаг от факта: CHANGELOG.md",
+        facts,
+      )?.issues,
+    ).toContain("single-factor generic");
+    expect(
+      isSingleFactorGenericAdvice(
+        "Сделай правку в CHANGELOG.md, потому что focus update и файл вместе показывают, что advice pipeline ещё не закрыт.",
+        facts,
+        genericBundle,
+      ),
+    ).toBe(false);
   });
 });

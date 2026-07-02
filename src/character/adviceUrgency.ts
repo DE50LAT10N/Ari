@@ -174,12 +174,34 @@ export function scoreAdviceUrgency(
   const wmRecent = pruneWorkingMemory(now).filter(
     (entry) => now - entry.at <= WM_RECENT_MS,
   );
-  if (
-    wmRecent.some(
+  const wmChatOrFocus = wmRecent.some(
+    (entry) =>
+      entry.kind === "chat_question" || entry.kind === "focus_update",
+  );
+  const wmUserAction = wmRecent.some(
+    (entry) => entry.kind === "user_action",
+  );
+  const wmWindowSwitch = wmRecent.some(
+    (entry) => entry.kind === "window_switch",
+  );
+  if (wmChatOrFocus) {
+    score += 2;
+    reasons.push("недавний вопрос или смена фокуса в кратковременной памяти");
+    const wmTopic = wmRecent.find(
       (entry) =>
-        entry.kind === "chat_question" || entry.kind === "window_switch",
-    )
-  ) {
+        entry.kind === "chat_question" || entry.kind === "focus_update",
+    )?.topic;
+    subjectKey = subjectKey ?? wmTopic?.slice(0, 80);
+  } else if (wmUserAction) {
+    score += 2;
+    reasons.push("недавнее действие в кратковременной памяти");
+    subjectKey =
+      subjectKey ??
+      wmRecent.find((entry) => entry.kind === "user_action")?.topic?.slice(
+        0,
+        80,
+      );
+  } else if (wmWindowSwitch) {
     score += 1;
     reasons.push("недавняя активность в кратковременной памяти");
   }
@@ -228,6 +250,29 @@ export function scoreAdviceUrgency(
       screenState.visibleEntities[0] ??
       bundle.window?.title?.slice(0, 80);
   }
+
+  if (
+    workContext &&
+    sessionMinutes >= 5 &&
+    (bundle.editorFile || bundle.advisor.dominantFile) &&
+    score < 1
+  ) {
+    score = 1;
+    reasons.push(
+      bundle.editorFile
+        ? `устойчивая работа в ${bundle.editorFile}`
+        : `устойчивая работа в ${bundle.advisor.dominantFile}`,
+    );
+    subjectKey =
+      subjectKey ?? bundle.editorFile ?? bundle.advisor.dominantFile;
+  }
+
+  const hasRecentActivitySignal =
+    wmRecent.length > 0 ||
+    bundle.advisor.activitySummary.recentSignals.some(
+      (entry) => now - entry.at <= WM_RECENT_MS,
+    );
+
   let level: AdviceUrgencyLevel = "none";
   let effectiveIntervalMs = userIntervalMs;
 
@@ -237,10 +282,10 @@ export function scoreAdviceUrgency(
   } else if (score >= 3) {
     level = "medium";
     effectiveIntervalMs = Math.min(userIntervalMs, MEDIUM_ADVICE_CAP_MS);
-  } else if (score >= 1 && workContext) {
+  } else if (score >= 1 && (workContext || hasRecentActivitySignal)) {
     level = "low";
     effectiveIntervalMs =
-      sessionMinutes >= 5 && bundle.editorFile
+      workContext && sessionMinutes >= 5 && bundle.editorFile
         ? Math.min(userIntervalMs, MEDIUM_ADVICE_CAP_MS)
         : userIntervalMs;
   }

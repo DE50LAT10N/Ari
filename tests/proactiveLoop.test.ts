@@ -4,10 +4,13 @@ import {
   clearProactiveFailureBackoff,
   ensureProactiveClockStarted,
   getLastAdviceAttemptAt,
+  getLastAdviceDecision,
   getLastSmalltalkAttemptAt,
   getProactiveFailureBackoff,
   invalidateProactiveStateCache,
+  recordAdviceDecision,
   registerProactiveFailure,
+  resetProactiveStateForTests,
 } from "../src/character/proactiveState";
 import {
   allowsGenericCompanionInitiative,
@@ -72,7 +75,7 @@ describe("proactive loop helpers", () => {
   it("backs off proactive LLM retries after generation failures", () => {
     const first = registerProactiveFailure("timeout", 1_000);
     expect(first.failures).toBe(1);
-    expect(first.until).toBe(301_000);
+    expect(first.until).toBe(91_000);
     expect(getProactiveFailureBackoff(2_000)?.reason).toBe("timeout");
 
     const second = registerProactiveFailure("still down", 2_000);
@@ -183,5 +186,13 @@ describe("proactive loop helpers", () => {
         companionSilenceMinMs: 12 * 60_000,
       }),
     ).toBe(true);
+  });
+
+  it("records last advice decision for diagnostics", () => {
+    resetProactiveStateForTests();
+    recordAdviceDecision("forced: advice starved");
+    expect(getLastAdviceDecision()).toBe("forced: advice starved");
+    recordAdviceDecision("attempted -> sent");
+    expect(getLastAdviceDecision()).toBe("attempted -> sent");
   });
 });

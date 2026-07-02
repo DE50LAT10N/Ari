@@ -4,6 +4,7 @@ import {
   invalidateActivitySignalsCache,
   recordClipboardSignal,
 } from "../src/memory/activitySignals";
+import { recordWorkingEvent, invalidateWorkingMemoryCache } from "../src/memory/workingMemory";
 import { buildInitiativeSignalBundle } from "../src/character/initiativeContext";
 import {
   isAdviceReady,
@@ -47,6 +48,7 @@ describe("adviceUrgency", () => {
   beforeEach(() => {
     setupStorage();
     invalidateActivitySignalsCache();
+    invalidateWorkingMemoryCache();
     invalidateProactiveStateCache();
     resetProactiveStateForTests();
   });
@@ -138,9 +140,86 @@ describe("adviceUrgency", () => {
     expect(shouldOfferLlmAdvice(urgency)).toBe(true);
   });
 
+  it("raises low urgency from working memory focus updates", () => {
+    recordWorkingEvent({
+      kind: "focus_update",
+      topic: "Помодоро: дописать adviceUrgency",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "adviceUrgency.ts - Ari - Cursor",
+      sessionMinutes: 6,
+    });
+    const urgency = scoreAdviceUrgency(bundle, defaultSettings, {
+      sessionMinutes: 6,
+      userIntervalMs: 20 * 60_000,
+    });
+    expect(urgency.level).not.toBe("none");
+    expect(urgency.reasons.some((reason) => reason.includes("памяти"))).toBe(
+      true,
+    );
+  });
+
+  it("offers low urgency for recent activity without strict work context", () => {
+    recordWorkingEvent({
+      kind: "window_switch",
+      topic: "переключение на браузер",
+      app: "chrome",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "chrome.exe",
+      windowTitle: "GitHub - Google Chrome",
+      sessionMinutes: 2,
+    });
+    const nonWorkBundle = {
+      ...bundle,
+      editorFile: undefined,
+      projectContext: undefined,
+      focusStep: undefined,
+      focusBlockers: [],
+      nextTaskTitle: undefined,
+      taskActivityLink: undefined,
+      clipboardSnippets: [],
+      advisor: {
+        ...bundle.advisor,
+        dominantFile: undefined,
+        topQueryThemes: [],
+        contextThrash: true,
+        activitySummary: {
+          ...bundle.advisor.activitySummary,
+          recentSignals: [],
+        },
+      },
+    };
+    const urgency = scoreAdviceUrgency(nonWorkBundle, defaultSettings, {
+      sessionMinutes: 2,
+      userIntervalMs: 20 * 60_000,
+    });
+    expect(urgency.level).toBe("low");
+    expect(shouldOfferLlmAdvice(urgency)).toBe(true);
+    expect(urgency.effectiveIntervalMs).toBe(20 * 60_000);
+  });
+
   it("does not offer advice when score is zero", () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {});
-    const urgency = scoreAdviceUrgency(bundle, defaultSettings);
+    const zeroed = {
+      ...bundle,
+      editorFile: undefined,
+      advisor: {
+        ...bundle.advisor,
+        dominantFile: undefined,
+        contextThrash: false,
+        scopeCreep: false,
+        progressWin: false,
+        activitySummary: {
+          ...bundle.advisor.activitySummary,
+          recentSignals: [],
+        },
+      },
+    };
+    const urgency = scoreAdviceUrgency(zeroed, defaultSettings, {
+      sessionMinutes: 0,
+    });
     expect(shouldOfferLlmAdvice(urgency)).toBe(false);
     expect(isAdviceReady(urgency, 60_000)).toBe(false);
   });
@@ -191,12 +270,11 @@ describe("adviceUrgency", () => {
     const urgency = scoreAdviceUrgency(bundle, defaultSettings, {
       userIntervalMs: proactiveAdviceIntervalMs(defaultSettings),
     });
-    rememberAdviceSubject("ChatPanel.tsx");
-    if (urgency.subjectKey) {
-      expect(
-        isAdviceReady(urgency, urgency.effectiveIntervalMs + 1_000),
-      ).toBe(false);
-    }
+    expect(urgency.subjectKey).toBeTruthy();
+    rememberAdviceSubject(urgency.subjectKey!);
+    expect(
+      isAdviceReady(urgency, urgency.effectiveIntervalMs + 1_000),
+    ).toBe(false);
   });
 
   it("plans process_advice with live file topic", () => {

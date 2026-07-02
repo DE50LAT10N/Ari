@@ -45,6 +45,7 @@ import {
   registerProactiveFailure,
   setLastProactiveMessageAt,
   rememberAdviceSubject,
+  recordAdviceDecision,
 } from "../character/proactiveState";
 import {
   isAdviceReady,
@@ -232,6 +233,7 @@ import {
 import type { AdvisorAngle } from "../character/advisorEngine";
 import {
   buildConversationTopics,
+  hasActionableAdvisorSignals,
   pickPlannedInitiativeAnchor,
 } from "../character/advisorEngine";
 import {
@@ -239,6 +241,9 @@ import {
   collectProactiveSignalFacts,
   getLastProactiveLlmBundle,
   getLastProactiveSignalFacts,
+  localReplyQualityCheck,
+  tryAdviceFallbackChain,
+  setLastProactiveLlmBundle,
   synthesizeProactiveBundle,
   validateProactiveReplyLlm,
 } from "../character/proactiveLlmEngine";
@@ -334,7 +339,7 @@ import {
   shouldRetryReply,
   shouldUseInCharacterFallback,
 } from "../character/replyPipeline";
-import { buildVisibleAdviceFallback } from "../character/proactiveAdviceFallback";
+import { buildVisibleAdviceFallback, buildVisibleClarifyingFallback } from "../character/proactiveAdviceFallback";
 import {
   allowsGenericCompanionInitiative,
   dailyInitiativeCap,
@@ -630,6 +635,31 @@ function shouldSuppressProactiveReply(issues: string[]): boolean {
     (issue) =>
       issue === "duplicate proactive reply" || issue === "proactive quality",
   );
+}
+
+function resolveAdviceVisibleFallback(input: {
+  practicalHook?: string;
+  linkNarrative?: string;
+  signalSummary?: string;
+  activeWindow?: ActiveWindowInfo | null;
+}): string | null {
+  const direct = buildVisibleAdviceFallback(input);
+  if (direct) {
+    return direct;
+  }
+  const bundle = getLastProactiveLlmBundle();
+  if (!bundle || bundle.tone !== "advice") {
+    return null;
+  }
+  return buildVisibleAdviceFallback({
+    practicalHook: input.practicalHook ?? bundle.practicalHook,
+    linkNarrative:
+      input.linkNarrative ??
+      bundle.primaryChainSummary ??
+      bundle.narrativeBrief,
+    signalSummary: input.signalSummary,
+    activeWindow: input.activeWindow,
+  });
 }
 
 export function ChatPanel({
@@ -1721,6 +1751,7 @@ export function ChatPanel({
               proactiveReplyTone,
               settings,
               options.initiativeAnchor,
+              options.proactiveAdviceCandidateKind,
             )
           ) {
             const query = buildProactiveWebSearchQuery(
@@ -2010,11 +2041,16 @@ export function ChatPanel({
       const shouldValidateProactiveWithLlm =
         options.proactive &&
         isLlmProviderOnline(settings, ollamaOnline) &&
-        (settings.llmProvider !== "gigachat" || proactiveReplyTone === "advice");
+        settings.llmProvider !== "gigachat";
       if (shouldValidateProactiveWithLlm) {
         const proactiveBundle = getLastProactiveLlmBundle();
         const proactiveFacts = getLastProactiveSignalFacts();
-        const maxProactiveRegens = settings.llmProvider === "gigachat" ? 0 : 2;
+        const maxProactiveRegens =
+          settings.llmProvider === "gigachat"
+            ? proactiveReplyTone === "advice"
+              ? 1
+              : 0
+            : 2;
         for (let attempt = 0; attempt <= maxProactiveRegens; attempt += 1) {
           if (!proactiveBundle || !processed.content.trim()) {
             break;
@@ -2077,6 +2113,47 @@ export function ChatPanel({
         }
       }
 
+      if (
+        options.proactive &&
+        proactiveReplyTone === "advice" &&
+        settings.llmProvider === "gigachat" &&
+        processed.content.trim()
+      ) {
+        const proactiveBundle = getLastProactiveLlmBundle();
+        const proactiveFacts = getLastProactiveSignalFacts();
+        if (proactiveBundle) {
+          const localQuality = localReplyQualityCheck(
+            proactiveBundle,
+            processed.content,
+            proactiveFacts,
+          );
+          if (
+            localQuality &&
+            localQuality.issues.includes("single-factor generic")
+          ) {
+            const clarifying = buildVisibleClarifyingFallback(
+              proactiveFacts,
+              proactiveBundle,
+            );
+            if (clarifying) {
+              processed = {
+                content: clarifying,
+                emotion:
+                  processed.emotion === "neutral"
+                    ? "curious"
+                    : processed.emotion,
+                validation: {
+                  valid: true,
+                  issues: processed.validation.issues.filter(
+                    (issue) => issue !== "single-factor generic",
+                  ),
+                },
+              };
+            }
+          }
+        }
+      }
+
       if (shouldRetryReply(processed.validation)) {
         const firstProcessed = processed;
         ariLog("reply-meta", "debug", {
@@ -2120,9 +2197,9 @@ export function ChatPanel({
       if (
         options.proactive &&
         proactiveReplyTone === "advice" &&
-        processed.validation.issues.includes("proactive quality")
+        shouldSuppressProactiveReply(processed.validation.issues)
       ) {
-        const fallback = buildVisibleAdviceFallback({
+        const fallback = resolveAdviceVisibleFallback({
           practicalHook: options.proactivePracticalHook,
           linkNarrative: options.proactiveLinkNarrative,
           signalSummary: options.proactiveSignalSummary,
@@ -2131,11 +2208,14 @@ export function ChatPanel({
         if (fallback) {
           processed = {
             content: fallback,
-            emotion: processed.emotion === "neutral" ? "curious" : processed.emotion,
+            emotion:
+              processed.emotion === "neutral" ? "curious" : processed.emotion,
             validation: {
               valid: true,
               issues: processed.validation.issues.filter(
-                (issue) => issue !== "proactive quality",
+                (issue) =>
+                  issue !== "proactive quality" &&
+                  issue !== "duplicate proactive reply",
               ),
             },
           };
@@ -2726,6 +2806,7 @@ export function ChatPanel({
       conversationTopics: plan.conversationTopics,
     });
     if (!pkg) {
+      recordAdviceDecision("attempted -> prepare rejected");
       return false;
     }
     const sent = await launchProactiveInitiative(pkg, {
@@ -2739,6 +2820,9 @@ export function ChatPanel({
       if (subject) {
         rememberAdviceSubject(subject);
       }
+      recordAdviceDecision("attempted -> sent");
+    } else {
+      recordAdviceDecision("attempted -> launch failed");
     }
     return sent;
   }
@@ -2966,9 +3050,26 @@ export function ChatPanel({
           : null;
       if (tone === "advice" && !advicePlan?.selected) {
         const hasGroundingFacts = adviceFacts.some((fact) =>
-          ["clipboard", "file", "urgency", "task", "query"].includes(fact.kind),
+          [
+            "clipboard",
+            "file",
+            "urgency",
+            "task",
+            "query",
+            "screen",
+            "wm",
+            "reference",
+            "hypothesis",
+          ].includes(fact.kind),
         );
-        if (kind !== "check_in" && !hasGroundingFacts) {
+        const urgencyLevel = mergedOpts.urgency?.level;
+        const hasAdviceAnchor =
+          Boolean(preliminaryAnchor?.trim()) || candidateTopics.length > 0;
+        const bypassPlannerGate =
+          urgencyLevel === "medium" ||
+          urgencyLevel === "high" ||
+          (kind === "process_advice" && hasAdviceAnchor);
+        if (kind !== "check_in" && !hasGroundingFacts && !bypassPlannerGate) {
           recordInitiativeSuppressed(
             advicePlan?.reason ?? "advice planner rejected repeated advice",
           );
@@ -3015,10 +3116,40 @@ export function ChatPanel({
         }
       }
       if (!llmBundle.shouldSend) {
-        recordInitiativeSuppressed(
-          llmBundle.rejectReason ?? "llm bundle rejected",
-        );
-        return null;
+        if (tone === "advice") {
+          const fallbackBundle = tryAdviceFallbackChain(
+            {
+              bundle,
+              tone,
+              bannedTopics: banned,
+              candidateTopics,
+              sessionMinutes: mergedOpts.sessionMinutes,
+              windowMinutes: mergedOpts.windowMinutes,
+              companionSilenceMs: mergedOpts.companionSilenceMs,
+              recentUserMessage: mergedOpts.recentUserMessage,
+              urgency: mergedOpts.urgency,
+              recentChatTurns: mergedOpts.recentChatTurns,
+              ragSnippets: ragSnippets.length ? ragSnippets : undefined,
+              adviceCandidate: advicePlan?.selected,
+            },
+            adviceFacts,
+            llmBundle.rejectReason ?? "llm synthesis rejected",
+          );
+          if (fallbackBundle) {
+            llmBundle = fallbackBundle;
+            setLastProactiveLlmBundle(fallbackBundle, adviceFacts);
+          } else {
+            recordInitiativeSuppressed(
+              llmBundle.rejectReason ?? "llm bundle rejected",
+            );
+            return null;
+          }
+        } else {
+          recordInitiativeSuppressed(
+            llmBundle.rejectReason ?? "llm bundle rejected",
+          );
+          return null;
+        }
       }
       packageOptions = {
         ...packageOptions,
@@ -3391,7 +3522,14 @@ export function ChatPanel({
       const idleGateOpen =
         immersedCompanion || activityAgoMs >= requiredIdleMs;
       const toneSnapshot = getProactiveToneSnapshot();
-      const tickAction = evaluateProactiveTick({
+      const adviceStarved =
+        settings.advisorEnabled &&
+        llmOnline &&
+        hasActionableAdvisorSignals(signalBundle.advisor) &&
+        sinceAdviceAttempt >= adviceIntervalMs &&
+        (toneSnapshot.adviceToday === 0 ||
+          isSmalltalkSkewedToday(toneSnapshot));
+      let tickAction = evaluateProactiveTick({
         adviceReady,
         smalltalkReady,
         idleGateOpen,
@@ -3400,22 +3538,47 @@ export function ChatPanel({
         recentAdviceStreak: countRecentAdviceStreak(),
         adviceSkewedToday: isAdviceSkewedToday(toneSnapshot),
         smalltalkSkewedToday: isSmalltalkSkewedToday(toneSnapshot),
+        adviceToday: toneSnapshot.adviceToday,
       });
+
+      if (adviceStarved && idleGateOpen && !isLoadingRef.current) {
+        tickAction = "try_advice";
+        recordAdviceDecision("forced: advice starved");
+      } else if (tickAction === "silent") {
+        if (!adviceReady && urgency.level === "none") {
+          recordAdviceDecision("skipped: urgency none");
+        } else if (!adviceReady) {
+          recordAdviceDecision("skipped: advice not ready");
+        }
+      }
 
       if (tickAction === "silent") {
         return;
       }
 
       if (tickAction === "try_advice") {
+        const adviceUrgency =
+          urgency.level === "none" && adviceStarved
+            ? {
+                ...urgency,
+                level: "low" as const,
+                score: Math.max(urgency.score, 1),
+                effectiveIntervalMs: adviceIntervalMs,
+                reasons:
+                  urgency.reasons.length > 0
+                    ? urgency.reasons
+                    : ["принудительный совет при actionable signals"],
+              }
+            : urgency;
         const sent = await trySignalDrivenAdviceInitiative({
           signalBundle,
-          urgency,
+          urgency: adviceUrgency,
           plannedSilenceMs,
         });
         const nextAfterAdvice = afterAdviceAttempt({
           adviceSent: sent,
           smalltalkReady,
-          adviceUrgencyLevel: urgency.level,
+          adviceUrgencyLevel: adviceUrgency.level,
         });
         if (nextAfterAdvice === "silent") {
           return;

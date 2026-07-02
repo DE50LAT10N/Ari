@@ -26,6 +26,7 @@ import {
 import { formatActivitySignalsForDiagnostics } from "../memory/activitySignals";
 import {
   getLastAdviceAttemptAt,
+  getLastAdviceDecision,
   getLastProactiveMessageAt,
   getLastSmalltalkAttemptAt,
 } from "../character/proactiveState";
@@ -72,6 +73,7 @@ type ProactiveDebug = {
   lastBundleSource: string | null;
   adviceToday: number;
   smalltalkToday: number;
+  lastAdviceDecision: string | null;
 };
 
 function buildSnapshot(): DeskSnapshot {
@@ -137,6 +139,7 @@ function buildProactiveDebug(): ProactiveDebug {
     lastBundleSource: lastBundle?.source ?? null,
     adviceToday: health.proactiveTone.adviceToday,
     smalltalkToday: health.proactiveTone.smalltalkToday,
+    lastAdviceDecision: getLastAdviceDecision(),
   };
 }
 
@@ -381,6 +384,12 @@ export function AriDiagnosticsSection() {
                   : "ещё не было"}
               </dd>
             </div>
+            {proactiveDebug.lastAdviceDecision && (
+              <div>
+                <dt>Последнее решение совета</dt>
+                <dd>{proactiveDebug.lastAdviceDecision}</dd>
+              </div>
+            )}
           </>
         )}
       </dl>

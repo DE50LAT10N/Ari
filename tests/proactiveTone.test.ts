@@ -100,6 +100,31 @@ describe("proactiveTone", () => {
     ).toBe(false);
   });
 
+  it("enables proactive web search for researchable anchors and candidate kinds", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "CHANGELOG.md - Ari - Cursor",
+    });
+    expect(
+      shouldProactiveWebSearch(
+        bundle,
+        "advice",
+        defaultSettings,
+        "how to configure vite library",
+        "docs_lookup",
+      ),
+    ).toBe(true);
+    expect(
+      shouldProactiveWebSearch(
+        bundle,
+        "advice",
+        { ...defaultSettings, webToolsEnabled: false },
+        "debug error",
+        "debug_next_step",
+      ),
+    ).toBe(false);
+  });
+
   it("builds web search query from stacktrace not window title", () => {
     recordClipboardSignal({
       clipKind: "stacktrace",

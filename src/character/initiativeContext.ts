@@ -590,6 +590,9 @@ export function buildProactiveInitiativeContext(input: {
         isAdvice && synthesis.adviceSteps?.length
           ? `Конкретные шаги (обязательно отрази один): ${synthesis.adviceSteps.join(" | ")}.`
           : "",
+        isAdvice
+          ? "Свяжи минимум два фактора из цепочки в одну рекомендацию: «сделай X, потому что в твоей ситуации это решает Y и Z»; не один изолированный файл или факт."
+          : "",
         "Опирайся на связанную цепочку выше — не выбирай из списка тем и не пересказывай сигналы списком.",
       ]
         .filter(Boolean)

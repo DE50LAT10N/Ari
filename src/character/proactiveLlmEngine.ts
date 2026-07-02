@@ -230,17 +230,17 @@ function createRejectedProactiveLlmBundle(
   };
 }
 
-function createAdviceFallbackBundle(
+export function buildAdviceFallbackBundle(
   input: ProactiveLlmInput,
   facts: ProactiveSignalFact[],
-  reason: ProactiveLlmSystemRejectReason,
+  reason: ProactiveLlmSystemRejectReason | string,
 ): ProactiveLlmBundle | null {
   if (input.tone !== "advice") {
     return null;
   }
   const candidate = input.adviceCandidate ?? null;
   const groundingFacts = facts.filter((fact) =>
-    ["file", "clipboard", "task", "query", "reference", "urgency", "screen", "hypothesis"].includes(
+    ["file", "clipboard", "task", "query", "reference", "urgency", "screen", "hypothesis", "wm"].includes(
       fact.kind,
     ),
   );
@@ -294,6 +294,90 @@ function createAdviceFallbackBundle(
     linkConfidence: candidate?.confidence ?? 0.58,
     selectedAdviceCandidate: candidate ?? undefined,
   };
+}
+
+export function buildClarifyingProbeBundle(
+  input: ProactiveLlmInput,
+  facts: ProactiveSignalFact[],
+  reason: ProactiveLlmSystemRejectReason | string,
+): ProactiveLlmBundle | null {
+  if (input.tone !== "advice") {
+    return null;
+  }
+
+  const clip = facts.find((fact) => fact.kind === "clipboard");
+  const file = facts.find((fact) => fact.kind === "file");
+  const screen = facts.find((fact) => fact.kind === "screen");
+  const wm = facts.find((fact) => fact.kind === "wm");
+  const probeFact = clip ?? file ?? screen ?? wm;
+  if (!probeFact) {
+    return null;
+  }
+
+  let initiativeMove: ProactiveInitiativeMove = "context_fact";
+  let practicalHook: string;
+  if (clip) {
+    initiativeMove = "clipboard_probe";
+    const quote = clip.detail.slice(0, 80);
+    practicalHook = `В буфере «${quote}» — это текущая отладка или просто пример? Уточни, и я дам точный следующий шаг.`;
+  } else if (file) {
+    initiativeMove = "ide_invite";
+    practicalHook = `Сейчас фокус на ${file.detail} — что именно хочешь сдвинуть: ошибку, рефакторинг или проверку?`;
+  } else if (screen) {
+    practicalHook = `На экране вижу «${probeFact.detail.slice(0, 80)}» — что из этого сейчас главная цель?`;
+  } else {
+    practicalHook = `По недавней активности «${probeFact.detail.slice(0, 80)}» — какой результат ты хочешь получить сейчас?`;
+  }
+
+  const candidate: AdviceCandidate = {
+    id: "clarifying-probe-fallback",
+    kind: "clarifying_probe",
+    evidenceIds: [probeFact.id],
+    actionText: practicalHook.slice(0, 180),
+    expectedUtility: 0.58,
+    interruptionCost: 0.1,
+    confidence: 0.6,
+    reason: "недостаточно контекста для многофакторного совета",
+    score: 0.6,
+  };
+
+  return {
+    tone: "advice",
+    linkedThemes: [probeFact.label],
+    mergedAnchor: probeFact.detail.slice(0, 120),
+    narrativeBrief: `Нужно уточнение по ${probeFact.label}, чтобы связать цель и ситуацию в конкретный совет.`,
+    practicalHook: practicalHook.slice(0, 220),
+    adviceSteps: [practicalHook.slice(0, 180)],
+    usefulnessScore: 0.58,
+    shouldSend: true,
+    rejectReason: `clarifying probe after ${reason}`,
+    overlapsBanned: false,
+    source: "llm",
+    initiativeMove,
+    groundFactIds: [probeFact.id],
+    primaryChainSummary: `${probeFact.label} — контекста недостаточно для конкретного многофакторного совета`,
+    linkConfidence: 0.55,
+    selectedAdviceCandidate: candidate,
+  };
+}
+
+export function tryAdviceFallbackChain(
+  input: ProactiveLlmInput,
+  facts: ProactiveSignalFact[],
+  reason: ProactiveLlmSystemRejectReason | string,
+): ProactiveLlmBundle | null {
+  const candidate = input.adviceCandidate;
+  if (
+    candidate &&
+    candidate.kind !== "clarifying_probe" &&
+    candidate.kind !== "uncertainty_probe"
+  ) {
+    return buildAdviceFallbackBundle(input, facts, reason);
+  }
+  return (
+    buildClarifyingProbeBundle(input, facts, reason) ??
+    buildAdviceFallbackBundle(input, facts, reason)
+  );
 }
 
 export function collectProactiveSignalFacts(
@@ -716,6 +800,112 @@ function parseBundleResponse(
   };
 }
 
+function formatGroupedContextForPrompt(
+  facts: ProactiveSignalFact[],
+  bundle: InitiativeSignalBundle,
+): string {
+  const formatGroup = (items: ProactiveSignalFact[]) =>
+    items
+      .map((fact) => `- [${fact.kind}] ${fact.label}: ${fact.detail}`)
+      .join("\n");
+
+  const goalFacts = facts.filter((fact) =>
+    ["goal", "task"].includes(fact.kind),
+  );
+  const situationFacts = facts.filter((fact) =>
+    ["file", "screen", "session", "wm", "chat", "query", "hypothesis"].includes(
+      fact.kind,
+    ),
+  );
+  const constraintFacts = facts.filter((fact) =>
+    ["urgency", "reference"].includes(fact.kind),
+  );
+  const blockerLines = bundle.focusBlockers
+    .slice(0, 2)
+    .map((blocker) => `- [blocker] Блокер: ${blocker.slice(0, 120)}`);
+
+  return [
+    goalFacts.length ? `Цель:\n${formatGroup(goalFacts)}` : "",
+    situationFacts.length ? `Текущая ситуация:\n${formatGroup(situationFacts)}` : "",
+    constraintFacts.length || blockerLines.length
+      ? `Ограничения:\n${[...formatGroup(constraintFacts), ...blockerLines].filter(Boolean).join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+const GROUNDING_FACT_KINDS = new Set<ProactiveSignalFactKind>([
+  "file",
+  "clipboard",
+  "task",
+  "query",
+  "screen",
+  "wm",
+  "urgency",
+  "goal",
+  "hypothesis",
+  "reference",
+]);
+
+const GENERIC_ADVICE_PATTERNS = [
+  /сделай один следующий шаг/i,
+  /загляни(?: ещё раз)?/i,
+  /посмотри(?: ещё раз)?/i,
+  /сверь текущий экран/i,
+  /проверь самый свежий/i,
+];
+
+function countFactsReferencedInText(
+  text: string,
+  facts: ProactiveSignalFact[],
+): number {
+  return facts.filter((fact) => textMentionsFact(text, fact)).length;
+}
+
+function bundleReferencesSingleFactor(
+  bundle: ProactiveLlmBundle,
+  facts: ProactiveSignalFact[],
+): boolean {
+  const groundingFacts = facts.filter((fact) =>
+    GROUNDING_FACT_KINDS.has(fact.kind),
+  );
+  if (groundingFacts.length < 2) {
+    return false;
+  }
+  const text = [
+    bundle.primaryChainSummary,
+    bundle.narrativeBrief,
+    bundle.practicalHook,
+    ...(bundle.adviceSteps ?? []),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return countFactsReferencedInText(text, groundingFacts) <= 1;
+}
+
+export function isSingleFactorGenericAdvice(
+  reply: string,
+  facts: ProactiveSignalFact[],
+  bundle: ProactiveLlmBundle,
+): boolean {
+  const groundingFacts = facts.filter((fact) =>
+    GROUNDING_FACT_KINDS.has(fact.kind),
+  );
+  if (groundingFacts.length < 2) {
+    return false;
+  }
+  const isGenericTemplate = GENERIC_ADVICE_PATTERNS.some((pattern) =>
+    pattern.test(reply),
+  );
+  const isFallbackGeneric = Boolean(
+    bundle.rejectReason?.includes("fallback after") &&
+      bundle.initiativeMove === "concrete_step",
+  );
+  const refCount = countFactsReferencedInText(reply, groundingFacts);
+  return (isGenericTemplate || isFallbackGeneric) && refCount < 2;
+}
+
 function formatFactsForPrompt(facts: ProactiveSignalFact[]): string {
   return facts
     .map((fact) => `- [${fact.kind}] ${fact.label}: ${fact.detail}`)
@@ -786,6 +976,9 @@ function bundleSynthesisRegenIssues(
   ) {
     issues.push("нет цитаты буфера в practicalHook");
   }
+  if (bundleReferencesSingleFactor(bundle, facts)) {
+    issues.push("single-factor");
+  }
   return issues;
 }
 
@@ -795,7 +988,7 @@ function bundleSystemPrompt(isAdvice: boolean, requireHook: boolean): string {
     VN_CHARACTER_RULE,
     "Свяжи сигналы пользователя в одну причинно-следственную нить для проактивной реплики Ari.",
     isAdvice
-      ? "Режим: advice. narrativeBrief — одно предложение «X потому что Y, сейчас Z». practicalHook — заход Ari за плечом с цитатой из факта (буфер, файл, вопрос). adviceSteps — 2–4 проверяемых шага: причина, fix/команда/настройка, проверка исхода; не numbered list."
+      ? "Режим: advice. Свяжи минимум два фактора (цель + ситуация + ограничение) в одну рекомендацию: «сделай X, потому что в твоей ситуации это решает Y и Z». narrativeBrief — одно предложение в этой форме. primaryChainSummary — назови минимум два фактора и как они вместе определяют совет. practicalHook — конкретный заход с цитатой из факта. adviceSteps — 2–4 проверяемых шага; не numbered list. Запрещён одиночный совет «сделай шаг от файла X»."
       : "Режим: smalltalk. Одна живая нить без советов и next step. Можно выбрать контекстное наблюдение или боковую тему: музыка, игры, еда, настроение, странная бытовая мысль, культурный/новостной повод. Не утверждай конкретную свежую новость без live-проверки. Предпочитай утверждение/наблюдение; не заканчивай вопросом.",
     isAdvice
       ? "Если есть RAG/reference/web facts, извлеки из них вероятное решение проблемы. Не ограничивайся «поищи/проверь»: дай гипотезу, конкретный fix/команду/настройку и короткую проверку исхода."
@@ -823,6 +1016,7 @@ async function callSynthesisLlm(
   const banned = input.bannedTopics ?? [];
   const isAdvice = input.tone === "advice";
   const clipBlock = formatClipboardFactsForPrompt(facts);
+  const groupedContext = formatGroupedContextForPrompt(facts, input.bundle);
   const response = await completeLlmJson<BundleResponse>(
     [
       {
@@ -833,6 +1027,9 @@ async function callSynthesisLlm(
         role: "user",
         content: [
           `Запрошенный tone: ${input.tone}`,
+          groupedContext
+            ? `Сгруппированный контекст (свяжи факторы вместе, не по одному):\n${groupedContext}`
+            : "",
           `Факты:\n${formatFactsForPrompt(facts) || "нет"}`,
           clipBlock
             ? `Буфер (приоритет — practicalHook должен цитировать фрагмент):\n${clipBlock}`
@@ -914,43 +1111,72 @@ export async function synthesizeProactiveBundle(
   }
 
   try {
-    let parsed = await callSynthesisLlm(settings, enriched, facts, false, primaryChain);
-    if (!parsed && isLiteLlmModel(settings)) {
-      parsed = await callSynthesisLlm(settings, enriched, facts, true, primaryChain);
-    }
-    if (
-      !parsed &&
-      enriched.tone === "advice" &&
-      facts.some((fact) => ["clipboard", "file", "urgency"].includes(fact.kind))
-    ) {
-      parsed = await callSynthesisLlm(settings, enriched, facts, true, primaryChain);
-    }
-    if (parsed && enriched.tone === "advice") {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const regenIssues = bundleSynthesisRegenIssues(parsed, facts);
-        if (!regenIssues.length) {
-          break;
-        }
-        const retry = await callSynthesisLlm(
+    const isGigaChatAdvice =
+      settings.llmProvider === "gigachat" && enriched.tone === "advice";
+    let parsed = await callSynthesisLlm(
+      settings,
+      enriched,
+      facts,
+      false,
+      primaryChain,
+    );
+    if (!isGigaChatAdvice) {
+      if (!parsed && isLiteLlmModel(settings)) {
+        parsed = await callSynthesisLlm(
           settings,
           enriched,
           facts,
           true,
           primaryChain,
-          regenIssues.join("; "),
         );
-        if (!retry) {
-          break;
+      }
+      if (
+        !parsed &&
+        enriched.tone === "advice" &&
+        facts.some((fact) =>
+          ["clipboard", "file", "urgency"].includes(fact.kind),
+        )
+      ) {
+        parsed = await callSynthesisLlm(
+          settings,
+          enriched,
+          facts,
+          true,
+          primaryChain,
+        );
+      }
+      if (parsed && enriched.tone === "advice") {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const regenIssues = bundleSynthesisRegenIssues(parsed, facts);
+          if (!regenIssues.length) {
+            break;
+          }
+          const retry = await callSynthesisLlm(
+            settings,
+            enriched,
+            facts,
+            true,
+            primaryChain,
+            regenIssues.join("; "),
+          );
+          if (!retry) {
+            break;
+          }
+          parsed = retry;
         }
-        parsed = retry;
       }
     }
     if (parsed) {
-      if (!parsed.shouldSend && !parsed.overlapsBanned) {
-        const fallback = createAdviceFallbackBundle(
+      const adviceNeedsFallback =
+        enriched.tone === "advice" &&
+        (!parsed.shouldSend || parsed.overlapsBanned);
+      if (adviceNeedsFallback) {
+        const fallback = tryAdviceFallbackChain(
           enriched,
           facts,
-          "llm synthesis rejected",
+          parsed.overlapsBanned
+            ? "llm synthesis overlaps banned"
+            : "llm synthesis rejected",
         );
         if (fallback) {
           bundleCache.set(fingerprint, { at: Date.now(), value: fallback });
@@ -961,7 +1187,7 @@ export async function synthesizeProactiveBundle(
       return rememberProactiveLlmBundle(parsed, facts);
     }
   } catch {
-    const fallback = createAdviceFallbackBundle(
+    const fallback = tryAdviceFallbackChain(
       enriched,
       facts,
       "llm synthesis failed",
@@ -976,7 +1202,7 @@ export async function synthesizeProactiveBundle(
     );
   }
 
-  const fallback = createAdviceFallbackBundle(
+  const fallback = tryAdviceFallbackChain(
     enriched,
     facts,
     "llm synthesis rejected",
@@ -1036,7 +1262,7 @@ export function buildProactiveSummaryFromBundle(
   return parts.join(" · ");
 }
 
-function localReplyQualityCheck(
+export function localReplyQualityCheck(
   bundle: ProactiveLlmBundle,
   reply: string,
   facts: ProactiveSignalFact[],
@@ -1051,7 +1277,11 @@ function localReplyQualityCheck(
     issues.push("proactive meta commentary");
   }
 
+  const isFallbackBundle = bundle.rejectReason?.includes("fallback");
+  const isClarifyingBundle = bundle.rejectReason?.includes("clarifying probe");
+
   if (
+    !isFallbackBundle &&
     bundle.groundFactIds?.length &&
     bundle.initiativeMove &&
     ["clipboard_probe", "ide_invite", "followup_probe", "context_fact"].includes(
@@ -1063,6 +1293,7 @@ function localReplyQualityCheck(
   }
 
   if (
+    !isFallbackBundle &&
     bundle.primaryChainSummary &&
     bundle.topicLinks?.length &&
     bundle.initiativeMove &&
@@ -1075,14 +1306,31 @@ function localReplyQualityCheck(
     issues.push("weak chain narrative");
   }
 
+  const probeCandidate =
+    bundle.selectedAdviceCandidate?.kind === "clarifying_probe" ||
+    bundle.selectedAdviceCandidate?.kind === "uncertainty_probe";
   if (
     bundle.tone === "advice" &&
-    (bundle.initiativeMove === "clipboard_probe" ||
-      bundle.initiativeMove === "ide_invite")
+    (isClarifyingBundle ||
+      (probeCandidate &&
+        (bundle.initiativeMove === "clipboard_probe" ||
+          bundle.initiativeMove === "ide_invite" ||
+          bundle.initiativeMove === "context_fact")))
   ) {
-    if (!/[?？]/.test(trimmed) && !/(?:расскаж|опиш|что именно|где именно)/i.test(trimmed)) {
+    if (
+      !/[?？]/.test(trimmed) &&
+      !/(?:расскаж|опиш|что именно|где именно|уточни)/i.test(trimmed)
+    ) {
       issues.push("missing question");
     }
+  }
+
+  if (
+    bundle.tone === "advice" &&
+    !isClarifyingBundle &&
+    isSingleFactorGenericAdvice(trimmed, facts, bundle)
+  ) {
+    issues.push("single-factor generic");
   }
 
   if (issues.length) {

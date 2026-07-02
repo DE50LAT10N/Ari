@@ -22,15 +22,56 @@ const DEBUG_ANCHOR_HINTS = [
   "trace",
 ];
 
+const RESEARCHABLE_ANCHOR_HINTS = [
+  ...DEBUG_ANCHOR_HINTS,
+  "api",
+  "config",
+  "library",
+  "докумен",
+  "версия",
+  "version",
+  "npm",
+  "cargo",
+  "typescript",
+  "react",
+  "как ",
+  "how to",
+  "fix",
+  "install",
+];
+
+const RESEARCHABLE_CANDIDATE_KINDS = new Set([
+  "docs_lookup",
+  "solution_lookup",
+  "debug_next_step",
+  "terminal_error_triage",
+  "test_failure_triage",
+  "docs_to_code_bridge",
+]);
+
 export function isPracticalAnchor(anchor?: string): boolean {
   if (!anchor?.trim()) {
     return false;
   }
   const lower = anchor.toLowerCase();
-  if (DEBUG_ANCHOR_HINTS.some((hint) => lower.includes(hint))) {
+  if (RESEARCHABLE_ANCHOR_HINTS.some((hint) => lower.includes(hint))) {
     return true;
   }
   return /\.[a-z0-9]{1,6}\b/i.test(anchor);
+}
+
+export function isResearchableAdviceTopic(
+  anchor?: string,
+  candidateKind?: string,
+): boolean {
+  if (candidateKind && RESEARCHABLE_CANDIDATE_KINDS.has(candidateKind)) {
+    return true;
+  }
+  if (!anchor?.trim()) {
+    return false;
+  }
+  const lower = anchor.toLowerCase();
+  return RESEARCHABLE_ANCHOR_HINTS.some((hint) => lower.includes(hint));
 }
 
 export function isProactiveWorkContext(input: {
@@ -248,6 +289,7 @@ export function shouldProactiveWebSearch(
   tone: ProactiveReplyTone,
   settings: Pick<AppSettings, "webToolsEnabled">,
   anchor?: string,
+  candidateKind?: string,
 ): boolean {
   if (!settings.webToolsEnabled || tone !== "advice") {
     return false;
@@ -255,8 +297,14 @@ export function shouldProactiveWebSearch(
   if (hasProactiveDebugSignals(bundle)) {
     return true;
   }
+  if (isResearchableAdviceTopic(anchor, candidateKind)) {
+    return true;
+  }
+  if (bundle.advisor.topQueryThemes.length > 0) {
+    return true;
+  }
   if (anchor && isPracticalAnchor(anchor)) {
-    return DEBUG_ANCHOR_HINTS.some((hint) =>
+    return RESEARCHABLE_ANCHOR_HINTS.some((hint) =>
       anchor.toLowerCase().includes(hint),
     );
   }

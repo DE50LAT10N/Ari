@@ -1,4 +1,8 @@
 import type { ActiveWindowInfo } from "../platform/activeWindow";
+import type {
+  ProactiveLlmBundle,
+  ProactiveSignalFact,
+} from "./proactiveLlmEngine";
 
 function cleanText(value?: string, max = 180): string {
   return (value ?? "")
@@ -45,4 +49,36 @@ export function buildVisibleAdviceFallback(input: {
     `Хм. Вижу рабочий след: ${anchor}.`,
     `Я бы начала с одного шага: ${step}.`,
   ].join(" ");
+}
+
+export function buildVisibleClarifyingFallback(
+  facts: ProactiveSignalFact[],
+  bundle?: ProactiveLlmBundle | null,
+): string | null {
+  if (bundle?.rejectReason?.includes("clarifying probe")) {
+    const hook = cleanText(bundle.practicalHook, 220);
+    if (hook) {
+      return hook.endsWith("?") ? hook : `${hook}?`;
+    }
+  }
+
+  const clip = facts.find((fact) => fact.kind === "clipboard");
+  const file = facts.find((fact) => fact.kind === "file");
+  const screen = facts.find((fact) => fact.kind === "screen");
+  const wm = facts.find((fact) => fact.kind === "wm");
+  const probeFact = clip ?? file ?? screen ?? wm;
+  if (!probeFact) {
+    return null;
+  }
+
+  if (clip) {
+    return `В буфере «${cleanText(clip.detail, 80)}» — это текущая отладка или просто пример? Уточни, и я дам точный следующий шаг.`;
+  }
+  if (file) {
+    return `Сейчас фокус на ${cleanText(file.detail, 80)} — что именно хочешь сдвинуть: ошибку, рефакторинг или проверку?`;
+  }
+  if (screen) {
+    return `На экране вижу «${cleanText(screen.detail, 80)}» — что из этого сейчас главная цель?`;
+  }
+  return `По недавней активности «${cleanText(probeFact.detail, 80)}» — какой результат ты хочешь получить сейчас?`;
 }

@@ -14,11 +14,13 @@ const LAST_ADVICE_SUBJECT_KEY =
   "desktop-character.last-advice-subject.v1";
 const PROACTIVE_FAILURE_BACKOFF_KEY =
   "desktop-character.proactive-failure-backoff.v1";
+const LAST_ADVICE_DECISION_KEY =
+  "desktop-character.last-advice-decision.v1";
 
 export const PROACTIVE_SUBJECT_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 
 const PROACTIVE_FAILURE_BACKOFF_STEPS_MS = [
-  5 * 60 * 1000,
+  90 * 1000,
   15 * 60 * 1000,
   30 * 60 * 1000,
   60 * 60 * 1000,
@@ -29,6 +31,7 @@ let lastMessageCache: number | null = null;
 let lastAttemptCache: number | null = null;
 let lastAdviceAttemptCache: number | null = null;
 let lastSmalltalkAttemptCache: number | null = null;
+let lastAdviceDecisionCache: string | null | undefined;
 
 type SubjectCooldownEntry = { subject: string; at: number };
 export type ProactiveFailureBackoff = {
@@ -44,6 +47,7 @@ export function invalidateProactiveStateCache(): void {
   lastAttemptCache = null;
   lastAdviceAttemptCache = null;
   lastSmalltalkAttemptCache = null;
+  lastAdviceDecisionCache = undefined;
 }
 
 export function resetProactiveStateForTests(): void {
@@ -60,7 +64,32 @@ export function resetProactiveStateForTests(): void {
   localStorage.removeItem(LAST_ADVICE_ATTEMPT_KEY);
   localStorage.removeItem(LAST_SMALLTALK_ATTEMPT_KEY);
   localStorage.removeItem(PROACTIVE_FAILURE_BACKOFF_KEY);
+  localStorage.removeItem(LAST_ADVICE_DECISION_KEY);
   localStorage.removeItem("desktop-character.idle-lines-recent.v1");
+  lastAdviceDecisionCache = undefined;
+}
+
+export function recordAdviceDecision(reason: string, now = Date.now()): void {
+  const entry = { reason: reason.slice(0, 200), at: now };
+  localStorage.setItem(LAST_ADVICE_DECISION_KEY, JSON.stringify(entry));
+  lastAdviceDecisionCache = entry.reason;
+  window.dispatchEvent(new Event("ari-proactive-state-changed"));
+}
+
+export function getLastAdviceDecision(): string | null {
+  if (lastAdviceDecisionCache !== undefined) {
+    return lastAdviceDecisionCache;
+  }
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(LAST_ADVICE_DECISION_KEY) ?? "null",
+    ) as { reason?: string } | null;
+    lastAdviceDecisionCache = stored?.reason ?? null;
+    return lastAdviceDecisionCache;
+  } catch {
+    lastAdviceDecisionCache = null;
+    return null;
+  }
 }
 
 function loadProactiveFailureBackoff(): ProactiveFailureBackoff | null {
