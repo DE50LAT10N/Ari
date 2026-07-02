@@ -64,6 +64,7 @@ All settings persist in `localStorage` key `desktop-character.settings.v1`. Defa
 | `quietHoursEnd` | 8 | Quiet hours end |
 | `adaptiveInitiativeEnabled` | false | Online logistic learning |
 | `intentClassifierEnabled` | true | Regex intent for modes/rerank |
+| `moodEngineEnabled` | true | Enable coordinate mood engine (prompt/style + event updates) |
 
 ### Advice vs smalltalk balance
 

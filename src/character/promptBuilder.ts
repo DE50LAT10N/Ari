@@ -127,6 +127,7 @@ export type RuntimeContext = {
   proactiveSignalSummary?: string;
   proactiveLinkNarrative?: string;
   proactivePracticalHook?: string;
+  proactiveAdviceSteps?: string[];
   proactiveInitiativeMove?: string;
   proactiveNoveltyGuidance?: string;
   userFactDetails?: Array<{
@@ -488,7 +489,10 @@ function createSystemPrompt(context?: RuntimeContext): string {
           ? "Опирайся на связанную нить ниже — не выбирай из списка тем и не пересказывай сигналы списком."
           : "",
         context.proactivePracticalHook && isAdvice
-          ? `Используй намерение этого захода, но не копируй его структуру и не повторяй недавние архетипы: ${sanitizeUntrusted(context.proactivePracticalHook, 220)}.`
+          ? `Опирайся на этот заход, но сохрани конкретную рекомендацию и минимум один проверяемый шаг; перескажи это в голосе Ari, не выхолащивая суть: ${sanitizeUntrusted(context.proactivePracticalHook, 220)}.`
+          : "",
+        context.proactiveAdviceSteps?.length && isAdvice
+          ? `Готовая суть совета (обязательно донеси её содержательно, выбери самый полезный 1 шаг и вплети его в реплику, не выкидывай конкретику): ${context.proactiveAdviceSteps.map((step) => sanitizeUntrusted(step, 160)).join(" • ")}.`
           : "",
         context.proactiveNoveltyGuidance && isAdvice
           ? context.proactiveNoveltyGuidance

@@ -60,6 +60,13 @@ import {
   moodPreferredEmotion,
   type CharacterMood,
 } from "../character/mood";
+import {
+  emotionToMoodEvent,
+  interactionToMoodEvent,
+  isMoodEngineEnabled,
+  triggerToMoodEvent,
+  updateMoodFromEvents,
+} from "../character/moodEngine";
 import { ADVICE_IGNORED_EVENT } from "../character/adviceOutcome";
 import { deriveAttentionState, type AttentionState } from "../character/attention";
 import {
@@ -139,6 +146,7 @@ function pickProximityReaction(
 
 export function App() {
   const [settings, setSettings] = useState(loadSettings);
+  const settingsRef = useRef(settings);
   const [chatOpen, setChatOpen] = useState(false);
   const [emotion, setEmotion] = useState<CharacterEmotion>("neutral");
   const [ambientEmotion, setAmbientEmotion] = useState<CharacterEmotion | null>(
@@ -147,6 +155,10 @@ export function App() {
   const [characterState, setCharacterState] = useState<CharacterState>("idle");
   const [mood, setMood] = useState<CharacterMood>(loadMood);
   const [microReaction, setMicroReaction] = useState<MicroReaction | null>(null);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
   const [ambientBubble, setAmbientBubble] = useState<string | null>(null);
   const [ambientBubbleSession, setAmbientBubbleSession] = useState(0);
   const ambientBubbleTextRef = useRef<string | null>(null);
@@ -318,9 +330,55 @@ export function App() {
       }
     }
 
-    setMood((currentMood) => applyEmotionToMood(currentMood, softened));
+    setMood((currentMood) => {
+      if (!isMoodEngineEnabled(settingsRef.current)) {
+        return applyEmotionToMood(currentMood, softened);
+      }
+      const result = updateMoodFromEvents({
+        settings: settingsRef.current,
+        events: [emotionToMoodEvent({ emotion: softened })],
+      });
+      return {
+        warmth: result.nextMood.warmth ?? currentMood.warmth,
+        energy: result.nextMood.energy ?? currentMood.energy,
+        irritation: result.nextMood.irritation ?? currentMood.irritation,
+        updatedAt: Date.now(),
+      };
+    });
     recordEmotion(softened, reason);
   }, []);
+
+  const applyInteractionMood = useCallback(
+    (
+      interaction:
+        | "click"
+        | "repeated-clicks"
+        | "return"
+        | "headpat"
+        | "chat_positive"
+        | "help_request"
+        | "ignored_initiative"
+        | "long_silence",
+      intensity = 1,
+    ) => {
+      setMood((current) => {
+        if (!isMoodEngineEnabled(settingsRef.current)) {
+          return applyInteractionToMood(current, interaction);
+        }
+        const result = updateMoodFromEvents({
+          settings: settingsRef.current,
+          events: [interactionToMoodEvent({ interaction, intensity })],
+        });
+        return {
+          warmth: result.nextMood.warmth ?? current.warmth,
+          energy: result.nextMood.energy ?? current.energy,
+          irritation: result.nextMood.irritation ?? current.irritation,
+          updatedAt: Date.now(),
+        };
+      });
+    },
+    [],
+  );
 
   const handleProactiveMessage = useCallback(() => {
     recordCompanionInteraction();
@@ -496,7 +554,7 @@ export function App() {
       triggerSilentReaction("repeated_click");
     }
 
-    setMood((current) => applyInteractionToMood(current, "click"));
+    applyInteractionMood("click");
 
     setChatOpen((wasOpen) => {
       const nextOpen = !wasOpen;
@@ -534,7 +592,7 @@ export function App() {
   }
 
   function handleHeadpat() {
-    setMood((current) => applyInteractionToMood(current, "headpat"));
+    applyInteractionMood("headpat");
     applyHeadpatToRelationship(loadRelationship());
     handleEmotionChange("blush", "initiative");
     showMicroReaction({
@@ -719,7 +777,7 @@ export function App() {
       ) {
         wasChatTypingAwayRef.current = false;
         returnHandledAtRef.current = Date.now();
-        setMood((current) => applyInteractionToMood(current, "return"));
+        applyInteractionMood("return");
         if (!runPcReaction("return_from_idle")) {
           if (!triggerSilentReaction("return")) {
             runScenarioSilent("chat_return");
@@ -735,7 +793,7 @@ export function App() {
       ) {
         returnHandledAtRef.current = Date.now();
         idlePeakRef.current = effectiveIdle;
-        setMood((current) => applyInteractionToMood(current, "return"));
+        applyInteractionMood("return");
         if (!runPcReaction("return_from_idle")) {
           if (!triggerSilentReaction("return")) {
             const outcome = resolveScenario("return_after_absence", {
@@ -773,7 +831,26 @@ export function App() {
     const handleAdviceIgnored = (event: Event) => {
       const count =
         (event as CustomEvent<{ count?: number }>).detail?.count ?? 1;
-      setMood((current) => applyRepeatedIgnoreMood(current, count));
+      setMood((current) => {
+        if (!isMoodEngineEnabled(settingsRef.current)) {
+          return applyRepeatedIgnoreMood(current, count);
+        }
+        const result = updateMoodFromEvents({
+          settings: settingsRef.current,
+          events: [
+            interactionToMoodEvent({
+              interaction: "ignored_initiative",
+              intensity: Math.min(3, Math.max(1, count)),
+            }),
+          ],
+        });
+        return {
+          warmth: result.nextMood.warmth ?? current.warmth,
+          energy: result.nextMood.energy ?? current.energy,
+          irritation: result.nextMood.irritation ?? current.irritation,
+          updatedAt: Date.now(),
+        };
+      });
     };
     window.addEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
     return () =>
@@ -1274,11 +1351,27 @@ export function App() {
         characterState={characterState}
         onAmbientBubble={handleAmbientBubble}
         onProactiveEmitted={handleProactiveEmitted}
-        onMoodInteraction={(interaction) =>
-          setMood((current) => applyInteractionToMood(current, interaction))
-        }
+        onMoodInteraction={(interaction) => applyInteractionMood(interaction)}
         onMoodTrigger={(trigger) =>
-          setMood((current) => applyMoodTriggerToMood(current, trigger))
+          setMood((current) => {
+            if (!isMoodEngineEnabled(settingsRef.current)) {
+              return applyMoodTriggerToMood(current, trigger);
+            }
+            const event = triggerToMoodEvent({ trigger });
+            if (!event) {
+              return decayMood(current);
+            }
+            const result = updateMoodFromEvents({
+              settings: settingsRef.current,
+              events: [event],
+            });
+            return {
+              warmth: result.nextMood.warmth ?? current.warmth,
+              energy: result.nextMood.energy ?? current.energy,
+              irritation: result.nextMood.irritation ?? current.irritation,
+              updatedAt: Date.now(),
+            };
+          })
         }
       />
       <NotificationToast />

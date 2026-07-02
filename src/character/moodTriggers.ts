@@ -25,16 +25,16 @@ export type MoodTrigger = {
 
 type MoodShift = Pick<CharacterMood, "warmth" | "energy" | "irritation">;
 
-const SHIFT_BY_TRIGGER: Record<MoodTriggerKind, MoodShift> = {
-  rude: { warmth: -0.2, energy: 0.1, irritation: 0.32 },
-  pushy: { warmth: -0.1, energy: 0.08, irritation: 0.2 },
-  playful: { warmth: 0.08, energy: 0.22, irritation: -0.04 },
-  praise: { warmth: 0.18, energy: 0.1, irritation: -0.12 },
-  thanks: { warmth: 0.12, energy: 0.04, irritation: -0.1 },
-  affection: { warmth: 0.22, energy: 0.07, irritation: -0.14 },
-  apology: { warmth: 0.1, energy: -0.02, irritation: -0.2 },
-  user_tired: { warmth: 0.16, energy: -0.08, irritation: -0.08 },
-  user_frustrated: { warmth: 0.08, energy: 0.04, irritation: 0.08 },
+export const MOOD_SHIFT_BY_TRIGGER: Record<MoodTriggerKind, MoodShift> = {
+  rude: { warmth: -0.3, energy: 0.14, irritation: 0.46 },
+  pushy: { warmth: -0.16, energy: 0.12, irritation: 0.3 },
+  playful: { warmth: 0.12, energy: 0.32, irritation: -0.06 },
+  praise: { warmth: 0.27, energy: 0.15, irritation: -0.18 },
+  thanks: { warmth: 0.18, energy: 0.06, irritation: -0.15 },
+  affection: { warmth: 0.33, energy: 0.1, irritation: -0.2 },
+  apology: { warmth: 0.15, energy: -0.03, irritation: -0.3 },
+  user_tired: { warmth: 0.24, energy: -0.12, irritation: -0.12 },
+  user_frustrated: { warmth: 0.12, energy: 0.06, irritation: 0.12 },
   neutral: { warmth: 0, energy: 0, irritation: 0 },
 };
 
@@ -140,7 +140,7 @@ export function previewMoodAfterTrigger(
     return decayMood(mood);
   }
   const current = decayMood(mood);
-  const shift = SHIFT_BY_TRIGGER[trigger.kind];
+  const shift = MOOD_SHIFT_BY_TRIGGER[trigger.kind];
   const weight = Math.max(0.55, Math.min(1, trigger.confidence));
   return {
     warmth: clamp(current.warmth + shift.warmth * weight),

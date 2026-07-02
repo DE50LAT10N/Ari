@@ -16,6 +16,7 @@ import {
 } from "../src/character/adviceUrgency";
 import { rememberAdviceSent, resetAdviceLedgerForTests } from "../src/character/adviceLedger";
 import { buildAdviceBrief } from "../src/character/proactiveContextRich";
+import { selectAdvisorAngle } from "../src/character/advisorEngine";
 import {
   MEDIUM_ADVICE_CAP_MS,
   proactiveAdviceIntervalMs,
@@ -96,7 +97,9 @@ describe("adviceUrgency", () => {
     });
 
     expect(urgency.score).toBeGreaterThanOrEqual(1);
-    expect(urgency.reasons.some((reason) => reason.includes("свежий буфер"))).toBe(
+    expect(
+      urgency.reasons.some((reason) => /содержательный буфер|буфер/i.test(reason)),
+    ).toBe(
       true,
     );
   });
@@ -318,6 +321,115 @@ describe("adviceUrgency", () => {
         topic.includes("adviceUrgency.ts"),
       ),
     ).toBe(true);
+  });
+
+  it("does not pick debug_help from light friction alone (keeps topic)", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "foo.ts - Ari - Cursor",
+      sessionMinutes: 6,
+    });
+
+    const frictionOnly = {
+      ...bundle,
+      advisor: {
+        ...bundle.advisor,
+        dominantFile: "foo.ts",
+        stuckScore: 0,
+        repeatedErrorSignature: undefined,
+        breakDue: false,
+        contextThrash: false,
+        scopeCreep: false,
+        progressWin: false,
+        activitySummary: {
+          ...bundle.advisor.activitySummary,
+          inputFrictionScore: 1.2,
+        },
+      },
+    };
+
+    expect(selectAdvisorAngle(frictionOnly.advisor)).toBe("topic");
+  });
+
+  it("keeps rest/refocus priority over debug_help", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "foo.ts - Ari - Cursor",
+      sessionMinutes: 40,
+    });
+
+    const wantsRest = {
+      ...bundle,
+      advisor: {
+        ...bundle.advisor,
+        dominantFile: "foo.ts",
+        stuckScore: 0.5,
+        breakDue: true,
+        activitySummary: {
+          ...bundle.advisor.activitySummary,
+          inputFrictionScore: 3.5,
+        },
+      },
+    };
+    expect(selectAdvisorAngle(wantsRest.advisor)).toBe("rest");
+
+    const wantsRefocus = {
+      ...bundle,
+      advisor: {
+        ...bundle.advisor,
+        dominantFile: "foo.ts",
+        stuckScore: 0.5,
+        breakDue: false,
+        contextThrash: true,
+        activitySummary: {
+          ...bundle.advisor.activitySummary,
+          inputFrictionScore: 3.5,
+        },
+      },
+    };
+    expect(selectAdvisorAngle(wantsRefocus.advisor)).toBe("refocus");
+  });
+
+  it("avoids repeating friction-based debug_help on same file", () => {
+    rememberAdviceSent({
+      tone: "advice",
+      anchor: "foo.ts",
+      practicalHook: "Проверь обработчик в foo.ts",
+      adviceCandidateKind: "debug_next_step",
+      signalSummary: "test",
+    });
+    rememberAdviceSent({
+      tone: "advice",
+      anchor: "foo.ts",
+      practicalHook: "Ещё шаг по foo.ts",
+      adviceCandidateKind: "debug_next_step",
+      signalSummary: "test",
+    });
+
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "foo.ts - Ari - Cursor",
+      sessionMinutes: 8,
+    });
+
+    const frictionDebug = {
+      ...bundle,
+      advisor: {
+        ...bundle.advisor,
+        dominantFile: "foo.ts",
+        stuckScore: 0.45,
+        repeatedErrorSignature: undefined,
+        breakDue: false,
+        contextThrash: false,
+        activitySummary: {
+          ...bundle.advisor.activitySummary,
+          inputFrictionScore: 3.2,
+        },
+      },
+    };
+
+    // Should fall back to "topic" (dominantFile exists) instead of debug_help.
+    expect(selectAdvisorAngle(frictionDebug.advisor)).toBe("topic");
   });
 
   it("builds advice brief from high urgency stacktrace", () => {

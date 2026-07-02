@@ -3,6 +3,7 @@ import {
   buildAdvisorContext,
   type AdvisorContext,
 } from "./advisorContext";
+import { loadAdviceLedger } from "./adviceLedger";
 import type { ActivitySignal } from "../memory/activitySignals";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import { isTopicAngleTechnical } from "./proactiveTone";
@@ -345,20 +346,64 @@ export type AdvisorAngle =
   | "celebrate"
   | "topic";
 
+const DEBUG_ADVICE_KINDS = new Set<string>([
+  "debug_next_step",
+  "terminal_error_triage",
+  "test_failure_triage",
+]);
+
+function normalizeFileStem(value?: string): string {
+  const key = (value ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}._-]+/gu, " ")
+    .trim();
+  if (!key) {
+    return "";
+  }
+  const stem = key.split(/[\\/]/).pop() ?? key;
+  return stem.trim();
+}
+
+function recentDebugAdviceOnSameFile(ctx: AdvisorContext, now = Date.now()): boolean {
+  const stem = normalizeFileStem(ctx.dominantFile);
+  if (!stem) {
+    return false;
+  }
+  const stemRoot = stem.split(".")[0] ?? stem;
+  const matchesFile = (text?: string) => {
+    const normalized = (text ?? "").toLowerCase();
+    return (
+      normalized.includes(stem) ||
+      (stemRoot.length >= 5 && normalized.includes(stemRoot))
+    );
+  };
+
+  const recent = loadAdviceLedger(now)
+    .filter((entry) => entry.tone === "advice" && now - entry.at <= 20 * 60_000)
+    .slice(0, 6);
+
+  let hits = 0;
+  for (const entry of recent) {
+    const kind = entry.adviceCandidateKind ?? "";
+    if (!DEBUG_ADVICE_KINDS.has(kind)) {
+      continue;
+    }
+    if (
+      matchesFile(entry.anchor) ||
+      matchesFile(entry.practicalHook) ||
+      matchesFile(entry.replyText)
+    ) {
+      hits += 1;
+    }
+  }
+  return hits >= 2;
+}
+
 export function selectAdvisorAngle(ctx: AdvisorContext): AdvisorAngle | null {
   if (!ctx.enabled) {
     return null;
   }
 
-  if (ctx.repeatedErrorSignature && ctx.stuckScore >= 0.45) {
-    return "debug_help";
-  }
-  if (ctx.activitySummary.inputFrictionScore >= 1 && ctx.dominantFile) {
-    return "debug_help";
-  }
-  if (ctx.stuckScore >= 0.6) {
-    return "debug_help";
-  }
   if (ctx.breakDue) {
     return "rest";
   }
@@ -370,6 +415,21 @@ export function selectAdvisorAngle(ctx: AdvisorContext): AdvisorAngle | null {
   }
   if (ctx.progressWin) {
     return "celebrate";
+  }
+
+  if (ctx.repeatedErrorSignature && ctx.stuckScore >= 0.45) {
+    return "debug_help";
+  }
+  if (ctx.stuckScore >= 0.6) {
+    return "debug_help";
+  }
+  if (
+    ctx.dominantFile &&
+    ctx.activitySummary.inputFrictionScore >= 2.5 &&
+    ctx.stuckScore >= 0.4 &&
+    !recentDebugAdviceOnSameFile(ctx)
+  ) {
+    return "debug_help";
   }
   if (
     ctx.topQueryThemes.length > 0 ||
@@ -560,6 +620,12 @@ export function buildConversationTopics(
   };
 
   if (bundle) {
+    // Prefer fresh clipboard context as the first topic when available.
+    // This helps avoid over-fixation on the same file name when the user is actively copying errors/snippets.
+    if (bundle.clipboardSnippets.length) {
+      const clip = bundle.clipboardSnippets[bundle.clipboardSnippets.length - 1];
+      push(clip.text.slice(0, 100));
+    }
     push(bundle.editorFile ?? bundle.advisor.editorContext.file);
     push(buildLiveCodingTopic(bundle));
   }
@@ -568,9 +634,10 @@ export function buildConversationTopics(
     push(bundle.focusBlockers[0].slice(0, 120));
   }
 
-  if (bundle?.clipboardSnippets.length) {
-    const clip = bundle.clipboardSnippets[bundle.clipboardSnippets.length - 1];
-    push(clip.text.slice(0, 100));
+  // clipboard topic is handled above (preferred position), but keep compatibility
+  // when buildConversationTopics is called without the bundle block.
+  if (!bundle && ctx.activitySummary.latestClipboard?.snippet) {
+    push(ctx.activitySummary.latestClipboard.snippet.slice(0, 100));
   }
 
   if (bundle?.visionSummary) {

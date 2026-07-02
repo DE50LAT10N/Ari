@@ -9,6 +9,11 @@ import {
   type CharacterMood,
 } from "../character/mood";
 import {
+  getCurrentMoodVector,
+  isMoodEngineEnabled,
+  moodVectorToPrompt,
+} from "../character/moodEngine";
+import {
   buildMoodRefusalReply,
   deriveMoodArchetype,
   shouldMoodRefuseRequest,
@@ -422,6 +427,7 @@ type ChatPanelProps = {
       | "return"
       | "headpat"
       | "chat_positive"
+      | "help_request"
       | "ignored_initiative"
       | "long_silence",
   ) => void;
@@ -1472,6 +1478,7 @@ export function ChatPanel({
       proactiveSignalSummary?: string;
       proactiveLinkNarrative?: string;
       proactivePracticalHook?: string;
+      proactiveAdviceSteps?: string[];
       proactiveInitiativeMove?: string;
       proactiveAdviceCandidateKind?: string;
       proactiveNoveltyGuidance?: string;
@@ -1873,6 +1880,9 @@ export function ChatPanel({
         userAskedQuestion,
       };
       const emotionGuidance = describeEmotionAntiRepeat(moodForReply);
+      const moodPrompt = isMoodEngineEnabled(settings)
+        ? moodVectorToPrompt(getCurrentMoodVector().vector).promptModifier
+        : describeMoodForPrompt(moodForReply);
       let runtimeContext: RuntimeContext = {
         memory,
         activeWindow,
@@ -1895,7 +1905,7 @@ export function ChatPanel({
         initiativeAnchor: options.initiativeAnchor,
         softInitiativeAnchor: options.softInitiativeAnchor,
         bannedProactiveTopics: options.bannedProactiveTopics,
-        mood: describeMoodForPrompt(moodForReply),
+        mood: moodPrompt,
         relationship: `${describeRelationship(
           relationship,
         )}. ${describeBondForPrompt(relationship, settings.romanceMode)}; тон: ${relationshipTone}`,
@@ -1926,6 +1936,7 @@ export function ChatPanel({
         proactiveSignalSummary: options.proactiveSignalSummary,
         proactiveLinkNarrative: options.proactiveLinkNarrative,
         proactivePracticalHook: options.proactivePracticalHook,
+        proactiveAdviceSteps: options.proactiveAdviceSteps,
         proactiveInitiativeMove: options.proactiveInitiativeMove,
         proactiveNoveltyGuidance: options.proactiveNoveltyGuidance,
       };
@@ -2364,7 +2375,13 @@ export function ChatPanel({
         !options.screenObservation &&
         lastUserMessage
       ) {
-        onMoodInteraction?.("chat_positive");
+        const userIntentForMood = classifyUserIntent(lastUserMessage);
+        const isAdviceRequest =
+          (userIntentForMood.intent === "technical_help" ||
+            userIntentForMood.intent === "emotional_support" ||
+            userIntentForMood.intent === "question") &&
+          userIntentForMood.confidence >= 0.7;
+        onMoodInteraction?.(isAdviceRequest ? "help_request" : "chat_positive");
         setRelationship((current) => {
           const updated = updateRelationshipAfterExchange(
             current,
@@ -3304,6 +3321,7 @@ export function ChatPanel({
         pkg.llmBundle?.primaryChainSummary ??
         pkg.llmBundle?.narrativeBrief,
       proactivePracticalHook: pkg.llmBundle?.practicalHook,
+      proactiveAdviceSteps: pkg.llmBundle?.adviceSteps,
       proactiveInitiativeMove: pkg.llmBundle?.initiativeMove,
       proactiveAdviceCandidateKind:
         pkg.llmBundle?.selectedAdviceCandidate?.kind,
@@ -3343,6 +3361,7 @@ export function ChatPanel({
       gateContext?: string;
       proactiveLinkNarrative?: string;
       proactivePracticalHook?: string;
+      proactiveAdviceSteps?: string[];
       proactiveInitiativeMove?: string;
       proactiveAdviceCandidateKind?: string;
       proactiveNoveltyGuidance?: string;
@@ -3513,6 +3532,7 @@ export function ChatPanel({
         proactiveSignalSummary: options.proactiveSignalSummary,
         proactiveLinkNarrative: options.proactiveLinkNarrative,
         proactivePracticalHook: options.proactivePracticalHook,
+        proactiveAdviceSteps: options.proactiveAdviceSteps,
         proactiveInitiativeMove: options.proactiveInitiativeMove,
         proactiveAdviceCandidateKind: options.proactiveAdviceCandidateKind,
         proactiveNoveltyGuidance: options.proactiveNoveltyGuidance,

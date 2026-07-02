@@ -103,6 +103,19 @@ describe("advisorEngine", () => {
     ).toBe(true);
   });
 
+  it("prefers clipboard as the first topic when present", () => {
+    recordClipboardSignal({
+      clipKind: "stacktrace",
+      snippet: "TypeError: Cannot read properties of undefined",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      windowTitle: "ambientThoughts.ts - desktop-character - Cursor",
+      processName: "Cursor.exe",
+    });
+    const topics = buildConversationTopics(bundle.advisor, 5, [], bundle);
+    expect(topics[0] ?? "").toMatch(/TypeError|undefined|properties/i);
+  });
+
   it("builds conversation topics from recent activity", () => {
     recordQueryTopic({ topic: "vitest mocks", source: "chat" });
     const ctx = buildAdvisorContext(defaultSettings, {

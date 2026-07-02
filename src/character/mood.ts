@@ -146,10 +146,20 @@ export function applyEmotionToMood(
   emotion: CharacterEmotion,
 ): CharacterMood {
   const current = decayMood(mood);
-  const shifts: Record<
-    CharacterEmotion,
-    Pick<CharacterMood, "warmth" | "energy" | "irritation">
-  > = {
+  const shift = EMOTION_MOOD_SHIFTS[emotion];
+
+  return saveMood({
+    warmth: current.warmth + shift.warmth,
+    energy: current.energy + shift.energy,
+    irritation: current.irritation + shift.irritation,
+    updatedAt: Date.now(),
+  });
+}
+
+export const EMOTION_MOOD_SHIFTS: Record<
+  CharacterEmotion,
+  Pick<CharacterMood, "warmth" | "energy" | "irritation">
+> = {
     neutral: { warmth: 0, energy: -0.04, irritation: -0.06 },
     happy: { warmth: 0.22, energy: 0.14, irritation: -0.14 },
     amused: { warmth: 0.13, energy: 0.2, irritation: -0.05 },
@@ -169,15 +179,6 @@ export function applyEmotionToMood(
     shy: { warmth: 0.16, energy: -0.02, irritation: -0.08 },
     determined: { warmth: 0.06, energy: 0.08, irritation: -0.04 },
   };
-  const shift = shifts[emotion];
-
-  return saveMood({
-    warmth: current.warmth + shift.warmth,
-    energy: current.energy + shift.energy,
-    irritation: current.irritation + shift.irritation,
-    updatedAt: Date.now(),
-  });
-}
 
 export function applyInteractionToMood(
   mood: CharacterMood,
@@ -187,24 +188,14 @@ export function applyInteractionToMood(
     | "return"
     | "headpat"
     | "chat_positive"
+    | "help_request"
     | "ignored_initiative"
     | "long_silence",
 ): CharacterMood {
   const current = decayMood(mood);
   const shift =
-    interaction === "repeated-clicks"
-      ? { warmth: -0.07, energy: 0.14, irritation: 0.22 }
-      : interaction === "return"
-        ? { warmth: 0.16, energy: 0.09, irritation: -0.09 }
-        : interaction === "headpat"
-          ? { warmth: 0.2, energy: 0.06, irritation: -0.12 }
-          : interaction === "chat_positive"
-            ? { warmth: 0.1, energy: 0.06, irritation: -0.05 }
-            : interaction === "ignored_initiative"
-              ? { warmth: -0.08, energy: -0.05, irritation: 0.14 }
-              : interaction === "long_silence"
-                ? { warmth: -0.02, energy: -0.05, irritation: 0.03 }
-                : { warmth: 0.03, energy: 0.05, irritation: 0.015 };
+    INTERACTION_MOOD_SHIFTS[interaction] ??
+    INTERACTION_MOOD_SHIFTS.click;
 
   return saveMood({
     warmth: current.warmth + shift.warmth,
@@ -213,6 +204,24 @@ export function applyInteractionToMood(
     updatedAt: Date.now(),
   });
 }
+
+export const INTERACTION_MOOD_SHIFTS: Record<
+  Exclude<Parameters<typeof applyInteractionToMood>[1], "click">,
+  Pick<CharacterMood, "warmth" | "energy" | "irritation">
+> &
+  Record<
+    "click",
+    Pick<CharacterMood, "warmth" | "energy" | "irritation">
+  > = {
+  click: { warmth: 0.04, energy: 0.06, irritation: 0.02 },
+  "repeated-clicks": { warmth: -0.1, energy: 0.2, irritation: 0.34 },
+  return: { warmth: 0.24, energy: 0.13, irritation: -0.15 },
+  headpat: { warmth: 0.3, energy: 0.09, irritation: -0.2 },
+  chat_positive: { warmth: 0.15, energy: 0.09, irritation: -0.09 },
+  help_request: { warmth: 0.16, energy: 0.14, irritation: -0.07 },
+  ignored_initiative: { warmth: -0.15, energy: -0.08, irritation: 0.26 },
+  long_silence: { warmth: -0.04, energy: -0.08, irritation: 0.06 },
+};
 
 export function applyRepeatedIgnoreMood(
   mood: CharacterMood,
@@ -223,9 +232,9 @@ export function applyRepeatedIgnoreMood(
   for (let index = 1; index < repeats; index += 1) {
     const current = decayMood(next);
     next = saveMood({
-      warmth: current.warmth - 0.03,
-      energy: current.energy - 0.02,
-      irritation: current.irritation + 0.06,
+      warmth: current.warmth - 0.06,
+      energy: current.energy - 0.04,
+      irritation: current.irritation + 0.11,
       updatedAt: Date.now(),
     });
   }
@@ -288,20 +297,20 @@ export function describeMoodForPrompt(mood: CharacterMood): string {
   const current = decayMood(mood);
   const lines = [`Сводка: ${describeMood(current)}.`];
 
-  if (current.irritation > 0.3) {
+  if (current.irritation > 0.22) {
     lines.push(
       "Говори короче и острее; допускай уколотость и сухую иронию, но без грубости.",
       "Не будь сервисной, восторженной и «полезной» — колкость и наблюдательность важнее.",
       "Лексика: резче, суше, меньше слов; можно подколоть.",
       "Предпочитай <emotion>annoyed</emotion> или <emotion>amused</emotion>.",
     );
-  } else if (current.warmth > 0.48) {
+  } else if (current.warmth > 0.42) {
     lines.push(
       "Тон заметно теплее: больше поддержки и участия, без приторности и лести.",
       "Лексика: мягче, «рядом», меньше иронии на человека.",
       "Предпочитай <emotion>empathetic</emotion>, <emotion>calm</emotion>, <emotion>happy</emotion> или <emotion>proud</emotion>.",
     );
-  } else if (current.energy < 0.32) {
+  } else if (current.energy < 0.35) {
     lines.push(
       "Темп медленнее: меньше слов, спокойная подача.",
       "Лексика: вялый ритм, короткие фразы, без энтузиазма.",
@@ -313,7 +322,7 @@ export function describeMoodForPrompt(mood: CharacterMood): string {
     );
   }
 
-  if (current.energy > 0.58) {
+  if (current.energy > 0.5) {
     lines.push(
       "Темп живее: короткие фразы, больше оживления, можно резче перебивать мысль.",
       "Лексика: бойче, оживлённее, больше восклицаний без крика.",
@@ -321,7 +330,7 @@ export function describeMoodForPrompt(mood: CharacterMood): string {
     );
   }
 
-  if (current.irritation > 0.45) {
+  if (current.irritation > 0.35) {
     lines.push(
       "Раздражение заметно: не сглаживай тон — пусть чувствуется в формулировках.",
     );

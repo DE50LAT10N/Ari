@@ -2163,6 +2163,23 @@ export function SettingsPanel({
               <span />
             </button>
           </label>
+          <label className="settings-toggle-row">
+            <span>Mood engine (координаты настроения)</span>
+            <button
+              className={`toggle-switch${settings.moodEngineEnabled ? " enabled" : ""}`}
+              type="button"
+              role="switch"
+              aria-checked={settings.moodEngineEnabled}
+              onClick={() =>
+                onChange({
+                  ...settings,
+                  moodEngineEnabled: !settings.moodEngineEnabled,
+                })
+              }
+            >
+              <span />
+            </button>
+          </label>
           {isEmbeddingSourceConfigured(settings) && (
             <NumberSetting
               label="TTL кэша embedding-запросов (сек)"

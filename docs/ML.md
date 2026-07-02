@@ -83,6 +83,8 @@ Modes affect system prompt instructions via `describeResponseMode`. Proactive li
 
 **Mood** (`mood.ts`): 3 axes [0,1]; exponential decay (~4h half-life); daily hash drift; interaction shifts (`click`, `return`, `chat_positive`, `ignored_initiative`, etc.).
 
+**Mood engine** (`moodEngine/*`): config-driven coordinate vector (axes table), event→impact layer (reuses shift tables), deterministic decay+clamp update, and classification into existing 18 emotions and `MoodArchetype`. State persists in `desktop-character.ari-mood-engine.v2` while keeping legacy `desktop-character.ari-mood.v1` updated for compatibility.
+
 **Emotion biasing** (`emotionPresentation.ts`): `biasEmotionByMood`, `softenEmotionForMood`, `fuseRelationshipMoodEmotion`.
 
 **Anti-repeat** (`emotionHistory.ts`): last 4 emotions in prompt hint via `describeEmotionAntiRepeat`.

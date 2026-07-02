@@ -1,11 +1,12 @@
 # Ari advisor simulation report
 
-Generated: 2026-07-02T06:00:43.898Z
+Generated: 2026-07-02T10:02:20.320Z
 
 | Scenario | Expected | Actual | Initiative | Value/Risk | Flags | Topics |
 |----------|----------|--------|------------|------------|-------|--------|
 | long_session_rest | rest | rest | allowed | medium/low | breakDue | ChatPanel.tsx; короткий перерыв после долгой сессии |
-| repeated_stacktrace_debug | debug_help | debug_help | allowed | high/low | stuck=0.70 | ChatPanel.tsx |
+| repeated_stacktrace_debug | debug_help | debug_help | allowed | high/low | stuck=0.70 | Error: failed to load model
+ at ChatPanel.tsx:2144; ChatPanel.tsx |
 | rapid_switch_refocus | refocus | refocus | allowed | low/low | contextThrash | state.ts |
 | many_open_tasks_scope | scope | scope | allowed | low/low | scopeCreep | roadmap.md |
 | recent_topic_check_in | topic | topic | allowed | medium/low | none | activeWindow.ts; Tauri active window permissions |
