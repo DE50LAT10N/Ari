@@ -18,6 +18,7 @@ const LAST_ADVICE_DECISION_KEY =
   "desktop-character.last-advice-decision.v1";
 
 export const PROACTIVE_SUBJECT_COOLDOWN_MS = 3 * 60 * 60 * 1000;
+export const PROACTIVE_CROSS_CHANNEL_GAP_MS = 5 * 60_000;
 
 const PROACTIVE_FAILURE_BACKOFF_STEPS_MS = [
   90 * 1000,
@@ -328,6 +329,14 @@ export function markSmalltalkAttemptAt(timestamp = Date.now()): void {
   localStorage.setItem(LAST_SMALLTALK_ATTEMPT_KEY, String(timestamp));
   localStorage.setItem(LAST_PROACTIVE_ATTEMPT_KEY, String(lastAttemptCache));
   window.dispatchEvent(new Event("ari-proactive-state-changed"));
+}
+
+export function canEmitSmalltalkNow(now = Date.now()): boolean {
+  return now - getLastAdviceAttemptAt() >= PROACTIVE_CROSS_CHANNEL_GAP_MS;
+}
+
+export function canEmitAdviceNow(now = Date.now()): boolean {
+  return now - getLastSmalltalkAttemptAt() >= PROACTIVE_CROSS_CHANNEL_GAP_MS;
 }
 
 export function armProactiveGracePeriod(

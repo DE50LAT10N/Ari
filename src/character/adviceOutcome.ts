@@ -52,6 +52,17 @@ export type AdviceReconcileResult = {
   newlyIgnored: number;
 };
 
+export type AdviceOutcomeReputation = {
+  sampleSize: number;
+  positive: number;
+  negative: number;
+  score: number;
+  intervalMultiplier: number;
+  confidenceBonus: number;
+  label: "unknown" | "trusted" | "cautious" | "mixed";
+  reasons: string[];
+};
+
 function readOutcomes(now = Date.now()): AdviceOutcomeRecord[] {
   try {
     const raw = localStorage.getItem(OUTCOME_KEY);
@@ -385,6 +396,90 @@ export function getRecentAdviceOutcomes(
     .filter((entry) => entry.outcome)
     .filter((entry) => (topicKey ? entry.topicKey === topicKey : true))
     .slice(0, 8);
+}
+
+function outcomeWeight(outcome: AdviceOutcome): number {
+  switch (outcome) {
+    case "helped":
+      return 0.55;
+    case "resolved":
+      return 0.75;
+    case "ignored":
+      return -0.55;
+    case "stale":
+      return -0.45;
+    case "interrupted":
+      return -0.35;
+  }
+}
+
+export function summarizeAdviceOutcomeReputation(input?: {
+  topicKey?: string;
+  now?: number;
+  limit?: number;
+}): AdviceOutcomeReputation {
+  const outcomes = getRecentAdviceOutcomes(input?.topicKey, input?.now).slice(
+    0,
+    input?.limit ?? 8,
+  );
+  if (!outcomes.length) {
+    return {
+      sampleSize: 0,
+      positive: 0,
+      negative: 0,
+      score: 0,
+      intervalMultiplier: 1,
+      confidenceBonus: 0,
+      label: "unknown",
+      reasons: [],
+    };
+  }
+
+  let weighted = 0;
+  let totalWeight = 0;
+  let positive = 0;
+  let negative = 0;
+  for (const [index, entry] of outcomes.entries()) {
+    if (!entry.outcome) continue;
+    const recency = 1 / (1 + index * 0.35);
+    const confidence = Math.max(0.3, Math.min(1, entry.confidence));
+    const weight = recency * confidence;
+    const value = outcomeWeight(entry.outcome);
+    weighted += value * weight;
+    totalWeight += weight;
+    if (value > 0) positive += 1;
+    if (value < 0) negative += 1;
+  }
+
+  const score = totalWeight > 0 ? weighted / totalWeight : 0;
+  const label =
+    score >= 0.24
+      ? "trusted"
+      : score <= -0.2
+        ? "cautious"
+        : "mixed";
+  const intervalMultiplier =
+    label === "trusted" ? 0.82 : label === "cautious" ? 1.45 : 1;
+  const confidenceBonus =
+    label === "trusted" ? 0.8 : label === "cautious" ? -1.1 : 0;
+  const reasons = [
+    label === "trusted"
+      ? `advice reputation: ${positive} helped/resolved recently`
+      : label === "cautious"
+        ? `advice reputation: ${negative} ignored/stale/interrupted recently`
+        : `advice reputation: mixed ${positive}/${negative}`,
+  ];
+
+  return {
+    sampleSize: outcomes.length,
+    positive,
+    negative,
+    score,
+    intervalMultiplier,
+    confidenceBonus,
+    label,
+    reasons,
+  };
 }
 
 export function describeAdviceOutcomesForPrompt(

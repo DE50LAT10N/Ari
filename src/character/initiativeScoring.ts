@@ -2,6 +2,7 @@ import type { PresenceScene } from "./presence";
 import { getRecentProactiveTopics } from "./proactiveState";
 import type { CharacterMood } from "./mood";
 import { moodInitiativeBias } from "./mood";
+import { deriveMoodArchetype } from "./moodBehavior";
 import type { UserIntent } from "./userIntent";
 import type { InitiativeKind } from "./initiativeKinds";
 
@@ -525,6 +526,9 @@ export function scoreInitiativeLocally({
     userActivityAgoMs < minUserSilenceMs
   ) {
     risk = "high";
+  }
+  if (mood && deriveMoodArchetype(mood) === "irritated" && !adviceBypass) {
+    risk = risk === "low" ? "medium" : "high";
   }
 
   let value: InitiativeValue = "low";

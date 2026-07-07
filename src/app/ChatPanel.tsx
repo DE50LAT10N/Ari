@@ -12,9 +12,12 @@ import {
   getCurrentMoodVector,
   isMoodEngineEnabled,
   moodVectorToPrompt,
+  proactiveToMoodEvent,
+  type MoodEvent,
 } from "../character/moodEngine";
 import {
   buildMoodRefusalReply,
+  avatarEmotionFromMood,
   deriveMoodArchetype,
   shouldMoodRefuseRequest,
 } from "../character/moodBehavior";
@@ -40,10 +43,13 @@ import { buildLiveStatusLine } from "../character/liveStatus";
 import {
   ensureProactiveClockStarted,
   armProactiveGracePeriod,
+  canEmitAdviceNow,
+  canEmitSmalltalkNow,
   clearProactiveFailureBackoff,
   getProactiveFailureBackoff,
   getLastAdviceAttemptAt,
   getLastSmalltalkAttemptAt,
+  getLastProactiveMessageAt,
   markAdviceAttemptAt,
   markSmalltalkAttemptAt,
   registerProactiveReplySubject,
@@ -51,6 +57,7 @@ import {
   setLastProactiveMessageAt,
   rememberAdviceSubject,
   recordAdviceDecision,
+  PROACTIVE_CROSS_CHANNEL_GAP_MS,
 } from "../character/proactiveState";
 import {
   getLastAdviceUrgency,
@@ -66,9 +73,6 @@ import {
   type ProactiveInitiativePackage,
   type ProactivePackageOptions,
 } from "../character/initiativeContext";
-import {
-  afterAdviceAttempt,
-} from "../character/checkInitiativePolicy";
 import { planProactiveEngineTick } from "../character/proactiveEngine";
 import {
   drainProactiveRequests,
@@ -286,7 +290,10 @@ import {
 import { appendTimelineEvent } from "../memory/activityTimeline";
 import { isLlmProviderOnline, isVisionProviderOnline } from "../llm/providerOnline";
 import { readClipboardText, classifyClipboardText } from "../platform/clipboard";
-import { getKeyboardActivitySnapshot } from "../platform/keyboardActivity";
+import {
+  getKeyboardActivitySnapshot,
+  KEYBOARD_ACTIVITY_CONFIG,
+} from "../platform/keyboardActivity";
 import {
   categorizeApp,
   parseBrowserSearchTopic,
@@ -317,6 +324,7 @@ import { rememberReplyPhrases } from "../character/phraseMemory";
 import { isQuietModeActive } from "../character/quietMode";
 import {
   biasEmotionByMood,
+  mergeReplyEmotionWithMood,
 } from "../character/emotionPresentation";
 import {
   buildCorrectionUserMessage,
@@ -325,6 +333,8 @@ import {
   shouldRetryReply,
   shouldUseInCharacterFallback,
 } from "../character/replyPipeline";
+import { validateCharacterReply } from "../character/responseValidation";
+import { runAdviceFinalGate } from "../character/adviceFinalGate";
 import { buildVisibleAdviceFallback, buildVisibleClarifyingFallback } from "../character/proactiveAdviceFallback";
 import {
   allowsGenericCompanionInitiative,
@@ -376,7 +386,7 @@ type ChatPanelProps = {
   onSettingsChange: (settings: AppSettings) => void;
   onEmotionChange: (
     emotion: CharacterEmotion,
-    reason?: "model" | "initiative",
+    reason?: "model" | "initiative" | "mood",
   ) => void;
   onStateChange: (state: CharacterState) => void;
   ollamaOnline: boolean | null;
@@ -405,6 +415,7 @@ type ChatPanelProps = {
       | "long_silence",
   ) => void;
   onMoodTrigger?: (trigger: MoodTrigger) => void;
+  onProactiveMoodEvent?: (event: MoodEvent) => void;
 };
 
 const STARTING_LINE =
@@ -683,6 +694,7 @@ export function ChatPanel({
   onProactiveEmitted,
   onMoodInteraction,
   onMoodTrigger,
+  onProactiveMoodEvent,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<ChatMessage[]>(loadChatHistory);
@@ -1440,15 +1452,21 @@ export function ChatPanel({
       return;
     }
 
+    const clearEmotion = avatarEmotionFromMood(mood);
+
     setHistory([
       {
         role: "assistant",
         content: "Историю протёрла. Подозрительно чисто.",
-        emotion: "amused",
+        emotion: clearEmotion,
       },
     ]);
     setError(null);
-    onEmotionChange("amused");
+    const now = Date.now();
+    markSmalltalkAttemptAt(now);
+    markAdviceAttemptAt(now);
+    setLastProactiveMessageAt(now);
+    onEmotionChange(clearEmotion, "mood");
     onStateChange(isOpen ? "listening" : "idle");
   }
 
@@ -1489,6 +1507,7 @@ export function ChatPanel({
     let finalReply = "";
     let blipStreamActive = false;
     const assistantMessageId = crypto.randomUUID();
+    let replyMoodContext = mood;
 
     function applyReplyEmotion(
       nextEmotion: CharacterEmotion,
@@ -1497,10 +1516,17 @@ export function ChatPanel({
       if (!force && nextEmotion === "neutral") {
         return;
       }
-      onEmotionChange(
-        nextEmotion,
-        options.proactive ? "initiative" : "model",
-      );
+      const archetype = deriveMoodArchetype(replyMoodContext);
+      const avatarEmotion = avatarEmotionFromMood(replyMoodContext);
+      let emotionToApply = nextEmotion;
+      let reason: "model" | "initiative" | "mood" = options.proactive
+        ? "initiative"
+        : "model";
+      if (archetype === "irritated" || options.proactive) {
+        emotionToApply = avatarEmotion;
+        reason = "mood";
+      }
+      onEmotionChange(emotionToApply, reason);
     }
 
     abortControllerRef.current = controller;
@@ -1583,6 +1609,7 @@ export function ChatPanel({
       const moodForReply = moodTriggerDescription
         ? previewMoodAfterTrigger(mood, moodTrigger)
         : mood;
+      replyMoodContext = moodForReply;
       if (moodTriggerDescription) {
         onMoodTrigger?.(moodTrigger);
         const hintedEmotion = moodTriggerEmotionHint(moodTrigger);
@@ -1840,11 +1867,17 @@ export function ChatPanel({
         }
       }
 
+      const moodStyle = isMoodEngineEnabled(settings)
+        ? moodVectorToPrompt(getCurrentMoodVector().vector)
+        : null;
+      const moodPrompt = moodStyle?.promptModifier ?? describeMoodForPrompt(moodForReply);
       const responseLength = chooseResponseLength(
         lastUserMessage,
         memory.length,
         Boolean(options.proactive),
         proactiveReplyTone,
+        moodForReply,
+        moodStyle?.responseParams,
       );
       const responseMode = classifyResponseMode({
         message: lastUserMessage,
@@ -1900,9 +1933,6 @@ export function ChatPanel({
         userAskedQuestion,
       };
       const emotionGuidance = describeEmotionAntiRepeat(moodForReply);
-      const moodPrompt = isMoodEngineEnabled(settings)
-        ? moodVectorToPrompt(getCurrentMoodVector().vector).promptModifier
-        : describeMoodForPrompt(moodForReply);
       let runtimeContext: RuntimeContext = {
         memory,
         activeWindow,
@@ -2265,6 +2295,60 @@ export function ChatPanel({
 
       if (
         options.proactive &&
+        proactiveReplyTone === "advice" &&
+        processed.content.trim()
+      ) {
+        const proactiveBundle = proactiveLlm?.getLastProactiveLlmBundle();
+        const proactiveFacts = proactiveLlm?.getLastProactiveSignalFacts() ?? [];
+        if (proactiveBundle) {
+          const finalGate = runAdviceFinalGate({
+            text: processed.content,
+            bundle: proactiveBundle,
+            facts: proactiveFacts,
+          });
+          if (finalGate.status === "repaired") {
+            const repairedValidation = validateCharacterReply(finalGate.text, {
+              ...processReplyOptions.validationContext,
+              responseMode,
+              proactive: processReplyOptions.proactive,
+              userAskedQuestion: processReplyOptions.userAskedQuestion,
+              recentAssistantReplies: processReplyOptions.recentAssistantReplies,
+            });
+            processed = {
+              content: finalGate.text,
+              emotion:
+                processed.emotion === "neutral" ? "curious" : processed.emotion,
+              validation: {
+                valid: repairedValidation.valid,
+                issues: repairedValidation.valid
+                  ? []
+                  : [
+                      ...new Set([
+                        ...repairedValidation.issues,
+                        "proactive quality",
+                      ]),
+                    ],
+              },
+            };
+          } else if (finalGate.status === "rejected") {
+            processed = {
+              ...processed,
+              validation: {
+                valid: false,
+                issues: [
+                  ...new Set([
+                    ...processed.validation.issues,
+                    "proactive quality",
+                  ]),
+                ],
+              },
+            };
+          }
+        }
+      }
+
+      if (
+        options.proactive &&
         shouldSuppressProactiveReply(processed.validation.issues)
       ) {
         recordInitiativeSuppressed(
@@ -2285,7 +2369,13 @@ export function ChatPanel({
       setStreamingContent(null);
       setStreamingAssistantIndex(null);
       finalReply = processed.content;
-      replyEmotion = biasEmotionByMood(processed.emotion, moodForReply);
+      replyEmotion = mergeReplyEmotionWithMood(
+        biasEmotionByMood(processed.emotion, moodForReply),
+        moodForReply,
+      );
+      if (options.proactive) {
+        replyEmotion = avatarEmotionFromMood(moodForReply);
+      }
       applyReplyEmotion(replyEmotion, true);
       if (options.proactive && settings.proactiveOpenChat && !isOpen) {
         onProactiveMessage();
@@ -2579,7 +2669,21 @@ export function ChatPanel({
     memoryMatches: number,
     proactive: boolean,
     proactiveReplyTone?: ProactiveReplyTone,
+    mood?: CharacterMood,
+    moodResponseParams?: {
+      preferredReplyLength?: "short" | "normal" | "chatty";
+      preferClarifyingTone?: boolean;
+      sarcasm?: number;
+      adviceAssertiveness?: number;
+      questionBias?: number;
+    },
   ): "short" | "medium" | "long" {
+    if (mood && deriveMoodArchetype(mood) === "irritated") {
+      return proactiveReplyTone === "advice" ? "short" : "short";
+    }
+    if (moodResponseParams?.preferredReplyLength === "short") {
+      return "short";
+    }
     if (proactive) {
       return proactiveReplyTone === "advice" ? "medium" : "short";
     }
@@ -2597,6 +2701,13 @@ export function ChatPanel({
       /(как |что такое|каким образом|помоги|расскажи|подскажи|объясни)/i.test(
         normalized,
       )
+    ) {
+      return "medium";
+    }
+    if (
+      moodResponseParams?.preferredReplyLength === "chatty" &&
+      !proactive &&
+      message.length > 30
     ) {
       return "medium";
     }
@@ -2839,6 +2950,18 @@ export function ChatPanel({
     if (updated) {
       recordAdviceFeedbackOutcome(updated, feedback);
       recordRelevanceFeedback(updated, feedback);
+      onProactiveMoodEvent?.(
+        proactiveToMoodEvent({
+          kind: "advice_feedback",
+          tone: "advice",
+          feedback,
+          metadata: {
+            adviceId,
+            topicKey: updated.topicKey,
+            candidateKind: updated.adviceCandidateKind,
+          },
+        }),
+      );
     }
     setHistory((current) =>
       current.map((message, index) =>
@@ -3342,6 +3465,13 @@ export function ChatPanel({
       engineApproved?: boolean;
     } = {},
   ): Promise<InitiativeLaunchResult> {
+    const isAdvice = pkg.proactiveReplyTone === "advice";
+    if (isAdvice && !canEmitAdviceNow()) {
+      return { sent: false, suppressReason: "cross-channel gap blocks advice" };
+    }
+    if (!isAdvice && !canEmitSmalltalkNow()) {
+      return { sent: false, suppressReason: "cross-channel gap blocks smalltalk" };
+    }
     if (pkg.proactiveReplyTone === "advice") {
       refreshAdviceTopicState({
         anchor: pkg.initiativeAnchor,
@@ -3380,7 +3510,7 @@ export function ChatPanel({
       plannedCheckMinSilenceMs: extra.plannedCheckMinSilenceMs,
     });
     if (result.sent) {
-      if (pkg.proactiveReplyTone === "advice") {
+      if (isAdvice) {
         markAdviceAttemptAt();
       } else {
         markSmalltalkAttemptAt();
@@ -3427,6 +3557,18 @@ export function ChatPanel({
       return suppress(
         `proactive backoff ${Math.ceil((backoff.until - Date.now()) / 60_000)}m`,
       );
+    }
+
+    const now = Date.now();
+    if (now - getLastProactiveMessageAt() < PROACTIVE_CROSS_CHANNEL_GAP_MS) {
+      return suppress("recent proactive message");
+    }
+    const isAdviceTone = options.proactiveReplyTone === "advice";
+    if (isAdviceTone && !canEmitAdviceNow(now)) {
+      return suppress("cross-channel gap blocks advice");
+    }
+    if (options.proactiveReplyTone && !isAdviceTone && !canEmitSmalltalkNow(now)) {
+      return suppress("cross-channel gap blocks smalltalk");
     }
 
     if (!allowsInitiativeForKind(interruptibility, initiativeKind)) {
@@ -3595,6 +3737,17 @@ export function ChatPanel({
         );
         if (options.proactiveReplyTone) {
           recordProactiveToneEmitted(options.proactiveReplyTone);
+          onProactiveMoodEvent?.(
+            proactiveToMoodEvent({
+              kind: "proactive_sent",
+              tone: options.proactiveReplyTone,
+              metadata: {
+                initiativeKind,
+                anchor: options.initiativeAnchor,
+                candidateKind: options.proactiveAdviceCandidateKind,
+              },
+            }),
+          );
         }
         if (options.proactiveReplyTone === "advice") {
           const subject = options.initiativeAnchor;
@@ -3682,9 +3835,14 @@ export function ChatPanel({
       setLastAdviceUrgency(urgency);
 
       const now = Date.now();
+      if (now - getLastProactiveMessageAt() < PROACTIVE_CROSS_CHANNEL_GAP_MS) {
+        return;
+      }
       const sinceAdviceAttempt = now - getLastAdviceAttemptAt();
       const sinceSmalltalkAttempt = now - getLastSmalltalkAttemptAt();
-      const smalltalkReady = sinceSmalltalkAttempt >= smalltalkIntervalMs;
+      const smalltalkReady =
+        sinceSmalltalkAttempt >= smalltalkIntervalMs && canEmitSmalltalkNow(now);
+      const adviceChannelReady = canEmitAdviceNow(now);
       const idleGateOpen =
         immersedCompanion || activityAgoMs >= requiredIdleMs;
       const toneSnapshot = getProactiveToneSnapshot();
@@ -3714,6 +3872,9 @@ export function ChatPanel({
       let allowSmalltalk = engineDecision.allowSmalltalk;
 
       if (tickAction === "try_advice") {
+        if (!adviceChannelReady) {
+          return;
+        }
         const adviceUrgency = engineDecision.adviceUrgency;
         const { runAdviceCycle } = await loadAdviceEngine();
         const decision = await runAdviceCycle({
@@ -3732,29 +3893,13 @@ export function ChatPanel({
           },
         });
         if (decision.deliver) {
-          const sent = await launchAdviceFromEngine(
+          await launchAdviceFromEngine(
             decision,
             plannedSilenceMs,
             adviceUrgency,
           );
-          const nextAfterAdvice = afterAdviceAttempt({
-            adviceSent: sent,
-            smalltalkReady,
-            adviceUrgencyLevel: adviceUrgency.level,
-          });
-          if (nextAfterAdvice === "silent" || sent) {
-            return;
-          }
-          if (nextAfterAdvice === "retry_advice_later") {
-            return;
-          }
-        } else if (decision.strategy === "SILENT") {
-          allowSmalltalk = smalltalkReady;
-        } else if (decision.strategy === "DEFER_SMALLTALK") {
-          allowSmalltalk = true;
-        } else {
-          return;
         }
+        return;
       }
 
       if (!smalltalkReady || !allowSmalltalk) {
@@ -4325,7 +4470,7 @@ export function ChatPanel({
         observed.value.processName === active.processName &&
         observed.value.title === active.title;
       const dwellMs = sameWindow ? Date.now() - observed.since : 0;
-      if (dwellMs < 60_000) {
+      if (dwellMs < KEYBOARD_ACTIVITY_CONFIG.minWindowDwellMs) {
         return;
       }
 
@@ -4350,7 +4495,10 @@ export function ChatPanel({
         burstCount: snapshot.burstCount,
       };
 
-      if (correctionCount >= 4 || snapshot.escapeCount >= 2) {
+      if (
+        correctionCount >= KEYBOARD_ACTIVITY_CONFIG.correctionChurnMin ||
+        snapshot.escapeCount >= KEYBOARD_ACTIVITY_CONFIG.escapeChurnMin
+      ) {
         recordInputFriction({
           ...base,
           frictionKind: "correction_churn",
@@ -4358,7 +4506,7 @@ export function ChatPanel({
         return;
       }
 
-      if (commandCount >= 3) {
+      if (commandCount >= KEYBOARD_ACTIVITY_CONFIG.commandLoopMin) {
         recordInputFriction({
           ...base,
           frictionKind: "command_loop",
@@ -4366,7 +4514,10 @@ export function ChatPanel({
         return;
       }
 
-      if (snapshot.burstCount > 0 || snapshot.printableKeyCount >= 18) {
+      if (
+        snapshot.burstCount > 0 ||
+        snapshot.printableKeyCount >= KEYBOARD_ACTIVITY_CONFIG.printableBurstMin
+      ) {
         recordInputFriction({
           ...base,
           frictionKind: "keyboard_burst",
@@ -4375,7 +4526,10 @@ export function ChatPanel({
     };
 
     void pollKeyboard();
-    const timer = window.setInterval(() => void pollKeyboard(), 5_000);
+    const timer = window.setInterval(
+      () => void pollKeyboard(),
+      KEYBOARD_ACTIVITY_CONFIG.pollIntervalMs,
+    );
     return () => {
       cancelled = true;
       window.clearInterval(timer);

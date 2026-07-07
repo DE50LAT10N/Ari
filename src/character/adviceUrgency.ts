@@ -6,6 +6,7 @@ import {
   proactiveAdviceIntervalMs,
   URGENT_ADVICE_MIN_MS,
 } from "./initiativeConfig";
+import { ADVICE_SIGNAL_CONFIG } from "./adviceSignalConfig";
 import type { InitiativeKind } from "./initiativeKinds";
 import { isAdviceSubjectRecentlyAdvised } from "./proactiveState";
 import { countRecentAdviceByTone, countRecentAdviceStreak } from "./adviceLedger";
@@ -14,6 +15,7 @@ import {
   advisorAngleForAdviceSignals,
   isProactiveWorkContext,
 } from "./proactiveTone";
+import { summarizeAdviceOutcomeReputation } from "./adviceOutcome";
 import { pruneWorkingMemory } from "../memory/workingMemory";
 import {
   buildConversationTopics,
@@ -26,10 +28,6 @@ import {
 } from "./advisorEngine";
 import { deriveScreenState } from "./screenState";
 
-const CLIPBOARD_FRESH_MS = 15 * 60_000;
-const WM_RECENT_MS = 20 * 60_000;
-const QUERY_FRESH_MS = 45 * 60_000;
-
 export type AdviceUrgencyLevel = "none" | "low" | "medium" | "high";
 
 export type AdviceUrgency = {
@@ -38,6 +36,7 @@ export type AdviceUrgency = {
   reasons: string[];
   effectiveIntervalMs: number;
   subjectKey?: string;
+  outcomeReputation?: ReturnType<typeof summarizeAdviceOutcomeReputation>;
 };
 
 export type SignalDrivenAdvicePlan = {
@@ -99,7 +98,7 @@ export function scoreAdviceUrgency(
   let subjectKey: string | undefined;
 
   const freshClipboard = bundle.clipboardSnippets.filter(
-    (clip) => now - clip.at <= CLIPBOARD_FRESH_MS,
+    (clip) => now - clip.at <= ADVICE_SIGNAL_CONFIG.clipboardFreshMs,
   );
   const stack = freshClipboard.find((clip) => clip.kind === "stacktrace");
   if (stack) {
@@ -167,7 +166,7 @@ export function scoreAdviceUrgency(
       (entry) =>
         entry.kind === "query_topic" &&
         entry.topic === theme &&
-        now - entry.at <= QUERY_FRESH_MS,
+        now - entry.at <= ADVICE_SIGNAL_CONFIG.queryFreshMs,
     );
     if (signal && themeMatchesContext(theme, bundle)) {
       score += 2;
@@ -200,7 +199,7 @@ export function scoreAdviceUrgency(
   }
 
   const wmRecent = pruneWorkingMemory(now).filter(
-    (entry) => now - entry.at <= WM_RECENT_MS,
+    (entry) => now - entry.at <= ADVICE_SIGNAL_CONFIG.workingMemoryRecentMs,
   );
   const wmChatOrFocus = wmRecent.some(
     (entry) =>
@@ -234,7 +233,11 @@ export function scoreAdviceUrgency(
     reasons.push("недавняя активность в кратковременной памяти");
   }
 
-  if (sessionMinutes >= 5 && bundle.editorFile && score === 0) {
+  if (
+    sessionMinutes >= ADVICE_SIGNAL_CONFIG.activeWorkSessionMin &&
+    bundle.editorFile &&
+    score === 0
+  ) {
     score += 1;
     reasons.push(`live IDE context: ${bundle.editorFile}`);
     subjectKey = subjectKey ?? bundle.editorFile;
@@ -256,7 +259,7 @@ export function scoreAdviceUrgency(
     settings.initiativeLevel === "active" &&
     workContext &&
     hasWorkEvidence &&
-    sessionMinutes >= 5
+    sessionMinutes >= ADVICE_SIGNAL_CONFIG.activeWorkSessionMin
   ) {
     score += 3;
     reasons.push(
@@ -269,7 +272,11 @@ export function scoreAdviceUrgency(
       bundle.editorFile ??
       screenState.visibleEntities[0] ??
       bundle.window?.title?.slice(0, 80);
-  } else if (workContext && hasWorkEvidence && sessionMinutes >= 12) {
+  } else if (
+    workContext &&
+    hasWorkEvidence &&
+    sessionMinutes >= ADVICE_SIGNAL_CONFIG.longWorkSessionMin
+  ) {
     score += 1;
     reasons.push("долгая работа с видимым контекстом");
     subjectKey =
@@ -281,7 +288,7 @@ export function scoreAdviceUrgency(
 
   if (
     workContext &&
-    sessionMinutes >= 5 &&
+    sessionMinutes >= ADVICE_SIGNAL_CONFIG.activeWorkSessionMin &&
     (bundle.editorFile || bundle.advisor.dominantFile) &&
     score < 1
   ) {
@@ -295,27 +302,48 @@ export function scoreAdviceUrgency(
       subjectKey ?? bundle.editorFile ?? bundle.advisor.dominantFile;
   }
 
+  const outcomeReputation = summarizeAdviceOutcomeReputation({
+    topicKey: subjectKey,
+    now,
+  });
+  if (outcomeReputation.sampleSize > 0) {
+    score = Math.max(0, score + outcomeReputation.confidenceBonus);
+    reasons.push(...outcomeReputation.reasons);
+  }
+
   const hasRecentActivitySignal =
     wmRecent.length > 0 ||
     bundle.advisor.activitySummary.recentSignals.some(
-      (entry) => now - entry.at <= WM_RECENT_MS,
+      (entry) => now - entry.at <= ADVICE_SIGNAL_CONFIG.workingMemoryRecentMs,
     );
 
   let level: AdviceUrgencyLevel = "none";
   let effectiveIntervalMs = userIntervalMs;
 
-  if (score >= 6) {
+  if (score >= ADVICE_SIGNAL_CONFIG.highScoreMin) {
     level = "high";
     effectiveIntervalMs = URGENT_ADVICE_MIN_MS;
-  } else if (score >= 3) {
+  } else if (score >= ADVICE_SIGNAL_CONFIG.mediumScoreMin) {
     level = "medium";
     effectiveIntervalMs = Math.min(userIntervalMs, MEDIUM_ADVICE_CAP_MS);
-  } else if (score >= 1 && (workContext || hasRecentActivitySignal)) {
+  } else if (
+    score >= ADVICE_SIGNAL_CONFIG.lowScoreMin &&
+    (workContext || hasRecentActivitySignal)
+  ) {
     level = "low";
     effectiveIntervalMs =
-      workContext && sessionMinutes >= 5 && bundle.editorFile
+      workContext &&
+      sessionMinutes >= ADVICE_SIGNAL_CONFIG.activeWorkSessionMin &&
+      bundle.editorFile
         ? Math.min(userIntervalMs, MEDIUM_ADVICE_CAP_MS)
         : userIntervalMs;
+  }
+
+  if (outcomeReputation.sampleSize > 0 && level !== "none") {
+    effectiveIntervalMs = Math.max(
+      URGENT_ADVICE_MIN_MS,
+      Math.round(effectiveIntervalMs * outcomeReputation.intervalMultiplier),
+    );
   }
 
   return {
@@ -324,6 +352,7 @@ export function scoreAdviceUrgency(
     reasons,
     effectiveIntervalMs,
     subjectKey,
+    outcomeReputation,
   };
 }
 
@@ -365,7 +394,7 @@ export function getAdviceReadinessBlockReason(
   if (urgency.level === "low") {
     const recentAdvice = countRecentAdviceByTone(
       "advice",
-      now - 25 * 60_000,
+      now - ADVICE_SIGNAL_CONFIG.lowUrgencyRepeatCapMs,
       now,
     );
     if (recentAdvice >= 1 && !bypassesLowUrgencyAdviceCap(urgency)) {

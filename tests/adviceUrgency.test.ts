@@ -15,6 +15,10 @@ import {
   shouldOfferLlmAdvice,
 } from "../src/character/adviceUrgency";
 import { rememberAdviceSent, resetAdviceLedgerForTests } from "../src/character/adviceLedger";
+import {
+  recordAdviceFeedbackOutcome,
+  resetAdviceOutcomesForTests,
+} from "../src/character/adviceOutcome";
 import { buildAdviceBrief } from "../src/character/proactiveContextRich";
 import { selectAdvisorAngle } from "../src/character/advisorEngine";
 import {
@@ -56,6 +60,7 @@ describe("adviceUrgency", () => {
     invalidateProactiveStateCache();
     resetProactiveStateForTests();
     resetAdviceLedgerForTests();
+    resetAdviceOutcomesForTests();
   });
 
   it("scores high urgency for stacktrace and stuck file", () => {
@@ -166,6 +171,65 @@ describe("adviceUrgency", () => {
     expect(urgency.level).toBe("low");
     expect(urgency.effectiveIntervalMs).toBe(MEDIUM_ADVICE_CAP_MS);
     expect(shouldOfferLlmAdvice(urgency)).toBe(true);
+  });
+
+  it("shortens advice cadence when recent outcomes were useful", () => {
+    recordAdviceFeedbackOutcome(
+      {
+        id: "advice-useful-1",
+        at: 1_000,
+        updatedAt: 1_000,
+        expiresAt: 100_000,
+        topicKey: "ChatPanel.tsx",
+      },
+      "useful",
+      2_000,
+    );
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 6,
+    });
+    const urgency = scoreAdviceUrgency(bundle, defaultSettings, {
+      sessionMinutes: 6,
+      userIntervalMs: 20 * 60_000,
+      now: 3_000,
+    });
+
+    expect(urgency.outcomeReputation?.label).toBe("trusted");
+    expect(urgency.effectiveIntervalMs).toBeLessThan(MEDIUM_ADVICE_CAP_MS);
+    expect(
+      urgency.reasons.some((reason) => reason.includes("advice reputation")),
+    ).toBe(true);
+  });
+
+  it("slows advice cadence after ignored or generic advice outcomes", () => {
+    const base = {
+      at: 1_000,
+      updatedAt: 1_000,
+      expiresAt: 100_000,
+      topicKey: "ChatPanel.tsx",
+    };
+    recordAdviceFeedbackOutcome({ ...base, id: "advice-miss-1" }, "miss", 2_000);
+    recordAdviceFeedbackOutcome(
+      { ...base, id: "advice-generic-1" },
+      "too_generic",
+      3_000,
+    );
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "ChatPanel.tsx - Ari - Cursor",
+      sessionMinutes: 6,
+    });
+    const urgency = scoreAdviceUrgency(bundle, defaultSettings, {
+      sessionMinutes: 6,
+      userIntervalMs: 20 * 60_000,
+      now: 4_000,
+    });
+
+    expect(urgency.outcomeReputation?.label).toBe("cautious");
+    expect(urgency.effectiveIntervalMs).toBeGreaterThan(MEDIUM_ADVICE_CAP_MS);
+    expect(urgency.reasons.join(" ")).toContain("ignored/stale/interrupted");
   });
 
   it("raises low urgency from working memory focus updates", () => {

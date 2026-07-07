@@ -33,29 +33,6 @@ export default defineConfig(async () => ({
           ) {
             return "react";
           }
-          if (
-            id.includes("/src/character/adviceEngine") ||
-            id.includes("/src/character/proactiveLlmEngine") ||
-            id.includes("/src/character/advisorEngine") ||
-            id.includes("/src/character/advicePlanner") ||
-            id.includes("/src/character/adviceLedger")
-          ) {
-            return "proactive-advice";
-          }
-          if (
-            id.includes("/src/llm/") ||
-            id.includes("/src/character/promptBuilder") ||
-            id.includes("/src/character/replyPipeline")
-          ) {
-            return "chat-llm";
-          }
-          if (
-            id.includes("/src/rag/") ||
-            id.includes("/src/memory/ivf") ||
-            id.includes("/src/memory/embedding")
-          ) {
-            return "memory-rag";
-          }
           if (id.includes("node_modules/jszip")) {
             return "backup";
           }

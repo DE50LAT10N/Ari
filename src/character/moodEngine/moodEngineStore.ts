@@ -17,6 +17,8 @@ const LEGACY_KEY = "desktop-character.ari-mood.v1";
 export type PersistedMoodEngineState = {
   version: 2;
   updatedAt: number;
+  baselineVector?: MoodVector;
+  reactiveVector?: MoodVector;
   vector: MoodVector;
   lastClassification?: MoodClassificationResult;
 };
@@ -40,10 +42,19 @@ export function loadMoodEngineState(
   const baseline = createBaselineVector(axisConfig);
   const stored = loadJson<Partial<PersistedMoodEngineState> | null>(ENGINE_KEY, null);
   if (stored?.version === 2 && stored.vector) {
+    const vector = deserializeVector(stored.vector, axisConfig);
+    const baselineVector = stored.baselineVector
+      ? deserializeVector(stored.baselineVector, axisConfig)
+      : vector;
+    const reactiveVector = stored.reactiveVector
+      ? deserializeVector(stored.reactiveVector, axisConfig)
+      : baseline;
     cache = {
       version: 2,
       updatedAt: safeTimestamp(stored.updatedAt, now),
-      vector: deserializeVector(stored.vector, axisConfig),
+      baselineVector,
+      reactiveVector,
+      vector,
       lastClassification: stored.lastClassification,
     };
     return cache;
@@ -64,6 +75,8 @@ export function loadMoodEngineState(
     cache = {
       version: 2,
       updatedAt: safeTimestamp(legacy.updatedAt, now),
+      baselineVector: migratedVector,
+      reactiveVector: baseline,
       vector: migratedVector,
     };
     // Write v2 state for next time. Do not delete legacy key to avoid breaking old codepaths.
@@ -74,6 +87,8 @@ export function loadMoodEngineState(
   cache = {
     version: 2,
     updatedAt: now,
+    baselineVector: baseline,
+    reactiveVector: baseline,
     vector: baseline,
   };
   saveMoodEngineState(cache, axisConfig);
@@ -87,6 +102,12 @@ export function saveMoodEngineState(
   const stable: PersistedMoodEngineState = {
     version: 2,
     updatedAt: safeTimestamp(state.updatedAt, Date.now()),
+    baselineVector: state.baselineVector
+      ? serializeVector(state.baselineVector, axisConfig)
+      : undefined,
+    reactiveVector: state.reactiveVector
+      ? serializeVector(state.reactiveVector, axisConfig)
+      : undefined,
     vector: serializeVector(state.vector, axisConfig),
     lastClassification: state.lastClassification,
   };

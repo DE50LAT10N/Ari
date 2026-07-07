@@ -7,6 +7,7 @@ const MAX = 12;
 export type EmotionRecordReason =
   | "model"
   | "initiative"
+  | "mood"
   | "scene"
   | "error"
   | "click"
@@ -21,6 +22,7 @@ export function recordEmotion(
   if (
     reason === "model" ||
     reason === "initiative" ||
+    reason === "mood" ||
     reason === "scene" ||
     reason === "idle" ||
     reason === "ambient"

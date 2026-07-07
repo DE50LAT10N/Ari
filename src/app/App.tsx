@@ -61,8 +61,10 @@ import {
   emotionToMoodEvent,
   interactionToMoodEvent,
   isMoodEngineEnabled,
+  proactiveToMoodEvent,
   triggerToMoodEvent,
   updateMoodFromEvents,
+  type MoodEvent,
 } from "../character/moodEngine";
 import { ADVICE_IGNORED_EVENT } from "../character/adviceOutcome";
 import { deriveAttentionState, type AttentionState } from "../character/attention";
@@ -79,10 +81,12 @@ import {
   EMOTION_BRIDGE_MS,
 } from "../character/emotionTransitions";
 import {
+  emotionConflictsWithMood,
   fuseRelationshipMoodEmotion,
   softenEmotionForMood,
 } from "../character/emotionPresentation";
 import { deriveRelationshipTone } from "../character/relationshipTone";
+import { avatarEmotionFromMood } from "../character/moodBehavior";
 import {
   applyHeadpatToRelationship,
   loadRelationship,
@@ -139,6 +143,8 @@ const INITIATIVE_EMOTION_COOLDOWN_MS = 15_000;
 const MODEL_EMOTION_COOLDOWN_MS = 4_000;
 const MOOD_EMOTION_COOLDOWN_MS = 800;
 const TYPING_PERK_COOLDOWN_MS = 4500;
+
+type EmotionChangeReason = "model" | "initiative" | "mood";
 
 function pickProximityReaction(
   mood: CharacterMood,
@@ -299,7 +305,7 @@ export function App() {
 
   const handleEmotionChange = useCallback((
     nextEmotion: CharacterEmotion,
-    reason: "model" | "initiative" = "model",
+    reason: EmotionChangeReason = "model",
   ) => {
     const current = emotionRef.current;
     let softened = softenEmotionForMood(
@@ -317,8 +323,13 @@ export function App() {
     }
 
     const elapsed = Date.now() - lastBaseEmotionChangeAtRef.current;
-    if (reason !== "model") {
-      if (elapsed < INITIATIVE_EMOTION_COOLDOWN_MS) {
+    if (reason === "mood") {
+      if (elapsed < MOOD_EMOTION_COOLDOWN_MS) {
+        return;
+      }
+    } else if (reason === "initiative") {
+      const bypassCooldown = emotionConflictsWithMood(current, moodRef.current);
+      if (!bypassCooldown && elapsed < INITIATIVE_EMOTION_COOLDOWN_MS) {
         return;
       }
     } else if (elapsed < MODEL_EMOTION_COOLDOWN_MS && softened === "neutral") {
@@ -334,72 +345,53 @@ export function App() {
       window.clearTimeout(emotionTransitionTimerRef.current);
     }
 
-    if (reason === "model" || reason === "initiative") {
-      const path = emotionTransitionPath(current, softened);
-      if (
-        reason === "model" &&
-        path.length > 1 &&
-        path[0] !== path[1] &&
-        (current === "annoyed" || softened === "happy" || softened === "excited")
-      ) {
-        setEmotion(path[0]);
-        emotionTransitionTimerRef.current = window.setTimeout(() => {
-          setEmotion(path[1]!);
-        }, EMOTION_BRIDGE_MS);
-      } else {
-        setEmotion(softened);
-      }
-    } else if (softened === "neutral") {
-      setEmotion("neutral");
-    } else {
-      const path = emotionTransitionPath(current, softened);
-      setEmotion(path[0]);
-      if (path.length > 1 && path[1] !== path[0]) {
-        emotionTransitionTimerRef.current = window.setTimeout(() => {
-          setEmotion(path[1]!);
-        }, EMOTION_BRIDGE_MS);
-      }
-    }
-
-    setMood((currentMood) => {
-      if (!isMoodEngineEnabled(settingsRef.current)) {
-        return applyEmotionToMood(currentMood, softened);
-      }
-      const result = updateMoodFromEvents({
-        settings: settingsRef.current,
-        events: [emotionToMoodEvent({ emotion: softened })],
-      });
-      return {
-        warmth: result.nextMood.warmth ?? currentMood.warmth,
-        energy: result.nextMood.energy ?? currentMood.energy,
-        irritation: result.nextMood.irritation ?? currentMood.irritation,
-        updatedAt: Date.now(),
-      };
-    });
-    recordEmotion(softened, reason);
-  }, []);
-
-  const applyMoodEmotionToAvatar = useCallback((nextEmotion: CharacterEmotion) => {
-    if (!settingsRef.current.avatarLivelinessEnabled) return;
-    const current = emotionRef.current;
-    if (nextEmotion === current) return;
-
-    const elapsed = Date.now() - lastBaseEmotionChangeAtRef.current;
-    if (elapsed < MOOD_EMOTION_COOLDOWN_MS) return;
-
-    lastBaseEmotionChangeAtRef.current = Date.now();
-    if (emotionTransitionTimerRef.current) {
-      window.clearTimeout(emotionTransitionTimerRef.current);
-    }
-
-    const path = emotionTransitionPath(current, nextEmotion);
-    setEmotion(path[0]!);
-    if (path.length > 1 && path[1] !== path[0]) {
+    const path = emotionTransitionPath(current, softened);
+    if (
+      reason === "model" &&
+      path.length > 1 &&
+      path[0] !== path[1] &&
+      (current === "annoyed" || softened === "happy" || softened === "excited")
+    ) {
+      setEmotion(path[0]!);
       emotionTransitionTimerRef.current = window.setTimeout(() => {
         setEmotion(path[1]!);
       }, EMOTION_BRIDGE_MS);
+    } else if (path.length > 1 && path[0] !== path[1]) {
+      setEmotion(path[0]!);
+      emotionTransitionTimerRef.current = window.setTimeout(() => {
+        setEmotion(path[1]!);
+      }, EMOTION_BRIDGE_MS);
+    } else {
+      setEmotion(softened);
     }
+
+    if (reason !== "mood" && reason === "model") {
+      setMood((currentMood) => {
+        if (!isMoodEngineEnabled(settingsRef.current)) {
+          return applyEmotionToMood(currentMood, softened);
+        }
+        const result = updateMoodFromEvents({
+          settings: settingsRef.current,
+          events: [emotionToMoodEvent({ emotion: softened })],
+        });
+        return {
+          warmth: result.nextMood.warmth ?? currentMood.warmth,
+          energy: result.nextMood.energy ?? currentMood.energy,
+          irritation: result.nextMood.irritation ?? currentMood.irritation,
+          updatedAt: Date.now(),
+        };
+      });
+    }
+    recordEmotion(softened, reason);
   }, []);
+
+  const syncAvatarEmotionFromMood = useCallback((explicitEmotion?: CharacterEmotion) => {
+    if (!settingsRef.current.avatarLivelinessEnabled) {
+      return;
+    }
+    const target = explicitEmotion ?? avatarEmotionFromMood(moodRef.current);
+    handleEmotionChange(target, "mood");
+  }, [handleEmotionChange]);
 
   const applyInteractionMood = useCallback(
     (
@@ -417,10 +409,8 @@ export function App() {
       if (!isMoodEngineEnabled(settingsRef.current)) {
         const next = applyInteractionToMood(moodRef.current, interaction);
         setMood(next);
-        const preferred = moodPreferredEmotion(next);
-        if (preferred) {
-          applyMoodEmotionToAvatar(preferred);
-        }
+        const preferred = avatarEmotionFromMood(next);
+        syncAvatarEmotionFromMood(preferred);
         return;
       }
 
@@ -435,10 +425,42 @@ export function App() {
         irritation: result.nextMood.irritation ?? moodRef.current.irritation,
         updatedAt: Date.now(),
       });
-      applyMoodEmotionToAvatar(result.classification.emotion);
+      syncAvatarEmotionFromMood(avatarEmotionFromMood({
+        warmth: result.nextMood.warmth ?? moodRef.current.warmth,
+        energy: result.nextMood.energy ?? moodRef.current.energy,
+        irritation: result.nextMood.irritation ?? moodRef.current.irritation,
+        updatedAt: Date.now(),
+      }));
     },
-    [applyMoodEmotionToAvatar],
+    [syncAvatarEmotionFromMood],
   );
+
+  const applyMoodEngineEvents = useCallback(
+    (events: MoodEvent[], options?: { applyDecay?: boolean }) => {
+      if (!events.length || !isMoodEngineEnabled(settingsRef.current)) {
+        return;
+      }
+      const result = updateMoodFromEvents({
+        settings: settingsRef.current,
+        events,
+        options: { applyDecay: options?.applyDecay ?? false },
+      });
+      const nextMood = {
+        warmth: result.nextMood.warmth ?? moodRef.current.warmth,
+        energy: result.nextMood.energy ?? moodRef.current.energy,
+        irritation: result.nextMood.irritation ?? moodRef.current.irritation,
+        updatedAt: Date.now(),
+      };
+      moodRef.current = nextMood;
+      setMood(nextMood);
+      syncAvatarEmotionFromMood(avatarEmotionFromMood(nextMood));
+    },
+    [syncAvatarEmotionFromMood],
+  );
+
+  useEffect(() => {
+    syncAvatarEmotionFromMood();
+  }, [mood, syncAvatarEmotionFromMood]);
 
   const handleProactiveMessage = useCallback(() => {
     recordCompanionInteraction();
@@ -894,35 +916,23 @@ export function App() {
       if (!isMoodEngineEnabled(settingsRef.current)) {
         const next = applyRepeatedIgnoreMood(moodRef.current, count);
         setMood(next);
-        const preferred = moodPreferredEmotion(next);
-        if (preferred) {
-          applyMoodEmotionToAvatar(preferred);
-        }
+        const preferred = avatarEmotionFromMood(next);
+        syncAvatarEmotionFromMood(preferred);
         return;
       }
 
-      const result = updateMoodFromEvents({
-        settings: settingsRef.current,
-        events: [
-          interactionToMoodEvent({
-            interaction: "ignored_initiative",
-            intensity: Math.min(3, Math.max(1, count)),
-          }),
-        ],
-        options: { applyDecay: false },
-      });
-      setMood({
-        warmth: result.nextMood.warmth ?? moodRef.current.warmth,
-        energy: result.nextMood.energy ?? moodRef.current.energy,
-        irritation: result.nextMood.irritation ?? moodRef.current.irritation,
-        updatedAt: Date.now(),
-      });
-      applyMoodEmotionToAvatar(result.classification.emotion);
+      applyMoodEngineEvents([
+        proactiveToMoodEvent({
+          kind: "advice_ignored",
+          intensity: Math.min(3, Math.max(1, count)),
+          metadata: { count },
+        }),
+      ]);
     };
     window.addEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
     return () =>
       window.removeEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
-  }, [applyMoodEmotionToAvatar]);
+  }, [applyMoodEngineEvents, syncAvatarEmotionFromMood]);
 
   useEffect(() => {
     if (!settings.pomodoroEnabled) return;
@@ -1220,6 +1230,7 @@ export function App() {
               companionSilenceMs,
               attention: context.attention,
               focusActive,
+              mood: context.mood,
             });
           if (canShowLocalThought && context) {
             const thought = pickLocalAmbientThought({
@@ -1268,6 +1279,7 @@ export function App() {
               userIdleSeconds: context.userIdleSeconds,
               companionSilenceMs,
               attention: context.attention,
+              mood: context.mood,
             });
 
           if (!canThink || !context) {
@@ -1421,27 +1433,34 @@ export function App() {
             onAmbientBubble={handleAmbientBubble}
             onProactiveEmitted={handleProactiveEmitted}
             onMoodInteraction={(interaction) => applyInteractionMood(interaction)}
-            onMoodTrigger={(trigger) =>
-              setMood((current) => {
-                if (!isMoodEngineEnabled(settingsRef.current)) {
-                  return applyMoodTriggerToMood(current, trigger);
-                }
+            onProactiveMoodEvent={(event) => applyMoodEngineEvents([event])}
+            onMoodTrigger={(trigger) => {
+              let nextMood = moodRef.current;
+              if (!isMoodEngineEnabled(settingsRef.current)) {
+                nextMood = applyMoodTriggerToMood(moodRef.current, trigger);
+              } else {
                 const event = triggerToMoodEvent({ trigger });
                 if (!event) {
-                  return decayMood(current);
+                  nextMood = decayMood(moodRef.current);
+                } else {
+                  const result = updateMoodFromEvents({
+                    settings: settingsRef.current,
+                    events: [event],
+                    options: { applyDecay: false },
+                  });
+                  nextMood = {
+                    warmth: result.nextMood.warmth ?? moodRef.current.warmth,
+                    energy: result.nextMood.energy ?? moodRef.current.energy,
+                    irritation:
+                      result.nextMood.irritation ?? moodRef.current.irritation,
+                    updatedAt: Date.now(),
+                  };
                 }
-                const result = updateMoodFromEvents({
-                  settings: settingsRef.current,
-                  events: [event],
-                });
-                return {
-                  warmth: result.nextMood.warmth ?? current.warmth,
-                  energy: result.nextMood.energy ?? current.energy,
-                  irritation: result.nextMood.irritation ?? current.irritation,
-                  updatedAt: Date.now(),
-                };
-              })
-            }
+              }
+              moodRef.current = nextMood;
+              setMood(nextMood);
+              syncAvatarEmotionFromMood(avatarEmotionFromMood(nextMood));
+            }}
           />
         </Suspense>
       )}

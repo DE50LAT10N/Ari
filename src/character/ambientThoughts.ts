@@ -10,6 +10,8 @@ import type { ChatMessage } from "../types/chat";
 import type { AttentionState } from "./attention";
 import type { CharacterMood } from "./mood";
 import { describeMoodForPrompt } from "./mood";
+import { deriveMoodPolicy } from "./moodEngine/moodPolicy";
+import { fromCharacterMood } from "./moodEngine/moodVector";
 import type { PresenceScene } from "./presence";
 
 const RECENT_THOUGHTS_KEY = "ari.ambientThoughts.recent.v1";
@@ -52,6 +54,7 @@ export type AmbientThoughtGateInput = {
   userIdleSeconds: number;
   companionSilenceMs: number;
   attention: AttentionState;
+  mood?: CharacterMood;
 };
 
 export type LocalAmbientThoughtGateInput = Omit<
@@ -73,14 +76,19 @@ export function ambientThoughtCooldownMs(input: {
   userIdleSeconds: number;
   companionSilenceMs: number;
   attention: AttentionState;
+  mood?: CharacterMood;
 }): number {
+  const policy = input.mood
+    ? deriveMoodPolicy(fromCharacterMood(input.mood))
+    : null;
+  const scale = policy?.thoughtBubbleCooldownScale ?? 1;
   if (input.companionSilenceMs >= 20 * 60_000 || input.userIdleSeconds >= 12 * 60) {
-    return 3 * 60_000;
+    return Math.round(3 * 60_000 * scale);
   }
   if (input.companionSilenceMs >= 8 * 60_000 || input.attention === "observing") {
-    return 4 * 60_000;
+    return Math.round(4 * 60_000 * scale);
   }
-  return 5 * 60_000;
+  return Math.round(5 * 60_000 * scale);
 }
 
 export function shouldAttemptAmbientThought(input: AmbientThoughtGateInput): boolean {
@@ -103,14 +111,22 @@ export function shouldAttemptAmbientThought(input: AmbientThoughtGateInput): boo
       userIdleSeconds: input.userIdleSeconds,
       companionSilenceMs: input.companionSilenceMs,
       attention: input.attention,
+      mood: input.mood,
     })
   ) {
     return false;
   }
+  const policy = input.mood
+    ? deriveMoodPolicy(fromCharacterMood(input.mood))
+    : null;
+  const chance = policy?.thoughtBubbleChance ?? 0.5;
+  const companionThresholdMs =
+    chance >= 0.66 ? 75_000 : chance < 0.38 ? 4 * 60_000 : 2 * 60_000;
+  const idleThresholdSec = chance >= 0.66 ? 40 : chance < 0.38 ? 120 : 75;
 
   return (
-    input.companionSilenceMs >= 2 * 60_000 ||
-    input.userIdleSeconds >= 75 ||
+    input.companionSilenceMs >= companionThresholdMs ||
+    input.userIdleSeconds >= idleThresholdSec ||
     input.attention === "observing"
   );
 }
@@ -119,14 +135,19 @@ export function localAmbientThoughtCooldownMs(input: {
   attention: AttentionState;
   focusActive?: boolean;
   companionSilenceMs: number;
+  mood?: CharacterMood;
 }): number {
+  const policy = input.mood
+    ? deriveMoodPolicy(fromCharacterMood(input.mood))
+    : null;
+  const scale = policy?.thoughtBubbleCooldownScale ?? 1;
   if (input.focusActive || input.attention === "observing") {
-    return 45_000;
+    return Math.round(45_000 * scale);
   }
   if (input.companionSilenceMs >= 8 * 60_000) {
-    return 60_000;
+    return Math.round(60_000 * scale);
   }
-  return 90_000;
+  return Math.round(90_000 * scale);
 }
 
 export function shouldAttemptLocalAmbientThought(
@@ -149,15 +170,22 @@ export function shouldAttemptLocalAmbientThought(
       attention: input.attention,
       focusActive: input.focusActive,
       companionSilenceMs: input.companionSilenceMs,
+      mood: input.mood,
     })
   ) {
     return false;
   }
+  const policy = input.mood
+    ? deriveMoodPolicy(fromCharacterMood(input.mood))
+    : null;
+  const chance = policy?.thoughtBubbleChance ?? 0.5;
+  const silenceThresholdMs = chance >= 0.66 ? 60_000 : chance < 0.38 ? 2 * 60_000 : 90_000;
+  const idleThresholdSec = chance >= 0.66 ? 30 : chance < 0.38 ? 75 : 45;
   return (
     input.focusActive === true ||
     input.attention === "observing" ||
-    input.companionSilenceMs >= 90_000 ||
-    input.userIdleSeconds >= 45
+    input.companionSilenceMs >= silenceThresholdMs ||
+    input.userIdleSeconds >= idleThresholdSec
   );
 }
 
@@ -426,6 +454,7 @@ function buildPrompt(input: AmbientThoughtInput, recent: string[]): ChatMessage[
         `Сцена: ${input.scene}`,
         `Внимание: ${input.attention}`,
         `Настроение Ari: ${describeMoodForPrompt(input.mood)}`,
+        `Mood policy: ${deriveMoodPolicy(fromCharacterMood(input.mood)).promptLines.join(" ")}`,
         `Окно: ${compactActiveWindow(input)}`,
         `Пользователь idle: ${Math.round(input.userIdleSeconds)} сек`,
         `Тишина с Ari: ${Math.round(input.companionSilenceMs / 60_000)} мин`,

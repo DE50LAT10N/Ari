@@ -1,6 +1,6 @@
 # Ari advisor simulation report
 
-Generated: 2026-07-02T10:59:20.931Z
+Generated: 2026-07-07T16:44:30.920Z
 
 | Scenario | Expected | Actual | Initiative | Value/Risk | Flags | Topics |
 |----------|----------|--------|------------|------------|-------|--------|

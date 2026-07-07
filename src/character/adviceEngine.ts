@@ -17,6 +17,12 @@ import {
   reconcilePendingAdviceOutcomes,
 } from "./adviceOutcome";
 import {
+  formatAdviceMoveReputationsForDiagnostics,
+  formatAdviceMoveForDiagnostics,
+  selectAdviceMove,
+  type AdviceMoveSelection,
+} from "./adviceMoveSelector";
+import {
   computeCadencePressure,
   planSignalDrivenAdvice,
   type AdviceUrgency,
@@ -559,6 +565,7 @@ function synthesisInput(
   candidateTopics: string[],
   adviceCandidate?: ReturnType<typeof planAdvice>["selected"],
   ragSnippets?: string[],
+  adviceMoveGuidance?: string,
 ) {
   return {
     bundle: ctx.bundle,
@@ -574,6 +581,7 @@ function synthesisInput(
     llmOnline: ctx.llmOnline,
     ragSnippets: ragSnippets?.length ? ragSnippets : undefined,
     adviceCandidate,
+    adviceMoveGuidance,
   };
 }
 
@@ -585,6 +593,7 @@ function ensureDeliverableBundle(
   candidateTopics: string[],
   ragSnippets: string[],
   trace: AdviceTraceStep[],
+  adviceMoveSelection?: AdviceMoveSelection,
 ): ProactiveLlmBundle {
   let bundle = llmBundle;
   const avoidClarifying = shouldAvoidClarifyingFallback(ctx);
@@ -605,7 +614,13 @@ function ensureDeliverableBundle(
           reason: "thin context generic synthesis after clarifying",
         })
       : buildClarifyingProbeBundle(
-          synthesisInput(ctx, candidateTopics, advicePlan?.selected, ragSnippets),
+          synthesisInput(
+            ctx,
+            candidateTopics,
+            advicePlan?.selected,
+            ragSnippets,
+            adviceMoveSelection?.promptGuidance,
+          ),
           adviceFacts,
           "thin context generic synthesis",
         );
@@ -655,7 +670,13 @@ function ensureDeliverableBundle(
             reason: "duplicate advice rotated after clarifying",
           })
         : buildClarifyingProbeBundle(
-            synthesisInput(ctx, candidateTopics, advicePlan?.selected, ragSnippets),
+            synthesisInput(
+              ctx,
+              candidateTopics,
+              advicePlan?.selected,
+              ragSnippets,
+              adviceMoveSelection?.promptGuidance,
+            ),
             adviceFacts,
             "duplicate advice rotated",
           );
@@ -684,7 +705,13 @@ function ensureDeliverableBundle(
           reason: bundle.rejectReason ?? "llm synthesis rejected",
         })
       : tryAdviceFallbackChain(
-          synthesisInput(ctx, candidateTopics, advicePlan?.selected, ragSnippets),
+          synthesisInput(
+            ctx,
+            candidateTopics,
+            advicePlan?.selected,
+            ragSnippets,
+            adviceMoveSelection?.promptGuidance,
+          ),
           adviceFacts,
           bundle.rejectReason ?? "llm synthesis rejected",
         );
@@ -706,7 +733,13 @@ function ensureDeliverableBundle(
           reason: bundle.rejectReason ?? "engine concrete-step guarantee",
         })
       : buildClarifyingProbeBundle(
-          synthesisInput(ctx, candidateTopics, advicePlan?.selected, ragSnippets),
+          synthesisInput(
+            ctx,
+            candidateTopics,
+            advicePlan?.selected,
+            ragSnippets,
+            adviceMoveSelection?.promptGuidance,
+          ),
           adviceFacts,
           bundle.rejectReason ?? "engine clarifying guarantee",
         );
@@ -789,20 +822,41 @@ async function buildAdvicePackage(
     }),
   });
 
+  const adviceOutcomes = getRecentAdviceOutcomes(adviceTopicKey);
   const advicePlan = planAdvice({
     bundle: ctx.bundle,
     facts: adviceFacts,
     urgency: ctx.urgency,
     feedback: getRecentAdviceFeedback(adviceTopicKey),
     history: loadAdviceLedger(),
-    outcomes: getRecentAdviceOutcomes(adviceTopicKey),
+    outcomes: adviceOutcomes,
     candidateTopics,
     ragSnippets,
   });
+  const adviceMoveSelection = selectAdviceMove({
+    plan: advicePlan,
+    facts: adviceFacts,
+    outcomes: adviceOutcomes,
+  });
+  pushTrace(
+    trace,
+    "move",
+    `${formatAdviceMoveForDiagnostics(adviceMoveSelection)} · ${
+      adviceMoveSelection.disallowedGenericFallbacks.length
+        ? `blocked ${adviceMoveSelection.disallowedGenericFallbacks.join(", ")}`
+        : "generic fallback allowed"
+    }`,
+  );
 
   if (strategy === "CLARIFY") {
     const clarifying = buildClarifyingProbeBundle(
-      synthesisInput(ctx, candidateTopics, advicePlan.selected, ragSnippets),
+      synthesisInput(
+        ctx,
+        candidateTopics,
+        adviceMoveSelection.candidate,
+        ragSnippets,
+        adviceMoveSelection.promptGuidance,
+      ),
       adviceFacts,
       "engine clarify strategy",
     );
@@ -828,14 +882,26 @@ async function buildAdvicePackage(
   if (ctx.llmOnline) {
     llmBundle = await synthesizeProactiveBundle(
       ctx.settings,
-      synthesisInput(ctx, candidateTopics, advicePlan.selected, ragSnippets),
+      synthesisInput(
+        ctx,
+        candidateTopics,
+        adviceMoveSelection.candidate,
+        ragSnippets,
+        adviceMoveSelection.promptGuidance,
+      ),
     );
     if (
       !llmBundle.practicalHook &&
       !(llmBundle.adviceSteps && llmBundle.adviceSteps.length)
     ) {
       const retry = await synthesizeProactiveBundle(ctx.settings, {
-        ...synthesisInput(ctx, candidateTopics, advicePlan.selected, ragSnippets),
+        ...synthesisInput(
+          ctx,
+          candidateTopics,
+          adviceMoveSelection.candidate,
+          ragSnippets,
+          adviceMoveSelection.promptGuidance,
+        ),
         requirePracticalHook: true,
       });
       if (retry.practicalHook || retry.adviceSteps?.length) {
@@ -850,14 +916,26 @@ async function buildAdvicePackage(
   } else {
     pushTrace(trace, "synthesis", "llm offline — deterministic clarifying");
     const offline = buildClarifyingProbeBundle(
-      synthesisInput(ctx, candidateTopics, advicePlan.selected, ragSnippets),
+      synthesisInput(
+        ctx,
+        candidateTopics,
+        adviceMoveSelection.candidate,
+        ragSnippets,
+        adviceMoveSelection.promptGuidance,
+      ),
       adviceFacts,
       "llm offline",
     );
     llmBundle =
       offline ??
       (await synthesizeProactiveBundle(ctx.settings, {
-        ...synthesisInput(ctx, candidateTopics, advicePlan.selected, ragSnippets),
+        ...synthesisInput(
+          ctx,
+          candidateTopics,
+          adviceMoveSelection.candidate,
+          ragSnippets,
+          adviceMoveSelection.promptGuidance,
+        ),
         llmOnline: false,
       }));
   }
@@ -870,6 +948,7 @@ async function buildAdvicePackage(
     candidateTopics,
     ragSnippets,
     trace,
+    adviceMoveSelection,
   );
 
   if (!llmBundle.shouldSend) {
@@ -1112,8 +1191,12 @@ export function describeAdviceEngineForDiagnostics(): {
   reason: string;
   trace: string[];
   bundleScore: number | null;
+  moveReputation: string[];
 } {
   const last = getLastAdviceDecisionTrace();
+  const moveReputation = formatAdviceMoveReputationsForDiagnostics(
+    getRecentAdviceOutcomes(),
+  );
   if (!last) {
     return {
       strategy: "—",
@@ -1121,6 +1204,7 @@ export function describeAdviceEngineForDiagnostics(): {
       reason: "ещё не было цикла",
       trace: [],
       bundleScore: null,
+      moveReputation,
     };
   }
   return {
@@ -1129,5 +1213,6 @@ export function describeAdviceEngineForDiagnostics(): {
     reason: last.reason,
     trace: last.trace.map((step) => `${step.stage}: ${step.detail}`),
     bundleScore: last.bundle?.usefulnessScore ?? null,
+    moveReputation,
   };
 }

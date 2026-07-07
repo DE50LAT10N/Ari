@@ -120,6 +120,18 @@ export function validateCharacterReply(
   if (questionMarks >= questionSpamLimit) {
     issues.push("question spam");
   }
+  const recent = context.recentAssistantReplies ?? [];
+  const endsWithQuestion = /[?\uFF1F]\s*$/u.test(reply.trim());
+  const recentQuestionEndings = recent
+    .slice(-4)
+    .filter((item) => /[?\uFF1F]\s*$/u.test(item.trim())).length;
+  if (
+    endsWithQuestion &&
+    recentQuestionEndings >= 2 &&
+    !context.userAskedQuestion
+  ) {
+    issues.push("habitual trailing question");
+  }
   if (HABITUAL_TRAILING_QUESTION_PATTERN.test(reply.trim())) {
     issues.push("habitual trailing question");
   }
@@ -140,7 +152,6 @@ export function validateCharacterReply(
   ) {
     issues.push("evasive reply");
   }
-  const recent = context.recentAssistantReplies ?? [];
   if (
     recent.length > 0 &&
     isTooSimilarToRecent(

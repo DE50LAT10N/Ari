@@ -113,6 +113,7 @@ export type ProactiveLlmInput = {
   topicChains?: ProactiveTopicChain[];
   topicLinks?: ProactiveTopicLink[];
   adviceCandidate?: AdviceCandidate | null;
+  adviceMoveGuidance?: string;
 };
 
 type BundleResponse = {
@@ -1289,6 +1290,9 @@ async function callSynthesisLlm(
             : "",
           input.adviceCandidate
             ? `Выбранный planner-ход совета (следуй ему, не заменяй generic check-in):\n${formatAdviceCandidateForPrompt(input.adviceCandidate)}`
+            : "",
+          input.adviceMoveGuidance
+            ? `Advice move policy:\n${input.adviceMoveGuidance}`
             : "",
           input.ragSnippets?.length
             ? `Фрагменты RAG/reference для решения проблемы:\n${input.ragSnippets.map((snippet) => `- ${snippet.slice(0, 360)}`).join("\n")}`

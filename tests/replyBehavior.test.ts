@@ -77,6 +77,39 @@ describe("proactive reply tone response mode", () => {
     expect(result.issues).toContain("habitual trailing question");
   });
 
+  it("flags repeated trailing questions across recent replies", () => {
+    const result = validateCharacterReply("This answer is tidy enough?", {
+      hasVision: false,
+      hasMemory: false,
+      hasRag: false,
+      proactive: false,
+      recentAssistantReplies: [
+        "First short aside?",
+        "Second short aside?",
+        "A completed statement.",
+      ],
+    });
+
+    expect(result.issues).toContain("habitual trailing question");
+  });
+
+  it("does not flag a trailing question after a direct user question", () => {
+    const result = validateCharacterReply("This path is plausible; want the shorter fix?", {
+      hasVision: false,
+      hasMemory: false,
+      hasRag: false,
+      proactive: false,
+      userAskedQuestion: true,
+      recentAssistantReplies: [
+        "First short aside?",
+        "Second short aside?",
+        "A completed statement.",
+      ],
+    });
+
+    expect(result.issues).not.toContain("habitual trailing question");
+  });
+
   it("does not flag proactive advice novelty via post-hoc regex validation", () => {
     const result = validateCharacterReply(
       "Давай попробуем так: выбери один файл и пообещай себе следующие 10 минут ни на что не отвлекаться.",

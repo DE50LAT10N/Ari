@@ -15,6 +15,9 @@ import {
 } from "./checkInitiativePolicy";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import { rankRelevanceCandidates } from "./relevanceRanker";
+import { loadMood } from "./mood";
+import { deriveMoodPolicy } from "./moodEngine/moodPolicy";
+import { fromCharacterMood } from "./moodEngine/moodVector";
 
 export type ProactiveEngineDecision = {
   action: ProactiveTickAction;
@@ -78,6 +81,24 @@ export function planProactiveEngineTick(input: {
 
   if (adviceStarved && input.idleGateOpen && !input.loading) {
     action = "try_advice";
+  }
+
+  const moodPolicy = deriveMoodPolicy(fromCharacterMood(loadMood()));
+  if (
+    moodPolicy.initiativeBias < 0.38 &&
+    (input.urgency.level === "none" || input.urgency.level === "low") &&
+    action === "try_advice" &&
+    !adviceStarved
+  ) {
+    action = input.smalltalkReady ? "try_smalltalk" : "silent";
+  }
+  if (
+    moodPolicy.initiativeBias > 0.68 &&
+    action === "silent" &&
+    input.smalltalkReady &&
+    input.urgency.level !== "high"
+  ) {
+    action = "try_smalltalk";
   }
 
   const protectSmalltalkSlot =

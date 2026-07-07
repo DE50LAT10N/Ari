@@ -5,6 +5,7 @@ import {
   recordAdviceFeedbackOutcome,
   resetAdviceOutcomesForTests,
   startAdviceOutcomeObservation,
+  summarizeAdviceOutcomeReputation,
   type AdviceObservedState,
 } from "../src/character/adviceOutcome";
 import type { AdviceLedgerEntry } from "../src/character/adviceLedger";
@@ -67,6 +68,31 @@ describe("adviceOutcome", () => {
     expect(outcome.confidence).toBeGreaterThan(0.9);
     expect(getRecentAdviceOutcomes("chatpanel::cursor", 3_000)[0]?.outcome)
       .toBe("helped");
+  });
+
+  it("summarizes advice reputation from recent outcomes", () => {
+    const base: AdviceLedgerEntry = {
+      id: "advice-1",
+      at: 1_000,
+      updatedAt: 1_000,
+      expiresAt: 100_000,
+      topicKey: "chatpanel::cursor",
+      adviceCandidateKind: "debug_next_step",
+    };
+    recordAdviceFeedbackOutcome(base, "useful", 2_000);
+    recordAdviceFeedbackOutcome({ ...base, id: "advice-2" }, "too_generic", 3_000);
+    recordAdviceFeedbackOutcome({ ...base, id: "advice-3" }, "miss", 4_000);
+
+    const reputation = summarizeAdviceOutcomeReputation({
+      topicKey: "chatpanel::cursor",
+      now: 5_000,
+    });
+
+    expect(reputation.sampleSize).toBe(3);
+    expect(reputation.positive).toBe(1);
+    expect(reputation.negative).toBe(2);
+    expect(reputation.label).toBe("cautious");
+    expect(reputation.intervalMultiplier).toBeGreaterThan(1);
   });
 
   it("infers resolved when an error signal disappears after advice", () => {

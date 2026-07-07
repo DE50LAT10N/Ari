@@ -35,6 +35,7 @@ import {
   describeAdviceReadiness,
   computeCadencePressure,
 } from "../character/adviceUrgency";
+import { describeAdviceFinalGateForDiagnostics } from "../character/adviceFinalGate";
 import { describeAdviceEngineForDiagnostics } from "../character/adviceEngine";
 import { describeRelevanceRankerForDiagnostics } from "../character/relevanceRanker";
 import { getLastProactiveLlmBundle, getLastProactiveSynthesisReject } from "../character/proactiveLlmEngine";
@@ -48,6 +49,11 @@ import { getMemoryHealthSnapshot } from "../memory/memoryTelemetry";
 import { isLlmProviderOnline } from "../llm/providerOnline";
 import { getGigaChatAuthKeyPresent } from "../llm/gigaChatStatus";
 import { resolveModel } from "../llm/modelRouter";
+import {
+  formatMoodTimelineForDiagnostics,
+  getCurrentMoodLayers,
+  moodVectorToPrompt,
+} from "../character/moodEngine";
 
 type DeskSnapshot = {
   focusSession: FocusSession | null;
@@ -74,6 +80,7 @@ type ProactiveDebug = {
   adviceUrgencyScore: number;
   adviceUrgencyReasons: string[];
   adviceEffectiveIntervalMin: number;
+  adviceOutcomeReputation: string | null;
   smalltalkEffectiveIntervalMin: number;
   lastBundleScore: number | null;
   lastBundleShouldSend: boolean | null;
@@ -87,12 +94,17 @@ type ProactiveDebug = {
   engineStrategy: string;
   engineReason: string;
   engineTrace: string[];
+  engineMoveReputation: string[];
+  adviceFinalGate: string | null;
   cadencePressure: string;
   relevanceWinner: string;
   relevanceScores: string[];
   relevanceLearnedEvents: number;
   relevanceLastUpdate: string | null;
   relevanceRecentUpdates: string[];
+  moodPolicy: string;
+  moodLayers: string;
+  moodTimeline: string[];
 };
 
 function buildSnapshot(): DeskSnapshot {
@@ -133,6 +145,8 @@ function buildProactiveDebug(): ProactiveDebug {
   });
   const engineDebug = describeAdviceEngineForDiagnostics();
   const relevance = describeRelevanceRankerForDiagnostics();
+  const moodLayers = getCurrentMoodLayers({ now });
+  const moodPolicy = moodVectorToPrompt(moodLayers.vector).policy;
   const cadence = urgency
     ? computeCadencePressure(
         urgency,
@@ -167,6 +181,9 @@ function buildProactiveDebug(): ProactiveDebug {
     adviceEffectiveIntervalMin: urgency
       ? Math.ceil(urgency.effectiveIntervalMs / 60_000)
       : Math.ceil(adviceIntervalMs / 60_000),
+    adviceOutcomeReputation: urgency?.outcomeReputation?.sampleSize
+      ? `${urgency.outcomeReputation.label} · score ${urgency.outcomeReputation.score.toFixed(2)} · interval x${urgency.outcomeReputation.intervalMultiplier.toFixed(2)}`
+      : null,
     smalltalkEffectiveIntervalMin: Math.ceil(smalltalkIntervalMs / 60_000),
     lastBundleScore: lastBundle?.usefulnessScore ?? null,
     lastBundleShouldSend: lastBundle ? lastBundle.shouldSend : null,
@@ -183,6 +200,8 @@ function buildProactiveDebug(): ProactiveDebug {
     engineStrategy: engineDebug.strategy,
     engineReason: engineDebug.reason,
     engineTrace: engineDebug.trace.slice(-6),
+    engineMoveReputation: engineDebug.moveReputation,
+    adviceFinalGate: describeAdviceFinalGateForDiagnostics(),
     cadencePressure:
       cadence.reasons.length > 0
         ? `${cadence.level}: ${cadence.reasons.join(" · ")}`
@@ -192,6 +211,9 @@ function buildProactiveDebug(): ProactiveDebug {
     relevanceLearnedEvents: relevance.learnedEvents,
     relevanceLastUpdate: relevance.lastUpdate,
     relevanceRecentUpdates: relevance.recentUpdates,
+    moodPolicy: `${moodPolicy.archetype} · len ${moodPolicy.replyLength} · thought ${moodPolicy.thoughtBubbleChance.toFixed(2)} · initiative ${moodPolicy.initiativeBias.toFixed(2)}`,
+    moodLayers: `now ${moodLayers.vector.warmth.toFixed(2)}/${moodLayers.vector.energy.toFixed(2)}/${moodLayers.vector.irritation.toFixed(2)} · base ${moodLayers.baselineVector.warmth.toFixed(2)}/${moodLayers.baselineVector.energy.toFixed(2)}/${moodLayers.baselineVector.irritation.toFixed(2)} · react ${moodLayers.reactiveVector.warmth.toFixed(2)}/${moodLayers.reactiveVector.energy.toFixed(2)}/${moodLayers.reactiveVector.irritation.toFixed(2)}`,
+    moodTimeline: formatMoodTimelineForDiagnostics(4),
   };
 }
 
@@ -242,6 +264,7 @@ export function AriDiagnosticsSection() {
       "ari-timeline-changed",
       "ari-tasks-changed",
       "ari-proactive-state-changed",
+      "ari-mood-timeline-changed",
     ];
     for (const name of events) {
       window.addEventListener(name, refresh);
@@ -393,6 +416,20 @@ export function AriDiagnosticsSection() {
               </dd>
             </div>
             <div>
+              <dt>Mood policy</dt>
+              <dd>{proactiveDebug.moodPolicy}</dd>
+            </div>
+            <div>
+              <dt>Mood layers</dt>
+              <dd>{proactiveDebug.moodLayers}</dd>
+            </div>
+            {proactiveDebug.moodTimeline.length > 0 && (
+              <div>
+                <dt>Mood timeline</dt>
+                <dd>{proactiveDebug.moodTimeline.join(" · ")}</dd>
+              </div>
+            )}
+            <div>
               <dt>Ranker</dt>
               <dd>
                 {proactiveDebug.relevanceWinner}
@@ -423,6 +460,12 @@ export function AriDiagnosticsSection() {
                 <dd>{proactiveDebug.engineTrace.join(" · ")}</dd>
               </div>
             )}
+            {proactiveDebug.engineMoveReputation.length > 0 && (
+              <div>
+                <dt>Move reputation</dt>
+                <dd>{proactiveDebug.engineMoveReputation.join(" · ")}</dd>
+              </div>
+            )}
             <div>
               <dt>Срочность совета</dt>
               <dd>
@@ -431,6 +474,12 @@ export function AriDiagnosticsSection() {
                 {proactiveDebug.adviceEffectiveIntervalMin} мин
               </dd>
             </div>
+            {proactiveDebug.adviceOutcomeReputation && (
+              <div>
+                <dt>Advice reputation</dt>
+                <dd>{proactiveDebug.adviceOutcomeReputation}</dd>
+              </div>
+            )}
             <div>
               <dt>Интервал смолтока</dt>
               <dd>{proactiveDebug.smalltalkEffectiveIntervalMin} мин</dd>
@@ -490,6 +539,12 @@ export function AriDiagnosticsSection() {
               <div>
                 <dt>Последнее решение совета</dt>
                 <dd>{proactiveDebug.lastAdviceDecision}</dd>
+              </div>
+            )}
+            {proactiveDebug.adviceFinalGate && (
+              <div>
+                <dt>Advice final gate</dt>
+                <dd>{proactiveDebug.adviceFinalGate}</dd>
               </div>
             )}
           </>

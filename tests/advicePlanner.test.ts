@@ -63,6 +63,8 @@ describe("advicePlanner", () => {
 
     expect(plan.selected?.kind).toBe("debug_next_step");
     expect(plan.selected?.evidenceIds.length).toBeGreaterThan(0);
+    expect(plan.selected?.guidance?.intent).toBe("fix");
+    expect(plan.selected?.guidance?.suggestedCheck).toBeTruthy();
     expect(plan.selected?.actionText).toMatch(/ChatPanel|ошиб|stack/i);
   });
 

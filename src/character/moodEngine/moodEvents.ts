@@ -1,6 +1,8 @@
 import { clamp } from "../../platform/mathUtils";
 import type { CharacterEmotion } from "../../types/character";
+import type { AdviceFeedback } from "../adviceLedger";
 import type { MoodTrigger } from "../moodTriggers";
+import type { ProactiveReplyTone } from "../proactiveTone";
 import type { MoodImpactRuleId, MoodImpactVector } from "./impactRules";
 
 export type MoodEventSource =
@@ -21,6 +23,11 @@ export type MoodEvent = {
   impact?: MoodImpactVector;
   impactRuleId?: MoodImpactRuleId;
 };
+
+export type ProactiveMoodEventKind =
+  | "proactive_sent"
+  | "advice_feedback"
+  | "advice_ignored";
 
 function clampIntensity(value: number): number {
   if (!Number.isFinite(value) || Number.isNaN(value)) {
@@ -98,6 +105,62 @@ export function triggerToMoodEvent(input: {
     timestamp,
     metadata: { ...input.metadata, kind: input.trigger.kind },
     impactRuleId: `trigger:${input.trigger.kind}`,
+  };
+}
+
+function proactiveImpact(input: {
+  kind: ProactiveMoodEventKind;
+  tone?: ProactiveReplyTone;
+  feedback?: AdviceFeedback;
+}): MoodImpactVector {
+  if (input.kind === "advice_ignored") {
+    return { warmth: -0.12, energy: -0.04, irritation: 0.24 };
+  }
+
+  if (input.kind === "advice_feedback") {
+    switch (input.feedback) {
+      case "useful":
+        return { warmth: 0.18, energy: 0.08, irritation: -0.16 };
+      case "not_now":
+        return { warmth: -0.04, energy: -0.02, irritation: 0.08 };
+      case "too_generic":
+        return { warmth: -0.08, energy: 0.01, irritation: 0.18 };
+      case "miss":
+        return { warmth: -0.12, energy: 0.02, irritation: 0.22 };
+      default:
+        return { warmth: 0, energy: 0, irritation: 0 };
+    }
+  }
+
+  if (input.tone === "advice") {
+    return { warmth: 0.03, energy: 0.08, irritation: -0.02 };
+  }
+  return { warmth: 0.08, energy: 0.04, irritation: -0.04 };
+}
+
+export function proactiveToMoodEvent(input: {
+  kind: ProactiveMoodEventKind;
+  tone?: ProactiveReplyTone;
+  feedback?: AdviceFeedback;
+  timestamp?: number;
+  intensity?: number;
+  confidence?: number;
+  metadata?: Record<string, unknown>;
+}): MoodEvent {
+  const timestamp = input.timestamp ?? Date.now();
+  return {
+    id: `proactive:${input.kind}:${input.tone ?? input.feedback ?? "none"}:${timestamp}`,
+    type: input.kind,
+    source: "proactive",
+    intensity: clampIntensity(input.intensity ?? 1),
+    confidence: clampIntensity(input.confidence ?? 0.82),
+    timestamp,
+    metadata: {
+      ...input.metadata,
+      tone: input.tone,
+      feedback: input.feedback,
+    },
+    impact: proactiveImpact(input),
   };
 }
 

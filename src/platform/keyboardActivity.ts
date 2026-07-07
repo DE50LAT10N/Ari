@@ -16,6 +16,24 @@ export type KeyboardActivitySnapshot = {
   active: boolean;
 };
 
+export type KeyboardActivityConfig = {
+  pollIntervalMs: number;
+  minWindowDwellMs: number;
+  correctionChurnMin: number;
+  escapeChurnMin: number;
+  commandLoopMin: number;
+  printableBurstMin: number;
+};
+
+export const KEYBOARD_ACTIVITY_CONFIG: KeyboardActivityConfig = {
+  pollIntervalMs: 5_000,
+  minWindowDwellMs: 60_000,
+  correctionChurnMin: 4,
+  escapeChurnMin: 2,
+  commandLoopMin: 3,
+  printableBurstMin: 18,
+};
+
 export const EMPTY_KEYBOARD_ACTIVITY: KeyboardActivitySnapshot = {
   observedMs: 0,
   printableKeyCount: 0,

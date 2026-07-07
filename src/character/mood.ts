@@ -4,6 +4,8 @@ import type { CharacterEmotion } from "../types/character";
 import { describeMoodBehaviorForPrompt } from "./moodBehavior";
 import { dayKey } from "./datetime";
 import { classifyMood } from "./moodEngine/moodClassifier";
+import { deriveMoodPolicy } from "./moodEngine/moodPolicy";
+import { fromCharacterMood } from "./moodEngine/moodVector";
 
 export type CharacterMood = {
   warmth: number;
@@ -238,30 +240,29 @@ export function applyRepeatedIgnoreMood(
 
 export function moodInitiativeBias(mood: CharacterMood): number {
   const current = decayMood(mood);
-  let bias = 0;
-  if (current.warmth > 0.52) bias += 0.28;
-  else if (current.warmth < 0.1) bias -= 0.12;
-  if (current.energy > 0.58) bias += 0.22;
-  else if (current.energy < 0.3) bias -= 0.22;
-  if (current.irritation > 0.38) bias -= 0.34;
-  else if (current.irritation > 0.18) bias -= 0.14;
-  return bias;
+  const policy = deriveMoodPolicy(fromCharacterMood(current));
+  return (policy.initiativeBias - 0.5) * 1.2;
 }
 
 export function moodAmbientReactionChance(
   mood: CharacterMood,
   base = 0.72,
 ): number {
-  return Math.max(0.32, Math.min(0.9, base + moodInitiativeBias(mood)));
+  const policy = deriveMoodPolicy(fromCharacterMood(decayMood(mood)));
+  return Math.max(
+    0.28,
+    Math.min(0.92, base + (policy.thoughtBubbleChance - 0.5) * 0.5),
+  );
 }
 
 export function moodPreferredEmotion(mood: CharacterMood): CharacterEmotion | null {
   const current = decayMood(mood);
+  const policy = deriveMoodPolicy(fromCharacterMood(current));
   const classified = classifyMood(current, { now: Date.now() });
-  if (classified.emotion === "neutral" && classified.confidence < 0.2) {
+  if (policy.emotion === "neutral" && classified.confidence < 0.2) {
     return null;
   }
-  return classified.emotion;
+  return policy.emotion;
 }
 
 function describeMood(mood: CharacterMood): string {

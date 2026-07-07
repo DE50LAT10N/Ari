@@ -1,5 +1,6 @@
 import type { CharacterMood } from "./mood";
 import { decayMood } from "./mood";
+import type { CharacterEmotion } from "../types/character";
 
 export type MoodArchetype =
   | "irritated"
@@ -26,6 +27,8 @@ const MOOD_BEHAVIOR_PROFILES: Record<MoodArchetype, MoodBehaviorProfile> = {
       "Можешь отказать выполнить просьбу (задачу, помодоро, действие), если она не срочная — коротко и в характере, без извинений.",
       "Не притворяйся восторженной помощницей; сарказм и усталость слышны в каждой фразе.",
       "Подколы резче обычного, но без оскорблений пользователя.",
+      "Не предлагай помощь в стиле ассистента: одна колкая реплика или молчи; без «давай помогу» и чеклистов.",
+      "Эмоции: <emotion>annoyed</emotion>, <emotion>determined</emotion>, реже <emotion>amused</emotion> с сарказмом.",
     ],
   },
   playful: {
@@ -121,6 +124,22 @@ export function deriveMoodArchetype(mood: CharacterMood): MoodArchetype {
 
 export function moodStatusLabel(mood: CharacterMood): string {
   return getMoodBehaviorProfile(mood).label;
+}
+
+const ARCHETYPE_AVATAR_EMOTION: Record<MoodArchetype, CharacterEmotion> = {
+  irritated: "annoyed",
+  playful: "amused",
+  warm: "empathetic",
+  sleepy: "sleepy",
+  gloomy: "pensive",
+  curious: "curious",
+  observant: "calm",
+  calm: "neutral",
+};
+
+/** Sprite aligned with moodStatusLabel / deriveMoodArchetype. */
+export function avatarEmotionFromMood(mood: CharacterMood): CharacterEmotion {
+  return ARCHETYPE_AVATAR_EMOTION[deriveMoodArchetype(mood)];
 }
 
 export function getMoodBehaviorProfile(mood: CharacterMood): MoodBehaviorProfile {

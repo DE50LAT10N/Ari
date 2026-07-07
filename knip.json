@@ -3,5 +3,10 @@
   "entry": ["src/main.tsx", "vite.config.ts"],
   "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
   "ignore": ["src-tauri/**", "dist/**", "scripts/**"],
-  "ignoreDependencies": ["@tauri-apps/cli"]
+  "ignoreDependencies": ["@tauri-apps/cli", "@tauri-apps/plugin-log"],
+  "rules": {
+    "exports": "off",
+    "types": "off",
+    "enumMembers": "off"
+  }
 }

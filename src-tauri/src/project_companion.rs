@@ -22,6 +22,14 @@ const IGNORED_DIR_NAMES: &[&str] = &[
     "__pycache__",
 ];
 
+const DEFAULT_BINDER_MAX_DEPTH: u32 = 6;
+const HARD_BINDER_MAX_DEPTH: u32 = 12;
+const DEFAULT_BINDER_FILE_LIMIT: usize = 200;
+const HARD_BINDER_FILE_LIMIT: usize = 500;
+const MAX_BINDER_READ_BYTES: u64 = 512_000;
+const DEFAULT_RECENT_COMMIT_LIMIT: usize = 8;
+const HARD_RECENT_COMMIT_LIMIT: usize = 20;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BinderFileEntry {
@@ -193,8 +201,14 @@ pub fn binder_list_files(request: BinderListRequest) -> Result<Vec<BinderFileEnt
         return Err("Корень проекта должен быть папкой.".into());
     }
     let allowed = normalize_extensions(request.allowed_extensions);
-    let max_depth = request.max_depth.unwrap_or(6).min(12);
-    let limit = request.limit.unwrap_or(200).min(500);
+    let max_depth = request
+        .max_depth
+        .unwrap_or(DEFAULT_BINDER_MAX_DEPTH)
+        .min(HARD_BINDER_MAX_DEPTH);
+    let limit = request
+        .limit
+        .unwrap_or(DEFAULT_BINDER_FILE_LIMIT)
+        .min(HARD_BINDER_FILE_LIMIT);
     let mut entries = Vec::new();
     walk_files(&root, &root, 0, max_depth, &allowed, &mut entries, limit);
     entries.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
@@ -216,7 +230,7 @@ pub fn binder_read_file(request: BinderReadRequest) -> Result<String, String> {
     let metadata = path
         .metadata()
         .map_err(|error| format!("Не удалось прочитать метаданные: {error}"))?;
-    if metadata.len() > 512_000 {
+    if metadata.len() > MAX_BINDER_READ_BYTES {
         return Err("Файл слишком большой для чтения (лимит 512 KB).".into());
     }
     std::fs::read_to_string(&path).map_err(|error| format!("Не удалось прочитать файл: {error}"))
@@ -297,7 +311,9 @@ pub fn git_recent_commits(
     if !is_git_repo(&root) {
         return Ok(Vec::new());
     }
-    let count = limit.unwrap_or(8).min(20);
+    let count = limit
+        .unwrap_or(DEFAULT_RECENT_COMMIT_LIMIT)
+        .min(HARD_RECENT_COMMIT_LIMIT);
     let output = run_git(
         &root,
         &[

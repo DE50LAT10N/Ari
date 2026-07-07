@@ -36,11 +36,19 @@ export type AdviceCandidate = {
   kind: AdviceCandidateKind;
   evidenceIds: string[];
   actionText: string;
+  guidance?: AdviceCandidateGuidance;
   expectedUtility: number;
   interruptionCost: number;
   confidence: number;
   reason: string;
   score: number;
+};
+
+export type AdviceCandidateGuidance = {
+  intent: "fix" | "explain" | "verify" | "clarify" | "focus" | "rest";
+  visibleAnchor?: string;
+  suggestedCheck?: string;
+  expectedResult?: string;
 };
 
 export type AdvicePlan = {
@@ -145,7 +153,56 @@ function scoreCandidate(
   if (candidate.evidenceIds.some((id) => id.startsWith("clip:"))) {
     score += 0.2;
   }
-  return { ...candidate, score };
+  return {
+    ...candidate,
+    guidance: candidate.guidance ?? buildAdviceCandidateGuidance(candidate),
+    score,
+  };
+}
+
+function buildAdviceCandidateGuidance(
+  candidate: Omit<AdviceCandidate, "score">,
+): AdviceCandidateGuidance {
+  const text = candidate.actionText.replace(/\s+/g, " ").trim();
+  const anchor =
+    text.match(/\b[\w.-]+\.(?:tsx?|jsx?|rs|py|md|json|toml|yml|yaml)\b/i)?.[0] ??
+    text.match(/\b[A-Za-z_$][\w$]{2,}\b/)?.[0];
+  const intent: AdviceCandidateGuidance["intent"] =
+    candidate.kind === "clarifying_probe" || candidate.kind === "uncertainty_probe"
+      ? "clarify"
+      : candidate.kind === "rest"
+        ? "rest"
+        : candidate.kind === "scope_cut" || candidate.kind === "refocus"
+          ? "focus"
+          : candidate.kind === "docs_lookup" ||
+              candidate.kind === "docs_to_code_bridge" ||
+              candidate.kind === "solution_lookup"
+            ? "verify"
+            : candidate.kind === "memory_pattern"
+              ? "explain"
+              : "fix";
+  const suggestedCheck =
+    intent === "clarify"
+      ? "уточнить, относится ли сигнал к текущей задаче"
+      : intent === "rest"
+        ? "коротко отойти и вернуться к одной проверке"
+        : intent === "focus"
+          ? "выбрать одну нить и проверить один результат"
+          : /expected|received|test/i.test(text)
+            ? "сравнить expected/received и перезапустить тот же тест"
+            : "проверить один изменённый блок, один вход и один видимый выход";
+  const expectedResult =
+    intent === "clarify"
+      ? "следующий совет попадёт в нужную точку"
+      : intent === "rest"
+        ? "внимание вернётся без нового шума"
+        : "симптом изменится или станет уже";
+  return {
+    intent,
+    visibleAnchor: anchor,
+    suggestedCheck,
+    expectedResult,
+  };
 }
 
 function makeCandidate(

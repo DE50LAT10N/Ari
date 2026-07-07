@@ -39,6 +39,14 @@ impl Default for KeyboardTelemetryState {
 static KEYBOARD_TELEMETRY: Lazy<Mutex<KeyboardTelemetryState>> =
     Lazy::new(|| Mutex::new(KeyboardTelemetryState::default()));
 
+struct KeyboardActivityConfig {
+    burst_key_down_min: u32,
+}
+
+const KEYBOARD_ACTIVITY_CONFIG: KeyboardActivityConfig = KeyboardActivityConfig {
+    burst_key_down_min: 12,
+};
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct KeyboardActivitySnapshot {
@@ -247,7 +255,9 @@ fn get_keyboard_activity_snapshot() -> Result<KeyboardActivitySnapshot, String> 
         }
     }
 
-    snapshot.burst_count = if observed_ms > 0 && key_down_count >= 12 {
+    snapshot.burst_count = if observed_ms > 0
+        && key_down_count >= KEYBOARD_ACTIVITY_CONFIG.burst_key_down_min
+    {
         1
     } else {
         0
@@ -312,13 +322,18 @@ fn shell_open(target: &str) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
-    use std::{iter::once, ptr::copy_nonoverlapping};
+    use std::{ffi::c_void, iter::once, ptr::copy_nonoverlapping};
     use windows_sys::Win32::System::{
         DataExchange::{
             CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
         },
         Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
     };
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GlobalFree(memory: *mut c_void) -> *mut c_void;
+    }
 
     let wide: Vec<u16> = text.encode_utf16().chain(once(0)).collect();
     const CF_UNICODETEXT: u32 = 13;
@@ -337,12 +352,14 @@ fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
         }
         let destination = GlobalLock(memory) as *mut u16;
         if destination.is_null() {
+            GlobalFree(memory);
             CloseClipboard();
             return Err("Не удалось подготовить буфер обмена.".into());
         }
         copy_nonoverlapping(wide.as_ptr(), destination, wide.len());
         GlobalUnlock(memory);
         if SetClipboardData(CF_UNICODETEXT, memory).is_null() {
+            GlobalFree(memory);
             CloseClipboard();
             return Err("Не удалось записать текст в буфер обмена.".into());
         }
@@ -821,16 +838,22 @@ fn capture_foreground_window_png() -> Result<ScreenCaptureResult, String> {
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn capture_active_window(app: AppHandle) -> Result<ScreenCaptureResult, String> {
-    let main_window = app.get_webview_window("main");
-    if let Some(window) = &main_window {
+    struct RestoreWindowGuard(Option<WebviewWindow>);
+
+    impl Drop for RestoreWindowGuard {
+        fn drop(&mut self) {
+            if let Some(window) = &self.0 {
+                show_window(window);
+            }
+        }
+    }
+
+    let _restore_window = RestoreWindowGuard(app.get_webview_window("main").map(|window| {
         let _ = window.hide();
-    }
+        window
+    }));
     std::thread::sleep(std::time::Duration::from_millis(350));
-    let result = capture_foreground_window_png();
-    if let Some(window) = &main_window {
-        show_window(window);
-    }
-    result
+    capture_foreground_window_png()
 }
 
 #[cfg(not(target_os = "windows"))]

@@ -2,13 +2,114 @@ import type { CharacterEmotion } from "../types/character";
 import { parseEmotionFromContent } from "./emotionTags";
 import type { ResponseMode } from "./responseModes";
 import type { CharacterMood } from "./mood";
-import { moodPreferredEmotion } from "./mood";
+import { decayMood, moodPreferredEmotion } from "./mood";
+import { deriveMoodArchetype, avatarEmotionFromMood } from "./moodBehavior";
+
+const LIVELY_EMOTIONS = new Set<CharacterEmotion>([
+  "happy",
+  "curious",
+  "amused",
+  "excited",
+  "blush",
+]);
+
+const NEGATIVE_MOOD_EMOTIONS = new Set<CharacterEmotion>([
+  "annoyed",
+  "worried",
+  "sad",
+  "determined",
+]);
+
+export function resolveMoodDrivenEmotion(mood: CharacterMood): CharacterEmotion {
+  return avatarEmotionFromMood(mood);
+}
+
+export function emotionConflictsWithMood(
+  current: CharacterEmotion,
+  mood: CharacterMood,
+): boolean {
+  const currentMood = decayMood(mood);
+  const target = resolveMoodDrivenEmotion(currentMood);
+  if (target === current) {
+    return false;
+  }
+  if (
+    deriveMoodArchetype(currentMood) === "irritated" &&
+    LIVELY_EMOTIONS.has(current) &&
+    NEGATIVE_MOOD_EMOTIONS.has(target)
+  ) {
+    return true;
+  }
+  return (
+    currentMood.irritation > 0.3 &&
+    LIVELY_EMOTIONS.has(current) &&
+    NEGATIVE_MOOD_EMOTIONS.has(target)
+  );
+}
+
+export function mergeReplyEmotionWithMood(
+  replyEmotion: CharacterEmotion,
+  mood: CharacterMood,
+): CharacterEmotion {
+  const currentMood = decayMood(mood);
+  const archetype = deriveMoodArchetype(currentMood);
+  const avatarEmotion = avatarEmotionFromMood(currentMood);
+  if (archetype === "irritated" && LIVELY_EMOTIONS.has(replyEmotion)) {
+    return avatarEmotion;
+  }
+  if (archetype === "irritated") {
+    return avatarEmotion;
+  }
+  const moodEmotion = avatarEmotion;
+  if (optionsProactiveFloor(replyEmotion, moodEmotion)) {
+    return moodEmotion;
+  }
+  return replyEmotion;
+}
+
+function optionsProactiveFloor(
+  replyEmotion: CharacterEmotion,
+  moodEmotion: CharacterEmotion,
+): boolean {
+  if (moodEmotion === "neutral") {
+    return false;
+  }
+  if (replyEmotion === moodEmotion) {
+    return false;
+  }
+  const replyWeight = emotionIntensity(replyEmotion);
+  const moodWeight = emotionIntensity(moodEmotion);
+  return moodWeight >= replyWeight + 0.2;
+}
+
+function emotionIntensity(emotion: CharacterEmotion): number {
+  const weights: Partial<Record<CharacterEmotion, number>> = {
+    annoyed: 0.9,
+    determined: 0.75,
+    worried: 0.7,
+    sad: 0.65,
+    excited: 0.8,
+    happy: 0.7,
+    amused: 0.65,
+    curious: 0.55,
+    empathetic: 0.5,
+    calm: 0.35,
+    neutral: 0.2,
+  };
+  return weights[emotion] ?? 0.4;
+}
 
 export function softenEmotionForMood(
   target: CharacterEmotion,
   current: CharacterEmotion,
   mood: CharacterMood,
 ): CharacterEmotion {
+  if (
+    deriveMoodArchetype(mood) === "irritated" &&
+    LIVELY_EMOTIONS.has(target)
+  ) {
+    return "annoyed";
+  }
   const biased = biasEmotionByMood(target, mood);
   if (biased === current) {
     return current;

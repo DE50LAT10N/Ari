@@ -157,6 +157,54 @@ describe("ambientThoughts", () => {
     expect(completeLlmJson).not.toHaveBeenCalled();
   });
 
+  it("uses mood policy to change ambient thought cadence", () => {
+    const playfulCooldown = localAmbientThoughtCooldownMs({
+      attention: "waiting",
+      focusActive: false,
+      companionSilenceMs: 90_000,
+      mood: {
+        warmth: 0.45,
+        energy: 0.85,
+        irritation: -0.2,
+        updatedAt: Date.now(),
+      },
+    });
+    const sleepyCooldown = localAmbientThoughtCooldownMs({
+      attention: "waiting",
+      focusActive: false,
+      companionSilenceMs: 90_000,
+      mood: {
+        warmth: 0.25,
+        energy: -0.65,
+        irritation: 0,
+        updatedAt: Date.now(),
+      },
+    });
+
+    expect(playfulCooldown).toBeLessThan(sleepyCooldown);
+    expect(
+      shouldAttemptLocalAmbientThought({
+        avatarLivelinessEnabled: true,
+        chatOpen: false,
+        characterState: "idle",
+        quietModeActive: false,
+        hasVisibleBubble: false,
+        elapsedSinceLastMs: 0,
+        elapsedSinceLastLocalMs: playfulCooldown,
+        userIdleSeconds: 32,
+        companionSilenceMs: 65_000,
+        attention: "waiting",
+        focusActive: false,
+        mood: {
+          warmth: 0.45,
+          energy: 0.85,
+          irritation: -0.2,
+          updatedAt: Date.now(),
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("blocks ambient thoughts while chat is open", () => {
     expect(
       shouldAttemptAmbientThought({
