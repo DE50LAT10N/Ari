@@ -237,6 +237,7 @@ export {
   emotionToMoodEvent,
   interactionToMoodEvent,
   proactiveToMoodEvent,
+  reactionToMoodEvent,
   triggerToMoodEvent,
   type MoodEvent,
 } from "./moodEvents";

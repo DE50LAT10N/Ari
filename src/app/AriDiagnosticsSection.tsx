@@ -45,7 +45,7 @@ import {
   proactiveSmalltalkIntervalMs,
 } from "../character/initiativeConfig";
 import { getDailyInitiativeCount } from "../character/initiativeScoring";
-import { getMemoryHealthSnapshot } from "../memory/memoryTelemetry";
+import { getMemoryHealthSnapshot, summarizeInitiativeSuppressions } from "../memory/memoryTelemetry";
 import { isLlmProviderOnline } from "../llm/providerOnline";
 import { getGigaChatAuthKeyPresent } from "../llm/gigaChatStatus";
 import { resolveModel } from "../llm/modelRouter";
@@ -76,6 +76,7 @@ type ProactiveDebug = {
   adviceReady: boolean;
   nextSmalltalkSec: number;
   lastSuppressions: string[];
+  suppressionSummary: Array<{ reason: string; count: number }>;
   adviceUrgencyLevel: string;
   adviceUrgencyScore: number;
   adviceUrgencyReasons: string[];
@@ -130,6 +131,7 @@ function buildProactiveDebug(): ProactiveDebug {
     ),
   );
   const health = getMemoryHealthSnapshot();
+  const suppressionSummary = summarizeInitiativeSuppressions().slice(0, 4);
   const isGigaChat = settings.llmProvider === "gigachat";
   const providerOnline = isLlmProviderOnline(settings, null);
   const urgency = getLastAdviceUrgency();
@@ -175,6 +177,7 @@ function buildProactiveDebug(): ProactiveDebug {
     lastSuppressions: health.lastSuppressions
       .slice(-3)
       .map((entry) => entry.reason),
+    suppressionSummary,
     adviceUrgencyLevel: urgency?.level ?? "—",
     adviceUrgencyScore: urgency?.score ?? 0,
     adviceUrgencyReasons: urgency?.reasons ?? [],
@@ -561,6 +564,15 @@ export function AriDiagnosticsSection() {
           подождите 2 мин без ввода в чат.
         </p>
       )}
+
+      {proactiveDebug?.suppressionSummary.length ? (
+        <p className="settings-note">
+          Частые блокировки:{" "}
+          {proactiveDebug.suppressionSummary
+            .map((entry) => `${entry.reason} (${entry.count})`)
+            .join(" · ")}
+        </p>
+      ) : null}
 
       {advisorTopics.length > 0 && (
         <p className="settings-note">

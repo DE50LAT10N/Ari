@@ -1,6 +1,8 @@
 import { getRecentPhrases } from "./phraseMemory";
+import { getDislikedReplyExcerpts } from "./reactionLearning";
 import { loadAriSelfMemory } from "./selfMemory";
 import { getRecentProactiveTopics } from "./proactiveState";
+import { getNegativeAdviceFeedbackExcerpts } from "./adviceLedger";
 
 const CATEGORY_WEIGHT: Record<string, number> = {
   initiative: 5,
@@ -30,6 +32,14 @@ export function buildAvoidPhrases(limit = 10): string[] {
   }
   for (const dislike of selfMemory.userDislikedBehaviors.slice(-3)) {
     ranked.set(dislike.slice(0, 100), Math.max(ranked.get(dislike.slice(0, 100)) ?? 0, 5));
+  }
+
+  for (const excerpt of getDislikedReplyExcerpts(4)) {
+    ranked.set(excerpt.slice(0, 120), Math.max(ranked.get(excerpt.slice(0, 120)) ?? 0, 6));
+  }
+
+  for (const excerpt of getNegativeAdviceFeedbackExcerpts(4)) {
+    ranked.set(excerpt.slice(0, 120), Math.max(ranked.get(excerpt.slice(0, 120)) ?? 0, 6));
   }
 
   for (const topic of getRecentProactiveTopics().slice(0, 4)) {

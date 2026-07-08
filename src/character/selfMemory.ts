@@ -1,4 +1,6 @@
 import type { CharacterEmotion } from "../types/character";
+import type { MessageReaction } from "./messageReactions";
+import { reactionSentiment } from "./messageReactions";
 
 export type PreferredTone = "soft" | "playful" | "technical" | "quiet";
 
@@ -94,6 +96,53 @@ export function updateAriSelfMemory(
     successfulInteractionPatterns: [...new Set(successful)].slice(-12),
     updatedAt: Date.now(),
   });
+}
+
+export function applyReactionToSelfMemory(
+  current: AriSelfMemory,
+  emoji: MessageReaction,
+  reply: string,
+  emotion: CharacterEmotion = "neutral",
+): AriSelfMemory {
+  const excerpt = compactReply(reply);
+  if (!excerpt) {
+    return current;
+  }
+
+  const sentiment = reactionSentiment(emoji);
+  const successful = [...current.successfulInteractionPatterns];
+  const disliked = [...current.userDislikedBehaviors];
+  let preferredTone = current.userPreferredTone;
+
+  if (sentiment === "positive") {
+    if (emoji === "😂") {
+      preferredTone = "playful";
+    }
+    successful.push(`${emoji} ${emotion}; ${excerpt}`);
+  } else if (sentiment === "negative") {
+    disliked.push(`${emoji}: ${excerpt}`);
+    if (/(?:хочешь|обсудим|продолжим|могу помочь|что думаешь)/iu.test(reply)) {
+      disliked.push("не заканчивать реплики вопросом или приглашением продолжить");
+    }
+  } else if (sentiment === "sad") {
+    preferredTone = "soft";
+    successful.push(`эмпатия ${emotion}; ${excerpt}`);
+  } else if (sentiment === "surprise") {
+    successful.push(`неожиданное ${emotion}; ${excerpt}`);
+  }
+
+  return save({
+    ...current,
+    userPreferredTone: preferredTone,
+    userDislikedBehaviors: [...new Set(disliked)].slice(-12),
+    successfulInteractionPatterns: [...new Set(successful)].slice(-12),
+    updatedAt: Date.now(),
+  });
+}
+
+export function resetSelfMemoryForTests(): void {
+  selfMemoryCache = null;
+  localStorage.removeItem(KEY);
 }
 
 export function describeAriSelfMemory(memory: AriSelfMemory): string {

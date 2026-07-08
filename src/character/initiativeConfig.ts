@@ -3,6 +3,7 @@ import type { InitiativeKind } from "./initiativeKinds";
 
 export const URGENT_ADVICE_MIN_MS = 5 * 60_000;
 export const MEDIUM_ADVICE_CAP_MS = 10 * 60_000;
+export const ACTIVE_OPEN_CHAT_SMALLTALK_IDLE_MS = 45_000;
 
 export function allowsGenericCompanionInitiative(
   activityAgoMs: number,
@@ -34,7 +35,7 @@ function scaleProactiveIntervalMs(
     case "rare":
       return safeBaseMinutes * 60 * 1000 * 1.6;
     case "active":
-      return safeBaseMinutes * 60 * 1000 * 0.65;
+      return safeBaseMinutes * 60 * 1000 * 0.35;
     default:
       return safeBaseMinutes * 60 * 1000;
   }

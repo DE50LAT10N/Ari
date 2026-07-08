@@ -342,8 +342,8 @@ async function queueMemoryConflict(
   conflict: import("./memoryConflictResolver").MemoryConflict,
   sourceMessage?: string,
 ): Promise<void> {
-  // Dynamic import breaks the userMemory <-> ariInbox static cycle.
-  const { addToAriInbox } = await import("./ariInbox");
+  // Dynamic boundary breaks the userMemory <-> ariInbox static cycle.
+  const { addToAriInbox } = await import("./ariInboxWriter");
   const existingFacts = await loadUserMemory();
   const conflicting = existingFacts
     .filter((fact) => conflict.conflictingFactIds.includes(fact.id))

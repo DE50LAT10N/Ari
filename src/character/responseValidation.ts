@@ -1,6 +1,13 @@
 import { isTooSimilarToRecent } from "./replySimilarity";
 import type { ProactiveReplyTone } from "./proactiveTone";
 import type { ResponseMode } from "./responseModes";
+import {
+  classifySolicitationSemantics,
+  getLastSentence,
+  isSolicitationSentence,
+} from "./solicitationSemantics";
+
+export { isSolicitationSentence, getLastSentence } from "./solicitationSemantics";
 
 export type ReplyValidationContext = {
   hasVision: boolean;
@@ -14,7 +21,38 @@ export type ReplyValidationContext = {
   userAskedQuestion?: boolean;
   recentAssistantReplies?: string[];
   moodArchetype?: string;
+  proactiveInitiativeMove?: string;
 };
+
+const CONVERSATIONAL_MODES = new Set<ResponseMode>([
+  "casual",
+  "emotional_support",
+  "teasing",
+  "return_reaction",
+  "idle_initiative",
+]);
+
+function isClarifyingMove(move?: string): boolean {
+  return (
+    move === "ask_clarifying" ||
+    move === "clarifying_probe" ||
+    move === "clipboard_probe" ||
+    move === "ide_invite" ||
+    move === "followup_probe"
+  );
+}
+
+function allowsEmotionalChoiceOffer(
+  reply: string,
+  responseMode: ResponseMode | undefined,
+  questionMarks: number,
+): boolean {
+  return (
+    responseMode === "emotional_support" &&
+    questionMarks <= 2 &&
+    /(?:^|[\s,.;:!?«"'(—-])(или|либо)(?:[\s,.;:!?»"')—-]|$)/iu.test(reply)
+  );
+}
 
 export type OocValidationResult = {
   valid: boolean;
@@ -38,9 +76,6 @@ const NUMBERED_LIST_PATTERN =
 
 const CORPORATE_ADVICE_PATTERN =
   /(?:рекомендую выполнить|следующие шаги|вот несколько советов)/i;
-
-const HABITUAL_TRAILING_QUESTION_PATTERN =
-  /(?:хоч(?:ешь|ешь ли|ете)[^?]{0,90}|могу\s+(?:ещ[её]\s+)?(?:помочь|показать|разобрать|сделать)[^?]{0,60}|что\s+думаешь|как\s+тебе|продолжим|ид[её]м\s+дальше|расскажешь|окей|ок)\s*\?$/iu;
 
 const EVASIVE_REPLY_PATTERN =
   /(?:лучше самому разобраться|сам(?:ому|а) разбер(?:ё|е)шься|если что-то конкретное интересует|не могу сказать точно|не уверена, что знаю|попробуй сам|я не эксперт)/i;
@@ -121,24 +156,60 @@ export function validateCharacterReply(
     issues.push("question spam");
   }
   const recent = context.recentAssistantReplies ?? [];
-  const endsWithQuestion = /[?\uFF1F]\s*$/u.test(reply.trim());
+  const trimmedReply = reply.trim();
+  const endsWithQuestion = /[?\uFF1F]\s*$/u.test(trimmedReply);
   const recentQuestionEndings = recent
     .slice(-4)
     .filter((item) => /[?\uFF1F]\s*$/u.test(item.trim())).length;
+  const clarifyingMove = isClarifyingMove(context.proactiveInitiativeMove);
+  const emotionalChoiceOffer = allowsEmotionalChoiceOffer(
+    trimmedReply,
+    context.responseMode,
+    questionMarks,
+  );
+  const conversationalMode =
+    context.responseMode !== undefined &&
+    CONVERSATIONAL_MODES.has(context.responseMode);
+
   if (
     endsWithQuestion &&
-    recentQuestionEndings >= 2 &&
-    !context.userAskedQuestion
+    !context.userAskedQuestion &&
+    !clarifyingMove &&
+    !emotionalChoiceOffer
   ) {
-    issues.push("habitual trailing question");
+    if (conversationalMode) {
+      issues.push("habitual trailing question");
+    } else if (
+      context.proactive &&
+      context.proactiveReplyTone === "advice"
+    ) {
+      issues.push("habitual trailing question");
+    } else if (recentQuestionEndings >= 1) {
+      issues.push("habitual trailing question");
+    }
   }
-  if (HABITUAL_TRAILING_QUESTION_PATTERN.test(reply.trim())) {
+  if (isSolicitationSentence(trimmedReply)) {
+    if (!clarifyingMove && !emotionalChoiceOffer) {
+      issues.push("habitual trailing question");
+    }
+  }
+  const lastSentence = getLastSentence(trimmedReply);
+  const solicitationSemantics = classifySolicitationSemantics(lastSentence);
+  if (
+    lastSentence &&
+    solicitationSemantics.isSolicitation &&
+    !context.userAskedQuestion &&
+    !clarifyingMove &&
+    !emotionalChoiceOffer &&
+    (conversationalMode ||
+      (context.proactive && context.proactiveReplyTone === "advice"))
+  ) {
     issues.push("habitual trailing question");
   }
   if (
     context.proactive &&
     context.proactiveReplyTone === "smalltalk" &&
-    /[?？]\s*$/u.test(reply.trim())
+    /[?？]\s*$/u.test(trimmedReply)
   ) {
     issues.push("habitual trailing question");
   }

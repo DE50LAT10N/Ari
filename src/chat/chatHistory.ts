@@ -5,6 +5,7 @@ import {
   stripEmotionMarkup,
 } from "../character/emotionTags";
 import { isSafeActionProposal } from "../tools/safeActions";
+import { isValidMessageReaction } from "../character/messageReactions";
 
 const HISTORY_KEY = "desktop-character.chat-history.v1";
 const MAX_STORED_MESSAGES = 200;
@@ -56,6 +57,9 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
     candidate.adviceFeedback === "miss" ||
     candidate.adviceFeedback === "too_generic"
       ? { adviceFeedback: candidate.adviceFeedback }
+      : {}),
+    ...(isValidMessageReaction(candidate.reaction)
+      ? { reaction: candidate.reaction }
       : {}),
   };
 }

@@ -42,6 +42,10 @@ import {
   textMatchesLiveWorkContext,
 } from "./advisorEngine";
 import { deriveScreenState, describeScreenState } from "./screenState";
+import {
+  getLastSentence,
+  isSolicitationSentence,
+} from "./solicitationSemantics";
 
 export type { ProactiveInitiativeMove, ProactiveMoveHint, ProactiveTopicLink, ProactiveTopicChain };
 
@@ -1221,7 +1225,7 @@ function bundleSystemPrompt(isAdvice: boolean, requireHook: boolean): string {
     VN_CHARACTER_RULE,
     "Свяжи сигналы пользователя в одну причинно-следственную нить для проактивной реплики Ari.",
     isAdvice
-      ? "Режим: advice. Свяжи минимум два фактора (цель + ситуация + ограничение) в одну рекомендацию: «сделай X, потому что в твоей ситуации это решает Y и Z». narrativeBrief — одно предложение в этой форме. primaryChainSummary — назови минимум два фактора и как они вместе определяют совет. practicalHook — конкретный заход с цитатой из факта. adviceSteps — 2–4 проверяемых шага; не numbered list. Запрещён одиночный совет «сделай шаг от файла X»."
+      ? "Режим: advice. Свяжи минимум два фактора (цель + ситуация + ограничение) в одну рекомендацию: «сделай X, потому что в твоей ситуации это решает Y и Z». narrativeBrief — одно предложение в этой форме. primaryChainSummary — назови минимум два фактора и как они вместе определяют совет. practicalHook — конкретный заход-утверждение с цитатой из факта (не вопрос), кроме initiativeMove clarifying_probe/ask_clarifying. adviceSteps — 2–4 проверяемых шага; не numbered list. Запрещён одиночный совет «сделай шаг от файла X»."
       : "Режим: smalltalk. Одна живая нить без советов и next step. Можно выбрать контекстное наблюдение или боковую тему: музыка, игры, еда, настроение, странная бытовая мысль, культурный/новостной повод. Не утверждай конкретную свежую новость без live-проверки. Предпочитай утверждение/наблюдение; не заканчивай вопросом.",
     isAdvice
       ? "Если есть факт clipboard — это главный ориентир: процитируй фрагмент из буфера и построй совет вокруг того, что пользователь только что копировал или отлаживал."
@@ -1245,6 +1249,9 @@ function bundleSystemPrompt(isAdvice: boolean, requireHook: boolean): string {
       ? "Обязательно practicalHook с цитатой из fact + initiativeMove + groundFactIds + topicLinks."
       : "Верни initiativeMove, groundFactIds, topicLinks если есть граф связей.",
     "linkedThemes — max 2 коротких ярлыка, не дубли raw facts. Запрещены generic hooks без цитаты.",
+    isAdvice
+      ? "practicalHook по умолчанию — утверждение или проверяемый шаг; знак вопроса только при initiativeMove clarifying_probe или ask_clarifying."
+      : "",
     "Не выдумывай факты. overlapsBanned=true если якорь повторяет запрещённые темы.",
     "usefulnessScore 0–1: насколько реплика даст конкретную пользу сейчас.",
     'JSON: {"tone":"advice|smalltalk","linkedThemes":[],"mergedAnchor":"","narrativeBrief":"","primaryChainSummary":"","topicLinks":[{"fromFactId":"","toFactId":"","relation":"same_file","label":"","strength":0.8}],"initiativeMove":"clipboard_probe","groundFactIds":[],"practicalHook":null,"adviceSteps":[],"usefulnessScore":0.8,"linkConfidence":0.8,"shouldSend":true,"rejectReason":null,"overlapsBanned":false}.',
@@ -1579,6 +1586,26 @@ export function localReplyQualityCheck(
   const probeCandidate =
     bundle.selectedAdviceCandidate?.kind === "clarifying_probe" ||
     bundle.selectedAdviceCandidate?.kind === "uncertainty_probe";
+  const clarifyingMove =
+    isClarifyingBundle ||
+    probeCandidate ||
+    bundle.initiativeMove === "clipboard_probe" ||
+    bundle.initiativeMove === "ide_invite" ||
+    bundle.initiativeMove === "followup_probe";
+  if (
+    bundle.tone === "advice" &&
+    !clarifyingMove &&
+    /[?？]\s*$/u.test(trimmed)
+  ) {
+    issues.push("trailing question");
+  }
+  if (
+    !clarifyingMove &&
+    (bundle.tone === "advice" || bundle.tone === "smalltalk") &&
+    isSolicitationSentence(getLastSentence(trimmed))
+  ) {
+    issues.push("implicit solicitation");
+  }
   if (
     bundle.tone === "advice" &&
     (isClarifyingBundle ||
@@ -1664,7 +1691,7 @@ export async function validateProactiveReplyLlm(
           role: "system",
           content: [
             "Оцени проактивную реплику Ari.",
-            "acceptable=false если: мета про «сюжет/процесс/результат», нет конкретики из bundle, игнор practicalHook/adviceSteps/primaryChainSummary, generic hook без цитаты факта, пустая вода, или тон безличного ассистента/канцелярита вместо Ari.",
+            "acceptable=false если: мета про «сюжет/процесс/результат», нет конкретики из bundle, игнор practicalHook/adviceSteps/primaryChainSummary, generic hook без цитаты факта, пустая вода, тон безличного ассистента/канцелярита вместо Ari, или финальный вопрос-хвост в advice без clarifying move.",
             'JSON: {"acceptable":true|false,"reason":"кратко","issues":["..."]}.',
           ].join("\n"),
         },

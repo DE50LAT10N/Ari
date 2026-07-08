@@ -19,4 +19,5 @@ export type ChatMessage = {
   adviceId?: string;
   adviceFeedback?: import("../character/adviceLedger").AdviceFeedback;
   focusRecap?: FocusRecapMeta;
+  reaction?: string;
 };

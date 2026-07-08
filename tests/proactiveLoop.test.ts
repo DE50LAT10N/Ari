@@ -99,8 +99,8 @@ describe("proactive loop helpers", () => {
       proactiveSmalltalkIntervalMinutes: 5,
       proactiveAdviceIntervalMinutes: 20,
     };
-    expect(proactiveSmalltalkIntervalMs(settings)).toBe(195_000);
-    expect(proactiveAdviceIntervalMs(settings)).toBe(780_000);
+    expect(proactiveSmalltalkIntervalMs(settings)).toBe(105_000);
+    expect(proactiveAdviceIntervalMs(settings)).toBe(420_000);
   });
 
   it("detects planned check descriptions", () => {

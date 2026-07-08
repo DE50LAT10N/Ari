@@ -16,6 +16,9 @@ import {
   type MoodEvent,
 } from "../character/moodEngine";
 import {
+  MESSAGE_REACTIONS,
+} from "../character/messageReactions";
+import {
   buildMoodRefusalReply,
   avatarEmotionFromMood,
   deriveMoodArchetype,
@@ -41,15 +44,10 @@ import {
 import { buildAvoidPhrases } from "../character/avoidPhraseBuilder";
 import { buildLiveStatusLine } from "../character/liveStatus";
 import {
-  ensureProactiveClockStarted,
-  armProactiveGracePeriod,
   canEmitAdviceNow,
   canEmitSmalltalkNow,
   clearProactiveFailureBackoff,
   getProactiveFailureBackoff,
-  getLastAdviceAttemptAt,
-  getLastSmalltalkAttemptAt,
-  getLastProactiveMessageAt,
   markAdviceAttemptAt,
   markSmalltalkAttemptAt,
   registerProactiveReplySubject,
@@ -57,12 +55,10 @@ import {
   setLastProactiveMessageAt,
   rememberAdviceSubject,
   recordAdviceDecision,
-  PROACTIVE_CROSS_CHANNEL_GAP_MS,
 } from "../character/proactiveState";
 import {
   getLastAdviceUrgency,
   scoreAdviceUrgency,
-  setLastAdviceUrgency,
 } from "../character/adviceUrgency";
 import type { AdviceDecision } from "../character/adviceEngine";
 import {
@@ -73,11 +69,6 @@ import {
   type ProactiveInitiativePackage,
   type ProactivePackageOptions,
 } from "../character/initiativeContext";
-import { planProactiveEngineTick } from "../character/proactiveEngine";
-import {
-  drainProactiveRequests,
-  subscribeProactiveRequests,
-} from "../character/proactiveBridge";
 import {
   buildMessages,
   buildUserBehaviorBlock,
@@ -168,8 +159,11 @@ import {
 import {
   describeAriSelfMemory,
   loadAriSelfMemory,
-  updateAriSelfMemory,
 } from "../character/selfMemory";
+import { recordFeedbackSignal } from "../character/feedbackSignals";
+import {
+  describeReactionLearningSummary,
+} from "../character/reactionLearning";
 import {
   canUseInitiativeKind,
   classifyInitiativeKind,
@@ -177,15 +171,12 @@ import {
   type InitiativeKind,
 } from "../character/initiativeKinds";
 import {
-  markInitiativeAcknowledged,
   markInitiativeSent,
-  pruneExpiredPendingInitiatives,
   scoreInitiativeLocally,
   getRecentIgnoredInitiativeCount,
   shouldUseLlmInitiativeGate,
   isPlannedCheckDescription,
   buildInitiativeFeatures,
-  recordInitiativeOutcome,
   isDailyKindCapReached,
   type InitiativeFeatureVector,
 } from "../character/initiativeScoring";
@@ -217,8 +208,6 @@ import { countPendingMemoryInboxItems } from "../memory/ariInbox";
 import { addToAriInbox } from "../memory/ariInbox";
 import {
   getDueTasks,
-  getNextTask,
-  getHighPriorityOpenTasks,
   markTaskReminded,
   snoozeTask,
   loadTasks,
@@ -227,7 +216,7 @@ import { formatGoalLedgerForPrompt } from "../tasks/goalLedger";
 import { tryHandleChatCommand } from "../chat/chatCommands";
 import { ensureGoalForFocus } from "../tasks/goalLedger";
 import { describePinnedProjectContext } from "../character/projectBinder";
-import { buildMemoryCallbackPackage, buildDistractionPackage } from "../memory/memoryProactive";
+import { buildDistractionPackage } from "../memory/memoryProactive";
 import {
   recordClipboardSignal,
   recordFileFocus,
@@ -246,20 +235,15 @@ import {
   loadAdviceLedger,
   refreshAdviceTopicState,
   rememberAdviceSent,
-  updateAdviceFeedback,
-  type AdviceFeedback,
 } from "../character/adviceLedger";
 import { describeAdviceNoveltyForPrompt, evaluateAdviceNovelty } from "../character/adviceNovelty";
 import {
-  ADVICE_IGNORED_EVENT,
   buildAdviceObservedState,
   getRecentAdviceOutcomes,
   reconcilePendingAdviceOutcomes,
-  recordAdviceFeedbackOutcome,
   startAdviceOutcomeObservation,
 } from "../character/adviceOutcome";
 import { planAdvice } from "../character/advicePlanner";
-import { recordRelevanceFeedback } from "../character/relevanceRanker";
 import {
   codingSessionMinutes,
   codingSessionMs,
@@ -270,7 +254,6 @@ import {
   buildProactiveWebSearchQuery,
   classifyProactiveReplyTone,
   hasProactiveDebugSignals,
-  isProactiveWorkContext,
   shouldProactiveWebSearch,
   type ProactiveReplyTone,
 } from "../character/proactiveTone";
@@ -304,16 +287,14 @@ import { playUiSound } from "../character/soundDesign";
 import {
   blipVoiceManager,
   isTooLongForAutoBlip,
-  VOICE_CHANGED_EVENT,
 } from "../character/blipVoiceManager";
 import { isBlipVoiceEnabled } from "../settings/appSettings";
 import type { SafeActionProposal } from "../tools/safeActions";
 import { describeSafeActionDetail } from "../tools/safeActions";
 import type { LiveToolPlan } from "../tools/liveTools";
 import {
-  loadAdviceEngine,
   loadLiveTools,
-  loadProactiveLlmEngine,
+  loadProactiveRuntime,
   loadRagClient,
   loadSafeActions,
   loadScreenCapture,
@@ -332,6 +313,7 @@ import {
   processModelReply,
   shouldRetryReply,
   shouldUseInCharacterFallback,
+  trySoftenTrailingQuestionReply,
 } from "../character/replyPipeline";
 import { validateCharacterReply } from "../character/responseValidation";
 import { runAdviceFinalGate } from "../character/adviceFinalGate";
@@ -340,18 +322,14 @@ import {
   allowsGenericCompanionInitiative,
   dailyInitiativeCap,
   dailyInitiativeKindCap,
-  idleLineProbability,
   initiativeRiskTolerance,
-  proactiveAdviceIntervalMs,
   proactiveSmalltalkIntervalMs,
 } from "../character/initiativeConfig";
 import { describeEmotionAntiRepeat } from "../character/emotionHistory";
 import {
   recordInitiativeSuppressed,
   recordProactiveToneEmitted,
-  getProactiveToneSnapshot,
 } from "../memory/memoryTelemetry";
-import { countRecentAdviceStreak } from "../character/adviceLedger";
 import {
   isCodingProcess,
   isDistractingProcess,
@@ -380,6 +358,12 @@ import {
   previewMoodAfterTrigger,
   type MoodTrigger,
 } from "../character/moodTriggers";
+import { useMessageReactions } from "./useMessageReactions";
+import {
+  chooseResponseLength,
+  useReplyGeneration,
+} from "./useReplyGeneration";
+import { useProactiveInitiative } from "./useProactiveInitiative";
 type ChatPanelProps = {
   isOpen: boolean;
   settings: AppSettings;
@@ -506,7 +490,6 @@ const QUICK_COMMAND_GROUPS: Array<{
 const EVENT_REACTION_COOLDOWN_MS = 20 * 60 * 1000;
 const MINIMUM_WINDOW_STAY_MS = 5 * 60 * 1000;
 const COMPANION_AMBIENT_COOLDOWN_MS = 22 * 60 * 1000;
-const COMPANION_SESSION_MIN_MS = 15 * 60 * 1000;
 const COMPANION_SILENCE_MIN_MS = 12 * 60 * 1000;
 const LONG_SESSION_ENTERTAINMENT_MS = 30 * 60 * 1000;
 const LONG_SESSION_DEFAULT_MS = 50 * 60 * 1000;
@@ -656,7 +639,7 @@ async function resolveAdviceVisibleFallbackAsync(input: {
   if (direct) {
     return direct;
   }
-  const { getLastProactiveLlmBundle } = await loadProactiveLlmEngine();
+  const { getLastProactiveLlmBundle } = await loadProactiveRuntime();
   const bundle = getLastProactiveLlmBundle();
   if (!bundle || bundle.tone !== "advice") {
     return null;
@@ -754,10 +737,6 @@ export function ChatPanel({
   const [focusSuccess, setFocusSuccess] = useState("");
   const [focusAvoid, setFocusAvoid] = useState("");
   const [bodyDoubling, setBodyDoubling] = useState(false);
-  const [voiceSpeaking, setVoiceSpeaking] = useState(false);
-  const [openBranchMenuIndex, setOpenBranchMenuIndex] = useState<number | null>(
-    null,
-  );
   const durationSuggestion = suggestNextDuration(settings.pomodoroFocusMinutes);
   const prevPomodoroPhaseRef = useRef(pomodoro.phase);
   const recapBusyRef = useRef(false);
@@ -788,6 +767,61 @@ export function ChatPanel({
   const wasOnCodingWindowRef = useRef(false);
   const lastFocusPollWindowRef = useRef<string>("");
   characterStateRef.current = characterState;
+  const {
+    openBranchMenuIndex,
+    setOpenBranchMenuIndex,
+    openReactionMenuIndex,
+    setOpenReactionMenuIndex,
+    markAdviceFeedback,
+    setMessageReaction,
+  } = useMessageReactions({
+    history,
+    setHistory,
+    setSelfMemory,
+    settings,
+    activeWindow,
+    isOpen,
+    onEmotionChange,
+    onStateChange,
+    onProactiveMoodEvent,
+  });
+  const {
+    voiceSpeaking,
+    stopGeneration,
+    stopVoice,
+    speakMessage,
+  } = useReplyGeneration({
+    abortControllerRef,
+    isOpen,
+    settings,
+    activeWindow,
+    onEmotionChange,
+    onStateChange,
+  });
+  const { recordUserAcknowledgedInitiative } = useProactiveInitiative({
+    settings,
+    activeWindow,
+    ollamaOnline,
+    isOpen,
+    characterState,
+    historyRef,
+    lastInitiativeFeaturesRef,
+    activeWindowRef,
+    lifecycleRef,
+    userIdleSecondsRef,
+    lastUserActivityRef,
+    lastVisionObservationRef,
+    isLoadingRef,
+    proactiveWasEnabledRef,
+    lastProactiveIntervalRef,
+    getProactiveTiming,
+    proactiveBundleOptions,
+    prepareProactivePackage,
+    launchProactiveInitiative,
+    launchAdviceFromEngine,
+    tryGenericCompanionInitiative,
+    runAutoVisionGlance,
+  });
 
   function resolveInterruptibilityTier() {
     const session = getActiveFocusSession();
@@ -935,22 +969,6 @@ export function ChatPanel({
   }
 
   useEffect(() => {
-    if (openBranchMenuIndex === null) return;
-    const close = (event: PointerEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest(".message-actions-wrap")
-      ) {
-        return;
-      }
-      setOpenBranchMenuIndex(null);
-    };
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [openBranchMenuIndex]);
-
-  useEffect(() => {
     if (!quickCommandOpen) return;
     const close = (event: PointerEvent) => {
       const target = event.target;
@@ -1089,12 +1107,6 @@ export function ChatPanel({
   }, [history, isLoading, error, hasStreamTokens]);
 
   useEffect(() => {
-    const update = () => setVoiceSpeaking(blipVoiceManager.isSpeaking());
-    window.addEventListener(VOICE_CHANGED_EVENT, update);
-    return () => window.removeEventListener(VOICE_CHANGED_EVENT, update);
-  }, []);
-
-  useEffect(() => {
     const timer = window.setTimeout(() => {
       saveChatHistory(history);
     }, 250);
@@ -1129,33 +1141,6 @@ export function ChatPanel({
     }, 5 * 60 * 1000);
     return () => window.clearTimeout(timer);
   }, [compareBaseline]);
-
-  function stopGeneration() {
-    abortControllerRef.current?.abort();
-    blipVoiceManager.stop();
-    onStateChange(isOpen ? "listening" : "idle");
-  }
-
-  function stopVoice() {
-    blipVoiceManager.stop();
-    onStateChange(isOpen ? "listening" : "idle");
-  }
-
-  async function speakMessage(
-    content: string,
-    messageEmotion?: CharacterEmotion,
-  ) {
-    const emotion = messageEmotion ?? "neutral";
-    onEmotionChange(emotion, "model");
-    await blipVoiceManager.speak(content, {
-      settings,
-      emotion,
-      force: true,
-      activeWindow,
-      onSpeakingStart: () => onStateChange("speaking"),
-      onSpeakingEnd: () => onStateChange(isOpen ? "listening" : "idle"),
-    });
-  }
 
   async function fullShutdown() {
     const confirmed = window.confirm(
@@ -1549,10 +1534,11 @@ export function ChatPanel({
     await yieldToMain();
 
     const wantAmbientReveal = !isOpen && Boolean(options.proactive);
+    const proactiveWhileOpen = isOpen && Boolean(options.proactive);
     const blipOptions = {
       settings,
-      initiative: options.proactive,
-      reply: !options.proactive,
+      initiative: Boolean(options.proactive) && !proactiveWhileOpen,
+      reply: !options.proactive || proactiveWhileOpen,
       technical: false as boolean,
       activeWindow,
       revealOnly: wantAmbientReveal,
@@ -1596,7 +1582,7 @@ export function ChatPanel({
 
     try {
       const proactiveLlm = options.proactive
-        ? await loadProactiveLlmEngine()
+        ? await loadProactiveRuntime()
         : null;
       const lastUserMessage = [...baseHistory]
         .reverse()
@@ -1923,6 +1909,7 @@ export function ChatPanel({
               windowTitle: activeWindow?.title,
             }),
           ),
+        proactiveInitiativeMove: options.proactiveInitiativeMove,
       };
       const processReplyOptions = {
         responseMode,
@@ -1966,7 +1953,9 @@ export function ChatPanel({
         scene: describePresenceScene(scene),
         safeActionsAvailable: settings.safeActionsEnabled,
         responseMode,
-        selfMemory: describeAriSelfMemory(selfMemory),
+        selfMemory: [describeAriSelfMemory(selfMemory), describeReactionLearningSummary()]
+          .filter(Boolean)
+          .join(". "),
         initiativeKind: options.initiativeKind,
         proactiveReplyTone,
         responseLength,
@@ -2036,11 +2025,31 @@ export function ChatPanel({
         lastInitiative: options.eventDescription,
       });
 
+      async function clearVisibleStreamDraft(): Promise<void> {
+        if (streamUiTimerRef.current) {
+          window.clearTimeout(streamUiTimerRef.current);
+          streamUiTimerRef.current = null;
+        }
+        streamedContentRef.current = "";
+        pendingStreamContentRef.current = "";
+        setHasStreamTokens(false);
+        setStreamingContent(null);
+        setStreamingAssistantIndex(assistantIndex);
+        setHistory((current) =>
+          current.map((message, index) =>
+            index === assistantIndex ? { ...message, content: "" } : message,
+          ),
+        );
+        await yieldToMain();
+      }
+
       async function runStream(
         messages: ReturnType<typeof buildMessages>,
+        streamOptions: { revealToUser?: boolean } = {},
       ): Promise<string> {
+        const revealToUser = streamOptions.revealToUser !== false;
         const epoch = ++streamEpoch;
-        if (epoch > 1 && wantAmbientReveal) {
+        if (epoch > 1 && wantAmbientReveal && revealToUser) {
           restartAmbientStream();
         }
         return withTimeout(
@@ -2052,6 +2061,9 @@ export function ChatPanel({
                 return;
               }
               streamedContentRef.current = streamedContent;
+              if (!revealToUser) {
+                return;
+              }
               if (blipStreamActive) {
                 blipVoiceManager.feedStream(streamedContent, replyEmotion);
                 if (streamedContent) {
@@ -2088,6 +2100,9 @@ export function ChatPanel({
               if (epoch !== streamEpoch) {
                 return;
               }
+              if (!revealToUser) {
+                return;
+              }
               replyEmotion = emotion;
               setHistory((current) =>
                 current.map((message, index) =>
@@ -2106,6 +2121,7 @@ export function ChatPanel({
 
       let reply = await runStream(buildMessages(fittedHistory, runtimeContext));
       let processed = processModelReply(reply, processReplyOptions);
+      processed = trySoftenTrailingQuestionReply(processed, processReplyOptions);
 
       const shouldValidateProactiveWithLlm =
         options.proactive &&
@@ -2171,10 +2187,16 @@ export function ChatPanel({
             },
           ];
           try {
+            await clearVisibleStreamDraft();
             reply = await runStream(
               buildMessages(correctionHistory, runtimeContext),
+              { revealToUser: false },
             );
             processed = processModelReply(reply, processReplyOptions);
+            processed = trySoftenTrailingQuestionReply(
+              processed,
+              processReplyOptions,
+            );
           } catch (retryError) {
             logError("Proactive reply regen failed", retryError);
             break;
@@ -2240,18 +2262,66 @@ export function ChatPanel({
           },
         ];
         try {
+          await clearVisibleStreamDraft();
           reply = await runStream(
             buildMessages(correctionHistory, runtimeContext),
+            { revealToUser: false },
           );
           const retryProcessed = processModelReply(reply, processReplyOptions);
+          const softenedRetry = trySoftenTrailingQuestionReply(
+            retryProcessed,
+            processReplyOptions,
+          );
           processed =
-            retryProcessed.content.trim() || !firstProcessed.content.trim()
-              ? retryProcessed
+            softenedRetry.content.trim() || !firstProcessed.content.trim()
+              ? softenedRetry
               : firstProcessed;
         } catch (retryError) {
           if (firstProcessed.content.trim()) {
             logError("Reply correction failed, using first reply", retryError);
             processed = firstProcessed;
+          } else {
+            throw retryError;
+          }
+        }
+      }
+
+      if (
+        !options.proactive &&
+        shouldRetryReply(processed.validation) &&
+        processed.validation.issues.includes("habitual trailing question")
+      ) {
+        const beforeSecondRetry = processed;
+        const correctionHistory: ChatMessage[] = [
+          ...fittedHistory,
+          { role: "assistant", content: reply },
+          {
+            role: "user",
+            content: buildCorrectionUserMessage(processed.validation.issues),
+          },
+        ];
+        try {
+          await clearVisibleStreamDraft();
+          reply = await runStream(
+            buildMessages(correctionHistory, runtimeContext),
+            { revealToUser: false },
+          );
+          const secondRetry = processModelReply(reply, processReplyOptions);
+          const softenedSecond = trySoftenTrailingQuestionReply(
+            secondRetry,
+            processReplyOptions,
+          );
+          processed =
+            softenedSecond.content.trim() || !beforeSecondRetry.content.trim()
+              ? softenedSecond
+              : beforeSecondRetry;
+        } catch (retryError) {
+          if (beforeSecondRetry.content.trim()) {
+            logError(
+              "Second trailing-question correction failed, using prior reply",
+              retryError,
+            );
+            processed = beforeSecondRetry;
           } else {
             throw retryError;
           }
@@ -2313,6 +2383,7 @@ export function ChatPanel({
               proactive: processReplyOptions.proactive,
               userAskedQuestion: processReplyOptions.userAskedQuestion,
               recentAssistantReplies: processReplyOptions.recentAssistantReplies,
+              proactiveInitiativeMove: options.proactiveInitiativeMove,
             });
             processed = {
               content: finalGate.text,
@@ -2405,7 +2476,7 @@ export function ChatPanel({
           windowTitle: activeWindowRef.current?.title,
         });
         const observedFacts = (
-          await loadProactiveLlmEngine()
+          await loadProactiveRuntime()
         ).collectProactiveSignalFacts({
           bundle: observedBundle,
           tone: "advice",
@@ -2520,12 +2591,13 @@ export function ChatPanel({
           return updated;
         });
         setSelfMemory((current) =>
-          updateAriSelfMemory(
-            current,
-            lastUserMessage,
-            finalReply,
-            replyEmotion,
-          ),
+          recordFeedbackSignal({
+            kind: "conversation_exchange",
+            userMessage: lastUserMessage,
+            assistantReply: finalReply,
+            emotion: replyEmotion,
+            currentSelfMemory: current,
+          }).selfMemory ?? current,
         );
         recordConversationMemoryExchange({
           userMessage: lastUserMessage,
@@ -2662,56 +2734,6 @@ export function ChatPanel({
       }
     }
     return !failed;
-  }
-
-  function chooseResponseLength(
-    message: string,
-    memoryMatches: number,
-    proactive: boolean,
-    proactiveReplyTone?: ProactiveReplyTone,
-    mood?: CharacterMood,
-    moodResponseParams?: {
-      preferredReplyLength?: "short" | "normal" | "chatty";
-      preferClarifyingTone?: boolean;
-      sarcasm?: number;
-      adviceAssertiveness?: number;
-      questionBias?: number;
-    },
-  ): "short" | "medium" | "long" {
-    if (mood && deriveMoodArchetype(mood) === "irritated") {
-      return proactiveReplyTone === "advice" ? "short" : "short";
-    }
-    if (moodResponseParams?.preferredReplyLength === "short") {
-      return "short";
-    }
-    if (proactive) {
-      return proactiveReplyTone === "advice" ? "medium" : "short";
-    }
-
-    const normalized = message.toLowerCase();
-    const asksForDetail =
-      /(подроб|разв[её]рнут|объясни|проанализ|сравни|разбери|почему|как работает|по документ|по pdf|составь|реферат|эссе)/i.test(
-        normalized,
-      );
-    if (asksForDetail || message.length > 260 || memoryMatches >= 3) {
-      return "long";
-    }
-    if (
-      message.length > 100 ||
-      /(как |что такое|каким образом|помоги|расскажи|подскажи|объясни)/i.test(
-        normalized,
-      )
-    ) {
-      return "medium";
-    }
-    if (
-      moodResponseParams?.preferredReplyLength === "chatty" &&
-      !proactive &&
-      message.length > 30
-    ) {
-      return "medium";
-    }
-    return "short";
   }
 
   function insertQuickCommand(value: string): void {
@@ -2856,14 +2878,7 @@ export function ChatPanel({
     recordChatTyping();
     recordCompanionInteraction();
     flushChatTypingPersist();
-    if (
-      settings.adaptiveInitiativeEnabled &&
-      lastInitiativeFeaturesRef.current &&
-      getRecentIgnoredInitiativeCount() > 0
-    ) {
-      recordInitiativeOutcome(lastInitiativeFeaturesRef.current, true);
-    }
-    markInitiativeAcknowledged();
+    recordUserAcknowledgedInitiative();
     recordConversationMoment();
     setInput("");
     await generateReply(nextHistory);
@@ -2939,38 +2954,6 @@ export function ChatPanel({
       status: "rejected",
       result: "Действие отменено.",
     });
-  }
-
-  function markAdviceFeedback(
-    messageIndex: number,
-    adviceId: string,
-    feedback: AdviceFeedback,
-  ) {
-    const updated = updateAdviceFeedback(adviceId, feedback);
-    if (updated) {
-      recordAdviceFeedbackOutcome(updated, feedback);
-      recordRelevanceFeedback(updated, feedback);
-      onProactiveMoodEvent?.(
-        proactiveToMoodEvent({
-          kind: "advice_feedback",
-          tone: "advice",
-          feedback,
-          metadata: {
-            adviceId,
-            topicKey: updated.topicKey,
-            candidateKind: updated.adviceCandidateKind,
-          },
-        }),
-      );
-    }
-    setHistory((current) =>
-      current.map((message, index) =>
-        index === messageIndex
-          ? { ...message, adviceFeedback: feedback }
-          : message,
-      ),
-    );
-    setOpenBranchMenuIndex(null);
   }
 
   async function launchAdviceFromEngine(
@@ -3149,7 +3132,7 @@ export function ChatPanel({
           llmBundle: existingBundle,
         };
       } else {
-      const proactive = await loadProactiveLlmEngine();
+      const proactive = await loadProactiveRuntime();
       const preliminaryAnchor =
         pickPlannedInitiativeAnchor(candidateTopics, {
           recentProactive: banned,
@@ -3466,10 +3449,10 @@ export function ChatPanel({
     } = {},
   ): Promise<InitiativeLaunchResult> {
     const isAdvice = pkg.proactiveReplyTone === "advice";
-    if (isAdvice && !canEmitAdviceNow()) {
+    if (isAdvice && !canEmitAdviceNow(settings)) {
       return { sent: false, suppressReason: "cross-channel gap blocks advice" };
     }
-    if (!isAdvice && !canEmitSmalltalkNow()) {
+    if (!isAdvice && !canEmitSmalltalkNow(settings)) {
       return { sent: false, suppressReason: "cross-channel gap blocks smalltalk" };
     }
     if (pkg.proactiveReplyTone === "advice") {
@@ -3480,7 +3463,7 @@ export function ChatPanel({
         signalSummary: pkg.proactiveSignalSummary,
       });
     }
-    const proactive = pkg.llmBundle ? await loadProactiveLlmEngine() : null;
+    const proactive = pkg.llmBundle ? await loadProactiveRuntime() : null;
     const result = await attemptInitiative(pkg.eventDescription, pkg.initiativeKind, {
       initiativeAnchor: pkg.initiativeAnchor,
       softInitiativeAnchor: pkg.softInitiativeAnchor ?? true,
@@ -3560,14 +3543,11 @@ export function ChatPanel({
     }
 
     const now = Date.now();
-    if (now - getLastProactiveMessageAt() < PROACTIVE_CROSS_CHANNEL_GAP_MS) {
-      return suppress("recent proactive message");
-    }
     const isAdviceTone = options.proactiveReplyTone === "advice";
-    if (isAdviceTone && !canEmitAdviceNow(now)) {
+    if (isAdviceTone && !canEmitAdviceNow(settings, now)) {
       return suppress("cross-channel gap blocks advice");
     }
-    if (options.proactiveReplyTone && !isAdviceTone && !canEmitSmalltalkNow(now)) {
+    if (options.proactiveReplyTone && !isAdviceTone && !canEmitSmalltalkNow(settings, now)) {
       return suppress("cross-channel gap blocks smalltalk");
     }
 
@@ -3764,330 +3744,6 @@ export function ChatPanel({
       gateBusyRef.current = false;
     }
   }
-
-  useEffect(() => {
-    if (!settings.proactiveEnabled) {
-      proactiveWasEnabledRef.current = false;
-      return;
-    }
-
-    const adviceIntervalMs = proactiveAdviceIntervalMs(settings);
-    const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
-    ensureProactiveClockStarted(adviceIntervalMs, smalltalkIntervalMs);
-    if (!proactiveWasEnabledRef.current) {
-      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs);
-      proactiveWasEnabledRef.current = true;
-    }
-    const intervalKey = `${settings.proactiveAdviceIntervalMinutes}:${settings.proactiveSmalltalkIntervalMinutes}`;
-    if (lastProactiveIntervalRef.current !== intervalKey) {
-      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs);
-      lastProactiveIntervalRef.current = intervalKey;
-    }
-
-    const checkInitiative = async () => {
-      if (isQuietModeActive(settings, activeWindowRef.current)) {
-        return;
-      }
-      if (isQuietHours(settings)) {
-        return;
-      }
-      if (blocksInitiative(lifecycleRef.current)) {
-        return;
-      }
-      if (getProactiveFailureBackoff()) {
-        return;
-      }
-      const requiredIdleMs = Math.min(2 * 60 * 1000, smalltalkIntervalMs);
-      const activityAgoMs = Math.max(
-        Date.now() - lastUserActivityRef.current,
-        userIdleSecondsRef.current * 1000,
-      );
-      const companionSilenceMs = getCompanionSilenceMs();
-      const proactiveTiming = getProactiveTiming();
-      const sessionMs = proactiveTiming.sessionMs;
-      const immersedCompanion =
-        companionSilenceMs >= COMPANION_SILENCE_MIN_MS &&
-        sessionMs >= COMPANION_SESSION_MIN_MS &&
-        Boolean(activeWindowRef.current) &&
-        settings.activityTrackingEnabled;
-      const llmOnline = isLlmProviderOnline(settings, ollamaOnline);
-      const activeLevel = settings.initiativeLevel === "active";
-      const plannedSilenceMs = requiredIdleMs;
-
-      if (
-        isLoadingRef.current ||
-        (!immersedCompanion && activityAgoMs < requiredIdleMs)
-      ) {
-        return;
-      }
-
-      const signalBundle = buildInitiativeSignalBundle(settings, {
-        sessionMinutes: proactiveTiming.sessionMinutes,
-        windowMinutes: proactiveTiming.windowMinutes,
-        processName: activeWindowRef.current?.processName,
-        windowTitle: activeWindowRef.current?.title,
-        visionObservation: lastVisionObservationRef.current,
-      });
-      const urgency = scoreAdviceUrgency(signalBundle, settings, {
-        sessionMinutes: proactiveTiming.sessionMinutes,
-        userIntervalMs: adviceIntervalMs,
-      });
-      setLastAdviceUrgency(urgency);
-
-      const now = Date.now();
-      if (now - getLastProactiveMessageAt() < PROACTIVE_CROSS_CHANNEL_GAP_MS) {
-        return;
-      }
-      const sinceAdviceAttempt = now - getLastAdviceAttemptAt();
-      const sinceSmalltalkAttempt = now - getLastSmalltalkAttemptAt();
-      const smalltalkReady =
-        sinceSmalltalkAttempt >= smalltalkIntervalMs && canEmitSmalltalkNow(now);
-      const adviceChannelReady = canEmitAdviceNow(now);
-      const idleGateOpen =
-        immersedCompanion || activityAgoMs >= requiredIdleMs;
-      const toneSnapshot = getProactiveToneSnapshot();
-      const workContext = isProactiveWorkContext({
-        bundle: signalBundle,
-        sessionMinutes: proactiveTiming.sessionMinutes,
-      });
-      const engineDecision = planProactiveEngineTick({
-        settings,
-        bundle: signalBundle,
-        urgency,
-        llmOnline,
-        idleGateOpen,
-        loading: isLoadingRef.current,
-        smalltalkReady,
-        sinceAdviceAttemptMs: sinceAdviceAttempt,
-        adviceIntervalMs,
-        toneSnapshot,
-        recentAdviceStreak: countRecentAdviceStreak(),
-      });
-      const tickAction = engineDecision.action;
-
-      if (tickAction === "silent") {
-        return;
-      }
-
-      let allowSmalltalk = engineDecision.allowSmalltalk;
-
-      if (tickAction === "try_advice") {
-        if (!adviceChannelReady) {
-          return;
-        }
-        const adviceUrgency = engineDecision.adviceUrgency;
-        const { runAdviceCycle } = await loadAdviceEngine();
-        const decision = await runAdviceCycle({
-          settings,
-          bundle: signalBundle,
-          urgency: adviceUrgency,
-          packageOptions: proactiveBundleOptions({ urgency: adviceUrgency }),
-          llmOnline,
-          advisorEnabled: settings.advisorEnabled,
-          sinceAdviceAttemptMs: sinceAdviceAttempt,
-          adviceIntervalMs,
-          now,
-          safety: {
-            idleGateOpen,
-            loading: isLoadingRef.current,
-          },
-        });
-        if (decision.deliver) {
-          await launchAdviceFromEngine(
-            decision,
-            plannedSilenceMs,
-            adviceUrgency,
-          );
-        }
-        return;
-      }
-
-      if (!smalltalkReady || !allowSmalltalk) {
-        return;
-      }
-
-      const ritualPending = getPendingDailyRitual() !== null;
-      const longSilence = activityAgoMs >= 20 * 60_000;
-      const adviceStreak = countRecentAdviceStreak();
-      const memoryRollBoost =
-        adviceStreak >= 2 ? 0.22 : adviceStreak >= 1 ? 0.12 : 0;
-      const tryMemory =
-        ritualPending ||
-        longSilence ||
-        (!activeLevel &&
-          Math.random() <
-            Math.min(0.72, idleLineProbability(settings) + memoryRollBoost));
-
-      if (
-        !workContext &&
-        urgency.level === "none" &&
-        settings.userMemoryEnabled &&
-        tryMemory &&
-        canUseInitiativeKind("memory_callback", { cooldownMs: smalltalkIntervalMs })
-      ) {
-        const pkg = await buildMemoryCallbackPackage(
-          settings,
-          historyRef.current
-            .slice()
-            .reverse()
-            .find((message) => message.role === "user")?.content ?? "",
-          proactiveBundleOptions(),
-        );
-        if (pkg) {
-          const { sent } = await launchProactiveInitiative(pkg, {
-            ignoreKindDailyCap: true,
-            kindCooldownMs: smalltalkIntervalMs,
-            plannedCheckMinSilenceMs: plannedSilenceMs,
-          });
-          if (sent) {
-            return;
-          }
-        }
-      }
-
-      if (
-        !activeLevel &&
-        Math.random() <
-          Math.min(
-            0.35,
-            0.1 + (adviceStreak >= 2 ? 0.18 : adviceStreak >= 1 ? 0.08 : 0),
-        ) &&
-        canUseInitiativeKind("unfinished_thread", { cooldownMs: smalltalkIntervalMs })
-      ) {
-        const nudge = getHighPriorityOpenTasks()[0] ?? getNextTask();
-        if (nudge && !nudge.dueAt) {
-          const pkg = buildProactiveInitiativePackage(
-            settings,
-            "unfinished_thread",
-            {
-              ...proactiveBundleOptions(),
-              taskTitle: nudge.title,
-              taskNotes: nudge.notes,
-            },
-          );
-          const { sent } = await launchProactiveInitiative(pkg, {
-            kindCooldownMs: smalltalkIntervalMs,
-            plannedCheckMinSilenceMs: plannedSilenceMs,
-          });
-          if (sent) {
-            return;
-          }
-        }
-      }
-
-      const generic = await tryGenericCompanionInitiative({
-        activityAgoMs,
-        intervalMs: smalltalkIntervalMs,
-        plannedSilenceMs,
-        llmOnline,
-        immersedCompanion,
-        companionSilenceMs,
-      });
-      void generic;
-    };
-
-    const timer = window.setInterval(checkInitiative, 15_000);
-    return () => window.clearInterval(timer);
-  }, [
-    settings.proactiveEnabled,
-    settings.proactiveAdviceIntervalMinutes,
-    settings.proactiveSmalltalkIntervalMinutes,
-    settings.proactiveOpenChat,
-    settings.initiativeLevel,
-    settings.userMemoryEnabled,
-    settings.quietMode,
-    settings.quietModeUntil,
-    settings.quietModeProcess,
-    settings.quietHoursStart,
-    settings.quietHoursEnd,
-    settings.adaptiveInitiativeEnabled,
-    settings.advisorEnabled,
-    settings.activityTrackingEnabled,
-    ollamaOnline,
-  ]);
-
-  useEffect(() => {
-    const runPrune = () => {
-      const ignored = pruneExpiredPendingInitiatives(
-        settings.adaptiveInitiativeEnabled,
-      );
-      if (ignored > 0) {
-        window.dispatchEvent(
-          new CustomEvent(ADVICE_IGNORED_EVENT, {
-            detail: { count: ignored },
-          }),
-        );
-      }
-    };
-    runPrune();
-    const timer = window.setInterval(runPrune, 60_000);
-    return () => window.clearInterval(timer);
-  }, [settings.adaptiveInitiativeEnabled]);
-
-  useEffect(() => {
-    if (!settings.autoVisionEnabled || !settings.activityTrackingEnabled) {
-      return;
-    }
-
-    let timer: number;
-    const schedule = () => {
-      const delay = 8 * 60_000 + Math.random() * 12 * 60_000;
-      timer = window.setTimeout(() => {
-        void runAutoVisionGlance().finally(schedule);
-      }, delay);
-    };
-
-    schedule();
-    return () => window.clearTimeout(timer);
-  }, [
-    settings.autoVisionEnabled,
-    settings.activityTrackingEnabled,
-    settings.activityAllowlist,
-    settings.visualMemoryMinutes,
-    settings.proactiveOpenChat,
-    settings.quietMode,
-    settings.quietModeUntil,
-    settings.quietModeProcess,
-    activeWindow,
-    ollamaOnline,
-    characterState,
-  ]);
-
-  useEffect(() => {
-    const processBridge = () => {
-      if (!settings.proactiveEnabled) {
-        drainProactiveRequests();
-        return;
-      }
-      for (const req of drainProactiveRequests()) {
-        void prepareProactivePackage(req.kind, {
-          ...proactiveBundleOptions(),
-          eventHint: req.eventHint,
-          ...req.options,
-        }).then((pkg) => {
-          if (!pkg) {
-            return;
-          }
-          void launchProactiveInitiative(pkg, {
-            ignoreKindDailyCap: req.lab,
-          }).then((sent) => {
-            if (sent && req.scenario) {
-              markScenarioTriggered(req.scenario);
-            }
-          });
-        });
-      }
-    };
-    const unsub = subscribeProactiveRequests(processBridge);
-    processBridge();
-    return unsub;
-  }, [
-    settings.proactiveEnabled,
-    settings.advisorEnabled,
-    settings.activityTrackingEnabled,
-    ollamaOnline,
-    isOpen,
-  ]);
 
   useEffect(() => {
     if (
@@ -5240,6 +4896,14 @@ export function ChatPanel({
                           <i />
                         </span>
                       ) : null)}
+                    {message.reaction && (
+                      <span
+                        className="message-reaction-badge"
+                        title="Ваша реакция"
+                      >
+                        {message.reaction}
+                      </span>
+                    )}
                   </div>
                   {message.role === "assistant" &&
                     message.content &&
@@ -5268,6 +4932,47 @@ export function ChatPanel({
                         )}
                         <button
                           type="button"
+                          className={`message-reaction-button${
+                            openReactionMenuIndex === index ? " active" : ""
+                          }`}
+                          aria-label="Реакция на сообщение"
+                          aria-expanded={openReactionMenuIndex === index}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setOpenBranchMenuIndex(null);
+                            setOpenReactionMenuIndex((current) =>
+                              current === index ? null : index,
+                            );
+                          }}
+                        >
+                          +
+                        </button>
+                        {openReactionMenuIndex === index && (
+                          <div
+                            className="message-reaction-palette"
+                            role="menu"
+                            aria-label="Выберите реакцию"
+                          >
+                            {MESSAGE_REACTIONS.map((emoji) => (
+                              <button
+                                key={emoji}
+                                type="button"
+                                role="menuitem"
+                                className={`message-reaction-option${
+                                  message.reaction === emoji ? " selected" : ""
+                                }`}
+                                aria-label={`Реакция ${emoji}`}
+                                onClick={() =>
+                                  setMessageReaction(index, emoji)
+                                }
+                              >
+                                {emoji}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <button
+                          type="button"
                           className={`message-menu-button${
                             openBranchMenuIndex === index ? " active" : ""
                           }`}
@@ -5275,6 +4980,7 @@ export function ChatPanel({
                           aria-expanded={openBranchMenuIndex === index}
                           onClick={(event) => {
                             event.stopPropagation();
+                            setOpenReactionMenuIndex(null);
                             setOpenBranchMenuIndex((current) =>
                               current === index ? null : index,
                             );

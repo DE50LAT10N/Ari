@@ -72,7 +72,7 @@ export function buildVisibleClarifyingFallback(
   if (bundle?.rejectReason?.includes("clarifying probe")) {
     const hook = cleanText(bundle.practicalHook, 220);
     if (hook) {
-      return hook.endsWith("?") ? hook : `${hook}?`;
+      return hook;
     }
   }
 

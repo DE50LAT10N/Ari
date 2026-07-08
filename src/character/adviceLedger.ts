@@ -193,6 +193,31 @@ export function getRecentAdviceFeedback(
   );
 }
 
+export function getNegativeAdviceFeedbackExcerpts(
+  limit = 4,
+  now = Date.now(),
+): string[] {
+  return loadAdviceLedger(now)
+    .filter(
+      (entry) =>
+        entry.feedback === "miss" ||
+        entry.feedback === "too_generic" ||
+        entry.feedback === "not_now",
+    )
+    .map(
+      (entry) =>
+        entry.practicalHook ??
+        entry.replyText ??
+        entry.signalSummary ??
+        entry.linkNarrative ??
+        entry.anchor ??
+        "",
+    )
+    .map((text) => text.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
 export function countRecentAdviceByTone(
   tone: "advice" | "smalltalk",
   sinceMs: number,

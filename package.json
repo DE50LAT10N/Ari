@@ -12,6 +12,7 @@
     "smoke": "node scripts/smoke-check.mjs",
     "qa:acceptance": "node scripts/qa-acceptance.mjs",
     "simulate:advisor": "vitest run tests/advisorSimulation.test.ts --reporter=verbose",
+    "simulate:proactive-pacing": "vitest run tests/proactivePacingSoak.test.ts --reporter=verbose",
     "validate:sprites": "node scripts/validate-sprites.mjs",
     "generate-assets": "node scripts/generate-placeholder-assets.mjs",
     "fetch-gigachat-certs": "node scripts/fetch-gigachat-certs.mjs",

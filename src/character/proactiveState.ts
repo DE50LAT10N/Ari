@@ -1,3 +1,5 @@
+import type { AppSettings } from "../settings/appSettings";
+
 const LAST_PROACTIVE_MESSAGE_KEY =
   "desktop-character.last-proactive-message.v1";
 const LAST_PROACTIVE_ATTEMPT_KEY =
@@ -18,7 +20,46 @@ const LAST_ADVICE_DECISION_KEY =
   "desktop-character.last-advice-decision.v1";
 
 export const PROACTIVE_SUBJECT_COOLDOWN_MS = 3 * 60 * 60 * 1000;
+/** @deprecated use proactiveCrossChannelGapMs(settings) */
 export const PROACTIVE_CROSS_CHANNEL_GAP_MS = 5 * 60_000;
+/** @deprecated use openChatAdviceSilenceMs(settings) */
+export const OPEN_CHAT_ADVICE_SILENCE_MS = 8 * 60_000;
+
+export type ProactiveGapSettings = Pick<AppSettings, "initiativeLevel">;
+
+const DEFAULT_GAP_SETTINGS: ProactiveGapSettings = { initiativeLevel: "normal" };
+
+export function proactiveCrossChannelGapMs(
+  settings: ProactiveGapSettings = DEFAULT_GAP_SETTINGS,
+): number {
+  switch (settings.initiativeLevel) {
+    case "active":
+      return 90_000;
+    case "normal":
+      return 3 * 60_000;
+    case "rare":
+    case "silent":
+      return 5 * 60_000;
+    default:
+      return 3 * 60_000;
+  }
+}
+
+export function openChatAdviceSilenceMs(
+  settings: ProactiveGapSettings = DEFAULT_GAP_SETTINGS,
+): number {
+  switch (settings.initiativeLevel) {
+    case "active":
+      return 3 * 60_000;
+    case "normal":
+      return 5 * 60_000;
+    case "rare":
+    case "silent":
+      return 8 * 60_000;
+    default:
+      return 5 * 60_000;
+  }
+}
 
 const PROACTIVE_FAILURE_BACKOFF_STEPS_MS = [
   90 * 1000,
@@ -331,12 +372,30 @@ export function markSmalltalkAttemptAt(timestamp = Date.now()): void {
   window.dispatchEvent(new Event("ari-proactive-state-changed"));
 }
 
-export function canEmitSmalltalkNow(now = Date.now()): boolean {
-  return now - getLastAdviceAttemptAt() >= PROACTIVE_CROSS_CHANNEL_GAP_MS;
+export function canEmitSmalltalkNow(
+  settingsOrNow: ProactiveGapSettings | number = DEFAULT_GAP_SETTINGS,
+  nowMaybe?: number,
+): boolean {
+  if (typeof settingsOrNow === "number") {
+    return canEmitSmalltalkNow(DEFAULT_GAP_SETTINGS, settingsOrNow);
+  }
+  const now = nowMaybe ?? Date.now();
+  return (
+    now - getLastAdviceAttemptAt() >= proactiveCrossChannelGapMs(settingsOrNow)
+  );
 }
 
-export function canEmitAdviceNow(now = Date.now()): boolean {
-  return now - getLastSmalltalkAttemptAt() >= PROACTIVE_CROSS_CHANNEL_GAP_MS;
+export function canEmitAdviceNow(
+  settingsOrNow: ProactiveGapSettings | number = DEFAULT_GAP_SETTINGS,
+  nowMaybe?: number,
+): boolean {
+  if (typeof settingsOrNow === "number") {
+    return canEmitAdviceNow(DEFAULT_GAP_SETTINGS, settingsOrNow);
+  }
+  const now = nowMaybe ?? Date.now();
+  return (
+    now - getLastSmalltalkAttemptAt() >= proactiveCrossChannelGapMs(settingsOrNow)
+  );
 }
 
 export function armProactiveGracePeriod(
@@ -430,4 +489,18 @@ export function registerProactiveReplySubject(
   if (!anchorTrimmed && snippet.length >= 12) {
     rememberProactiveTopic(snippet);
   }
+}
+
+export function shouldSuppressOpenChatAdvice(input: {
+  chatOpen: boolean;
+  activityAgoMs: number;
+  urgencyLevel: "none" | "low" | "medium" | "high";
+  settings?: ProactiveGapSettings;
+}): boolean {
+  const silenceMs = openChatAdviceSilenceMs(input.settings);
+  return (
+    input.chatOpen &&
+    input.activityAgoMs < silenceMs &&
+    input.urgencyLevel !== "high"
+  );
 }

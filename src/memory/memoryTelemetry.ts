@@ -56,6 +56,23 @@ export function recordContextTrim(note: string): void {
   writeList(TRIM_KEY, next, 12);
 }
 
+export function getInitiativeSuppressions(limit = 24): SuppressEntry[] {
+  return loadJsonArray<SuppressEntry>(SUPPRESS_KEY).slice(0, limit);
+}
+
+export function summarizeInitiativeSuppressions(
+  entries = getInitiativeSuppressions(),
+): Array<{ reason: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    const key = entry.reason.slice(0, 120);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((left, right) => right.count - left.count);
+}
+
 export function recordInitiativeSuppressed(reason: string): void {
   const next = loadJsonArray<SuppressEntry>(SUPPRESS_KEY);
   next.push({ reason: reason.slice(0, 180), at: Date.now() });

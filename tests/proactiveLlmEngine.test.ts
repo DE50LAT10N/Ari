@@ -515,6 +515,54 @@ describe("proactiveLlmEngine", () => {
     expect(result.acceptable).toBe(true);
   });
 
+  it("localReplyQualityCheck rejects trailing question for non-clarifying advice", () => {
+    const bundle = {
+      tone: "advice" as const,
+      linkedThemes: ["curriculum"],
+      mergedAnchor: "curriculum",
+      narrativeBrief: "учебная программа",
+      practicalHook: "выбери один раздел и углубись в него",
+      usefulnessScore: 0.7,
+      shouldSend: true,
+      overlapsBanned: false,
+      source: "llm" as const,
+      initiativeMove: "concrete_step" as const,
+    };
+
+    const result = localReplyQualityCheck(
+      bundle,
+      "А какой раздел учебной программы тебе сейчас интереснее всего изучать?",
+      [],
+    );
+
+    expect(result?.acceptable).toBe(false);
+    expect(result?.issues).toContain("trailing question");
+  });
+
+  it("localReplyQualityCheck rejects implicit solicitation without question mark", () => {
+    const bundle = {
+      tone: "smalltalk" as const,
+      linkedThemes: ["document"],
+      mergedAnchor: "document",
+      narrativeBrief: "документ",
+      practicalHook: "посмотри на формулировку",
+      usefulnessScore: 0.7,
+      shouldSend: true,
+      overlapsBanned: false,
+      source: "llm" as const,
+      initiativeMove: "context_fact" as const,
+    };
+
+    const result = localReplyQualityCheck(
+      bundle,
+      "Ммм... похоже на вопрос. Хочешь обсудить что-то конкретное из документа.",
+      [],
+    );
+
+    expect(result?.acceptable).toBe(false);
+    expect(result?.issues).toContain("implicit solicitation");
+  });
+
   it("validateProactiveReplyLlm flags meta commentary", async () => {
     vi.mocked(completeLlmJson).mockResolvedValue({
       acceptable: false,

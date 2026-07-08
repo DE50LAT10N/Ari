@@ -138,6 +138,48 @@ function proactiveImpact(input: {
   return { warmth: 0.08, energy: 0.04, irritation: -0.04 };
 }
 
+function reactionImpact(emoji: string): MoodImpactVector {
+  switch (emoji) {
+    case "👍":
+    case "❤️":
+    case "😂":
+      return { warmth: 0.14, energy: 0.06, irritation: -0.12 };
+    case "😮":
+      return { warmth: 0.05, energy: 0.16, irritation: -0.02 };
+    case "😢":
+      return { warmth: 0.16, energy: -0.08, irritation: -0.04 };
+    case "👎":
+      return { warmth: -0.1, energy: 0.02, irritation: 0.2 };
+    default:
+      return { warmth: 0, energy: 0, irritation: 0 };
+  }
+}
+
+export function reactionToMoodEvent(input: {
+  emoji: string;
+  messageId?: string;
+  timestamp?: number;
+  intensity?: number;
+  confidence?: number;
+  metadata?: Record<string, unknown>;
+}): MoodEvent {
+  const timestamp = input.timestamp ?? Date.now();
+  return {
+    id: `reaction:${input.emoji}:${input.messageId ?? "message"}:${timestamp}`,
+    type: "message_reaction",
+    source: "ui_interaction",
+    intensity: clampIntensity(input.intensity ?? 0.9),
+    confidence: clampIntensity(input.confidence ?? 0.9),
+    timestamp,
+    metadata: {
+      ...input.metadata,
+      emoji: input.emoji,
+      messageId: input.messageId,
+    },
+    impact: reactionImpact(input.emoji),
+  };
+}
+
 export function proactiveToMoodEvent(input: {
   kind: ProactiveMoodEventKind;
   tone?: ProactiveReplyTone;

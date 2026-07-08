@@ -1172,6 +1172,7 @@ button {
 }
 
 .message {
+  position: relative;
   box-sizing: border-box;
   max-width: 84%;
   padding: 9px 12px;
@@ -3080,6 +3081,78 @@ button {
 
 .message-actions-wrap .read-aloud-btn {
   margin-right: 4px;
+}
+
+.message-reaction-badge {
+  position: absolute;
+  right: -6px;
+  bottom: -8px;
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 999px;
+  background: rgb(29 26 38 / 96%);
+  box-shadow: 0 4px 10px rgb(0 0 0 / 28%);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.message-reaction-button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  margin-right: 2px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(255 255 255 / 45%);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.message-reaction-button:hover,
+.message-reaction-button.active {
+  background: rgb(255 255 255 / 8%);
+  color: rgb(255 255 255 / 85%);
+}
+
+.message-reaction-palette {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 28px;
+  z-index: 13;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 999px;
+  background: rgb(29 26 38 / 97%);
+  box-shadow: 0 12px 24px rgb(0 0 0 / 38%);
+}
+
+.message-reaction-option {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.message-reaction-option:hover,
+.message-reaction-option.selected {
+  background: rgb(255 255 255 / 10%);
 }
 
 .tts-path-input {

@@ -6,6 +6,7 @@ import {
 import { inferEmotionFromReply } from "./emotionPresentation";
 import type { ResponseMode } from "./responseModes";
 import {
+  isSolicitationSentence,
   validateCharacterReply,
   type OocValidationResult,
   type ReplyValidationContext,
@@ -86,6 +87,68 @@ export function processModelReply(
   };
 }
 
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?…])\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+export function softenTrailingQuestion(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return text;
+  }
+
+  const sentences = splitSentences(trimmed);
+  if (sentences.length === 0) {
+    return text;
+  }
+
+  const lastSentence = sentences[sentences.length - 1];
+  if (!isSolicitationSentence(lastSentence)) {
+    return text;
+  }
+
+  const remaining = sentences.slice(0, -1).join(" ").trim();
+  if (!remaining) {
+    return text;
+  }
+  return remaining;
+}
+
+export function trySoftenTrailingQuestionReply(
+  processed: ProcessedReply,
+  options: ProcessReplyOptions,
+): ProcessedReply {
+  const issues = processed.validation.issues;
+  if (!issues.includes("habitual trailing question")) {
+    return processed;
+  }
+  if (issues.some((issue) => issue !== "habitual trailing question")) {
+    return processed;
+  }
+  const softened = softenTrailingQuestion(processed.content);
+  if (softened === processed.content) {
+    return processed;
+  }
+  const validation = validateCharacterReply(softened, {
+    ...options.validationContext,
+    responseMode: options.responseMode,
+    proactive: options.proactive,
+    userAskedQuestion: options.userAskedQuestion,
+    recentAssistantReplies: options.recentAssistantReplies,
+  });
+  if (!validation.valid) {
+    return processed;
+  }
+  return {
+    ...processed,
+    content: softened,
+    validation,
+  };
+}
+
 export function shouldRetryReply(validation: OocValidationResult): boolean {
   return validation.issues.some((issue) =>
     [
@@ -103,6 +166,7 @@ export function shouldRetryReply(validation: OocValidationResult): boolean {
       "assistant tone",
       "question spam",
       "habitual trailing question",
+      "implicit solicitation",
       "empty reply",
       "evasive reply",
       "duplicate reply",
@@ -149,6 +213,15 @@ export function buildCorrectionUserMessage(issues: string[]): string {
     lines.push(
       "Убери автоматический финальный вопрос. Заверши ответ утверждением, выводом или конкретным следующим шагом.",
     );
+    lines.push(
+      "Не заканчивай хвостами вроде «ладно?», «обсудим планы?», «могу предложить пару трюков?» — перефразируй в утверждение.",
+    );
+  }
+  if (issues.includes("implicit solicitation")) {
+    lines.push(
+      "Убери скрытое приглашение продолжить разговор в конце. Не заканчивай «хочешь обсудить…», «тебе будет полезно углубиться…», «если захочешь — расскажу».",
+    );
+    lines.push("Финал — утверждение, вывод или конкретный шаг без подталкивания к ответу.");
   }
   if (
     issues.includes("identity leak") ||

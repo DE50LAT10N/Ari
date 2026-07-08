@@ -9,6 +9,10 @@ import {
   shouldAutoWebSearch,
 } from "../src/tools/liveTools";
 import { validateCharacterReply } from "../src/character/responseValidation";
+import {
+  softenTrailingQuestion,
+  trySoftenTrailingQuestionReply,
+} from "../src/character/replyPipeline";
 
 describe("replySimilarity", () => {
   it("detects near-duplicate proactive lines", () => {
@@ -77,6 +81,84 @@ describe("proactive reply tone response mode", () => {
     expect(result.issues).toContain("habitual trailing question");
   });
 
+  it("flags casual trailing questions like ладно?", () => {
+    const result = validateCharacterReply("Береги себя, ладно?", {
+      hasVision: false,
+      hasMemory: false,
+      hasRag: false,
+      responseMode: "casual",
+      recentAssistantReplies: [],
+    });
+
+    expect(result.issues).toContain("habitual trailing question");
+  });
+
+  it("flags a single casual trailing question without recent streak", () => {
+    const result = validateCharacterReply(
+      "Может, заварим чай и обсудим планы на вечер?",
+      {
+        hasVision: false,
+        hasMemory: false,
+        hasRag: false,
+        responseMode: "casual",
+        recentAssistantReplies: [],
+      },
+    );
+
+    expect(result.issues).toContain("habitual trailing question");
+  });
+
+  it("flags proactive advice with trailing question for concrete_step", () => {
+    const result = validateCharacterReply(
+      "А какой раздел учебной программы тебе сейчас интереснее всего изучать? Могу предложить пару трюков?",
+      {
+        hasVision: false,
+        hasMemory: false,
+        hasRag: false,
+        proactive: true,
+        proactiveReplyTone: "advice",
+        proactiveInitiativeMove: "concrete_step",
+        responseMode: "technical_help",
+        recentAssistantReplies: [],
+      },
+    );
+
+    expect(result.issues).toContain("habitual trailing question");
+  });
+
+  it("allows clarifying proactive advice to end with a question", () => {
+    const result = validateCharacterReply(
+      "Сейчас фокус на readme — дописываешь запись к релизу или правишь уже существующий блок?",
+      {
+        hasVision: false,
+        hasMemory: false,
+        hasRag: false,
+        proactive: true,
+        proactiveReplyTone: "advice",
+        proactiveInitiativeMove: "ask_clarifying",
+        responseMode: "technical_help",
+        recentAssistantReplies: [],
+      },
+    );
+
+    expect(result.issues).not.toContain("habitual trailing question");
+  });
+
+  it("allows emotional support choice offers with или", () => {
+    const result = validateCharacterReply(
+      "Может, чайку горячего? Или расскажу анекдот, чтобы поднять настроение?",
+      {
+        hasVision: false,
+        hasMemory: false,
+        hasRag: false,
+        responseMode: "emotional_support",
+        recentAssistantReplies: [],
+      },
+    );
+
+    expect(result.issues).not.toContain("habitual trailing question");
+  });
+
   it("flags repeated trailing questions across recent replies", () => {
     const result = validateCharacterReply("This answer is tidy enough?", {
       hasVision: false,
@@ -129,6 +211,21 @@ describe("proactive reply tone response mode", () => {
     expect(result.issues).not.toContain("shallow advice");
   });
 
+  it("flags solicitation phrasing without a question mark", () => {
+    const result = validateCharacterReply(
+      "Ммм... похоже на вопрос. Хочешь обсудить что-то конкретное из документа.",
+      {
+        hasVision: false,
+        hasMemory: false,
+        hasRag: false,
+        responseMode: "casual",
+        recentAssistantReplies: [],
+      },
+    );
+
+    expect(result.issues).toContain("habitual trailing question");
+  });
+
   it("flags proactive story fallback locally", () => {
     const result = validateCharacterReply(
       "Ха, звучит как начало крутого сюжета! Надеюсь, результат будет не менее захватывающим, чем процесс...",
@@ -143,6 +240,50 @@ describe("proactive reply tone response mode", () => {
     );
 
     expect(result.issues).not.toContain("proactive meta commentary");
+  });
+});
+
+describe("softenTrailingQuestion", () => {
+  it("drops a trailing solicitation sentence", () => {
+    expect(
+      softenTrailingQuestion(
+        "Ммм... похоже на вопрос. Хочешь обсудить что-то конкретное из документа.",
+      ),
+    ).toBe("Ммм... похоже на вопрос.");
+  });
+
+  it("keeps the original when only one solicitation sentence remains", () => {
+    expect(softenTrailingQuestion("Береги себя, ладно?")).toBe(
+      "Береги себя, ладно?",
+    );
+  });
+
+  it("passes validation after dropping trailing solicitation", () => {
+    const processed = trySoftenTrailingQuestionReply(
+      {
+        content:
+          "Ммм... похоже на вопрос. Хочешь обсудить что-то конкретное из документа.",
+        emotion: "curious",
+        validation: {
+          valid: false,
+          issues: ["habitual trailing question"],
+        },
+      },
+      {
+        validationContext: {
+          hasVision: false,
+          hasMemory: false,
+          hasRag: false,
+          responseMode: "casual",
+        },
+      },
+    );
+
+    expect(processed.content).toBe("Ммм... похоже на вопрос.");
+    expect(processed.validation.valid).toBe(true);
+    expect(processed.validation.issues).not.toContain(
+      "habitual trailing question",
+    );
   });
 });
 
