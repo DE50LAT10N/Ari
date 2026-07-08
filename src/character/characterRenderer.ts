@@ -95,7 +95,7 @@ export class PngCharacterRenderer implements CharacterRenderer {
       return stateSpritePaths.speaking;
     }
 
-    if (e === "neutral" && (s === "idle" || s === "thinking" || s === "speaking")) {
+    if (e === "neutral" && s === "idle") {
       return stateSpritePaths.idle;
     }
 
@@ -108,7 +108,7 @@ export class PngCharacterRenderer implements CharacterRenderer {
     if (s === "speaking") {
       return resolveEmotionSpritePath(e);
     }
-    if (e === "neutral" && (s === "idle" || s === "thinking")) {
+    if (e === "neutral" && s === "idle") {
       return stateSpritePaths.idle;
     }
     return resolveEmotionSpriteFallbackPath(e);

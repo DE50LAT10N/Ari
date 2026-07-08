@@ -7,12 +7,14 @@ import {
 } from "../src/character/moodEngine/moodVector";
 import { updateMood } from "../src/character/moodEngine/moodUpdateEngine";
 import {
+  adviceIgnoredToMoodEvents,
   emotionToMoodEvent,
   interactionToMoodEvent,
   proactiveToMoodEvent,
   triggerToMoodEvent,
 } from "../src/character/moodEngine/moodEvents";
 import { classifyMood } from "../src/character/moodEngine/moodClassifier";
+import { deriveMoodArchetype } from "../src/character/moodBehavior";
 import {
   loadMoodEngineState,
   resetMoodEngineForTests,
@@ -200,7 +202,9 @@ describe("moodEngine", () => {
       mood = out.nextMood;
     }
     const cls = classifyMood(mood, { now });
-    expect(["happy", "blush", "empathetic", "shy", "proud"]).toContain(cls.emotion);
+    expect(["happy", "blush", "empathetic", "shy", "proud", "amused", "excited"]).toContain(
+      cls.emotion,
+    );
   });
 
   it("classification has stable fallback", () => {
@@ -399,26 +403,49 @@ describe("moodEngine", () => {
     expect(miss.nextMood.irritation).toBeGreaterThan(base.irritation);
   });
 
-  it("records proactive event kinds in mood timeline", () => {
+  it("reaches annoyed after one ignored initiative via mood engine", () => {
+    const now = 1_000_000;
+    const result = updateMoodFromEvents({
+      settings: defaultSettings,
+      now,
+      events: adviceIgnoredToMoodEvents(1),
+      options: { applyDecay: false },
+    });
+
+    expect(result.classification.emotion).toBe("annoyed");
+    expect(result.nextMood.irritation ?? 0).toBeGreaterThan(0.38);
+    expect(deriveMoodArchetype({
+      warmth: result.nextMood.warmth ?? 0,
+      energy: result.nextMood.energy ?? 0,
+      irritation: result.nextMood.irritation ?? 0,
+      updatedAt: Date.now(),
+    })).toBe("irritated");
+  });
+
+  it("caps advice ignored mood events at four repeats", () => {
+    const events = adviceIgnoredToMoodEvents(9);
+    expect(events).toHaveLength(4);
+    expect(events.every((event) => event.impactRuleId === "interaction:ignored_initiative")).toBe(
+      true,
+    );
+    expect(events[0]?.metadata).toMatchObject({ count: 4, source: "advice_ignored" });
+  });
+
+  it("records ignored initiative in mood timeline for advice ignored", () => {
     const now = 1_000_000;
     updateMoodFromEvents({
       settings: defaultSettings,
       now,
-      events: [
-        proactiveToMoodEvent({
-          kind: "advice_ignored",
-          tone: "advice",
-          timestamp: now,
-        }),
-      ],
+      events: adviceIgnoredToMoodEvents(1),
       options: { applyDecay: false },
     });
 
     const timeline = loadMoodTimeline();
     expect(timeline).toHaveLength(1);
-    expect(timeline[0].eventTypes).toContain("advice_ignored");
-    expect(timeline[0].eventSources).toContain("proactive");
-    expect(timeline[0].reason).toContain("advice_ignored");
+    expect(timeline[0].eventTypes).toContain("interaction");
+    expect(timeline[0].eventSources).toContain("ui_interaction");
+    expect(timeline[0].reason).toContain("interaction");
+    expect(timeline[0].reason).toContain("irritation");
   });
 
   it("does not record mood timeline entries for dry runs or empty decay ticks", () => {

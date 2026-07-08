@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type { AppSettings } from "../settings/appSettings";
 import type { ActiveWindowInfo } from "../platform/activeWindow";
 import type { ChatMessage } from "../types/chat";
@@ -56,6 +56,7 @@ import { countRecentAdviceStreak } from "../character/adviceLedger";
 import { buildMemoryCallbackPackage } from "../memory/memoryProactive";
 import { getHighPriorityOpenTasks, getNextTask } from "../tasks/taskStore";
 import { loadProactiveRuntime } from "./chatRuntimeLoaders";
+import { isLlmProviderOnline } from "../llm/providerOnline";
 
 type InitiativeLaunchResult = { sent: boolean; suppressReason?: string };
 
@@ -138,6 +139,20 @@ export function useProactiveInitiative(input: {
     tryGenericCompanionInitiative,
     runAutoVisionGlance,
   } = input;
+  const getProactiveTimingRef = useRef(getProactiveTiming);
+  const proactiveBundleOptionsRef = useRef(proactiveBundleOptions);
+  const prepareProactivePackageRef = useRef(prepareProactivePackage);
+  const launchProactiveInitiativeRef = useRef(launchProactiveInitiative);
+  const launchAdviceFromEngineRef = useRef(launchAdviceFromEngine);
+  const tryGenericCompanionInitiativeRef = useRef(tryGenericCompanionInitiative);
+  const runAutoVisionGlanceRef = useRef(runAutoVisionGlance);
+  getProactiveTimingRef.current = getProactiveTiming;
+  proactiveBundleOptionsRef.current = proactiveBundleOptions;
+  prepareProactivePackageRef.current = prepareProactivePackage;
+  launchProactiveInitiativeRef.current = launchProactiveInitiative;
+  launchAdviceFromEngineRef.current = launchAdviceFromEngine;
+  tryGenericCompanionInitiativeRef.current = tryGenericCompanionInitiative;
+  runAutoVisionGlanceRef.current = runAutoVisionGlance;
 
   const recordUserAcknowledgedInitiative = useCallback(() => {
     if (
@@ -187,14 +202,14 @@ export function useProactiveInitiative(input: {
         userIdleSecondsRef.current * 1000,
       );
       const companionSilenceMs = getCompanionSilenceMs();
-      const proactiveTiming = getProactiveTiming();
+      const proactiveTiming = getProactiveTimingRef.current();
       const sessionMs = proactiveTiming.sessionMs;
       const immersedCompanion =
         companionSilenceMs >= COMPANION_SILENCE_MIN_MS &&
         sessionMs >= COMPANION_SESSION_MIN_MS &&
         Boolean(activeWindowRef.current) &&
         settings.activityTrackingEnabled;
-      const llmOnline = Boolean(ollamaOnline);
+      const llmOnline = isLlmProviderOnline(settings, ollamaOnline);
       const activeLevel = settings.initiativeLevel === "active";
       const adviceIdleMs = Math.min(2 * 60 * 1000, smalltalkIntervalMs);
       const smalltalkIdleMs =
@@ -287,7 +302,9 @@ export function useProactiveInitiative(input: {
           settings,
           bundle: signalBundle,
           urgency: adviceUrgency,
-          packageOptions: proactiveBundleOptions({ urgency: adviceUrgency }),
+          packageOptions: proactiveBundleOptionsRef.current({
+            urgency: adviceUrgency,
+          }),
           llmOnline,
           advisorEnabled: settings.advisorEnabled,
           sinceAdviceAttemptMs: sinceAdviceAttempt,
@@ -299,7 +316,7 @@ export function useProactiveInitiative(input: {
           },
         });
         if (decision.deliver) {
-          await launchAdviceFromEngine(
+          await launchAdviceFromEngineRef.current(
             decision,
             plannedSilenceMs,
             adviceUrgency,
@@ -337,10 +354,10 @@ export function useProactiveInitiative(input: {
             .slice()
             .reverse()
             .find((message) => message.role === "user")?.content ?? "",
-          proactiveBundleOptions(),
+          proactiveBundleOptionsRef.current(),
         );
         if (pkg) {
-          const { sent } = await launchProactiveInitiative(pkg, {
+          const { sent } = await launchProactiveInitiativeRef.current(pkg, {
             ignoreKindDailyCap: true,
             kindCooldownMs: smalltalkIntervalMs,
             plannedCheckMinSilenceMs: smalltalkPlannedSilenceMs,
@@ -366,12 +383,12 @@ export function useProactiveInitiative(input: {
             settings,
             "unfinished_thread",
             {
-              ...proactiveBundleOptions(),
+              ...proactiveBundleOptionsRef.current(),
               taskTitle: nudge.title,
               taskNotes: nudge.notes,
             },
           );
-          const { sent } = await launchProactiveInitiative(pkg, {
+          const { sent } = await launchProactiveInitiativeRef.current(pkg, {
             kindCooldownMs: smalltalkIntervalMs,
             plannedCheckMinSilenceMs: smalltalkPlannedSilenceMs,
           });
@@ -381,7 +398,7 @@ export function useProactiveInitiative(input: {
         }
       }
 
-      const generic = await tryGenericCompanionInitiative({
+      const generic = await tryGenericCompanionInitiativeRef.current({
         activityAgoMs,
         intervalMs: smalltalkIntervalMs,
         plannedSilenceMs: smalltalkPlannedSilenceMs,
@@ -407,11 +424,6 @@ export function useProactiveInitiative(input: {
     isLoadingRef,
     proactiveWasEnabledRef,
     lastProactiveIntervalRef,
-    getProactiveTiming,
-    proactiveBundleOptions,
-    launchAdviceFromEngine,
-    tryGenericCompanionInitiative,
-    launchProactiveInitiative,
   ]);
 
   useEffect(() => {
@@ -441,7 +453,7 @@ export function useProactiveInitiative(input: {
     const schedule = () => {
       const delay = 8 * 60_000 + Math.random() * 12 * 60_000;
       timer = window.setTimeout(() => {
-        void runAutoVisionGlance().finally(schedule);
+        void runAutoVisionGlanceRef.current().finally(schedule);
       }, delay);
     };
 
@@ -459,7 +471,6 @@ export function useProactiveInitiative(input: {
     activeWindow,
     ollamaOnline,
     characterState,
-    runAutoVisionGlance,
   ]);
 
   useEffect(() => {
@@ -469,15 +480,15 @@ export function useProactiveInitiative(input: {
         return;
       }
       for (const req of drainProactiveRequests()) {
-        void prepareProactivePackage(req.kind, {
-          ...proactiveBundleOptions(),
+        void prepareProactivePackageRef.current(req.kind, {
+          ...proactiveBundleOptionsRef.current(),
           eventHint: req.eventHint,
           ...req.options,
         }).then((pkg) => {
           if (!pkg) {
             return;
           }
-          void launchProactiveInitiative(pkg, {
+          void launchProactiveInitiativeRef.current(pkg, {
             ignoreKindDailyCap: req.lab,
           }).then((result) => {
             if (result.sent && req.scenario) {
@@ -496,9 +507,6 @@ export function useProactiveInitiative(input: {
     settings.activityTrackingEnabled,
     ollamaOnline,
     isOpen,
-    prepareProactivePackage,
-    proactiveBundleOptions,
-    launchProactiveInitiative,
   ]);
 
   return {

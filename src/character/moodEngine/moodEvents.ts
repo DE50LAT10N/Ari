@@ -206,3 +206,14 @@ export function proactiveToMoodEvent(input: {
   };
 }
 
+export function adviceIgnoredToMoodEvents(count = 1): MoodEvent[] {
+  const repeats = Math.min(4, Math.max(1, count));
+  return Array.from({ length: repeats }, (_, index) =>
+    interactionToMoodEvent({
+      interaction: "ignored_initiative",
+      intensity: 1,
+      metadata: { count: repeats, source: "advice_ignored", repeatIndex: index },
+    }),
+  );
+}
+

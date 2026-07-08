@@ -1,6 +1,9 @@
 import type { CharacterMood } from "./mood";
 import { decayMood } from "./mood";
 import type { CharacterEmotion } from "../types/character";
+import { classifyMood } from "./moodEngine/moodClassifier";
+import { deriveMoodPolicy } from "./moodEngine/moodPolicy";
+import { fromCharacterMood } from "./moodEngine/moodVector";
 
 export type MoodArchetype =
   | "irritated"
@@ -128,18 +131,59 @@ export function moodStatusLabel(mood: CharacterMood): string {
 
 const ARCHETYPE_AVATAR_EMOTION: Record<MoodArchetype, CharacterEmotion> = {
   irritated: "annoyed",
-  playful: "amused",
-  warm: "empathetic",
+  playful: "happy",
+  warm: "blush",
   sleepy: "sleepy",
-  gloomy: "pensive",
+  gloomy: "sad",
   curious: "curious",
-  observant: "calm",
-  calm: "neutral",
+  observant: "pensive",
+  calm: "calm",
 };
 
-/** Sprite aligned with moodStatusLabel / deriveMoodArchetype. */
+function pickPreferredAvatarEmotion(
+  mood: CharacterMood,
+  preferred: CharacterEmotion[],
+): CharacterEmotion {
+  if (!preferred.length) {
+    return "neutral";
+  }
+  const current = decayMood(mood);
+  const seed = Math.abs(
+    Math.floor(
+      current.warmth * 19.7 +
+        current.energy * 13.3 +
+        current.irritation * 23.1,
+    ),
+  );
+  return preferred[seed % preferred.length] ?? preferred[0]!;
+}
+
+/** Sprite aligned with mood axes; prefers classifier when signal is clear. */
 export function avatarEmotionFromMood(mood: CharacterMood): CharacterEmotion {
-  return ARCHETYPE_AVATAR_EMOTION[deriveMoodArchetype(mood)];
+  const current = decayMood(mood);
+  const now = Date.now();
+  const classified = classifyMood(current, { now });
+  const policy = deriveMoodPolicy(fromCharacterMood(current), {
+    classification: classified,
+    now,
+  });
+
+  if (classified.confidence >= 0.16 && classified.emotion !== "neutral") {
+    return classified.emotion;
+  }
+
+  const preferred = policy.preferredEmotions.filter(
+    (emotion) => emotion !== "neutral",
+  );
+  if (preferred.length > 0) {
+    return pickPreferredAvatarEmotion(current, preferred);
+  }
+
+  if (classified.emotion !== "neutral" || classified.confidence >= 0.1) {
+    return classified.emotion;
+  }
+
+  return ARCHETYPE_AVATAR_EMOTION[classified.archetype];
 }
 
 export function getMoodBehaviorProfile(mood: CharacterMood): MoodBehaviorProfile {

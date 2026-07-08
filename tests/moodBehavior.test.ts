@@ -9,6 +9,7 @@ import {
 } from "../src/character/mood";
 import {
   buildMoodRefusalReply,
+  avatarEmotionFromMood,
   deriveMoodArchetype,
   moodStatusLabel,
   shouldMoodRefuseRequest,
@@ -138,6 +139,13 @@ describe("moodBehavior", () => {
     expect(result.handled).toBe(true);
     if (!result.handled) return;
     expect(result.command).toBe("mood-refusal");
+  });
+
+  it("reaches irritated archetype after one ignored initiative", () => {
+    const base = mood({ warmth: 0.3, energy: 0.4, irritation: 0.1 });
+    const afterOnce = applyInteractionToMood(base, "ignored_initiative");
+    expect(deriveMoodArchetype(afterOnce)).toBe("irritated");
+    expect(avatarEmotionFromMood(afterOnce)).toBe("annoyed");
   });
 
   it("applies stronger irritation shift when initiative is ignored", () => {

@@ -83,7 +83,27 @@ describe("proactiveEngine", () => {
     expect(decision.adviceUrgency.level).toBe("low");
   });
 
-  it("protects a ready smalltalk timer after an advice streak", () => {
+  it("protects smalltalk when advice is not ready after an advice streak", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {});
+    const decision = planProactiveEngineTick({
+      settings: defaultSettings,
+      bundle,
+      urgency: noneUrgency(),
+      llmOnline: true,
+      idleGateOpen: true,
+      loading: false,
+      smalltalkReady: true,
+      sinceAdviceAttemptMs: 120_000,
+      adviceIntervalMs: 60_000,
+      toneSnapshot: { adviceToday: 2, smalltalkToday: 1, recent: [] },
+      recentAdviceStreak: 1,
+    });
+
+    expect(decision.action).toBe("try_smalltalk");
+    expect(decision.reason).toBe("protected smalltalk timer");
+  });
+
+  it("does not protect smalltalk over ready medium-urgency advice", () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "adviceEngine.ts - desktop-character - Cursor",
@@ -109,8 +129,7 @@ describe("proactiveEngine", () => {
       recentAdviceStreak: 1,
     });
 
-    expect(decision.action).toBe("try_smalltalk");
-    expect(decision.reason).toBe("protected smalltalk timer");
+    expect(decision.action).toBe("try_advice");
   });
 
   it("still lets high urgency advice preempt the smalltalk timer", () => {

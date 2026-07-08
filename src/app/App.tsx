@@ -58,10 +58,10 @@ import {
   type CharacterMood,
 } from "../character/mood";
 import {
+  adviceIgnoredToMoodEvents,
   emotionToMoodEvent,
   interactionToMoodEvent,
   isMoodEngineEnabled,
-  proactiveToMoodEvent,
   triggerToMoodEvent,
   updateMoodFromEvents,
   type MoodEvent,
@@ -602,11 +602,17 @@ export function App() {
           durationMs: 4200,
         });
         markScenarioTriggered(scenario);
+        if (scenario === "long_silence") {
+          applyInteractionMood("long_silence");
+        }
         return true;
       }
       const shown = triggerSilentReaction(outcome.reaction, outcome.emotion);
       if (shown) {
         markScenarioTriggered(scenario);
+        if (scenario === "long_silence") {
+          applyInteractionMood("long_silence");
+        }
       }
       return shown;
     }
@@ -921,13 +927,7 @@ export function App() {
         return;
       }
 
-      applyMoodEngineEvents([
-        proactiveToMoodEvent({
-          kind: "advice_ignored",
-          intensity: Math.min(3, Math.max(1, count)),
-          metadata: { count },
-        }),
-      ]);
+      applyMoodEngineEvents(adviceIgnoredToMoodEvents(count));
     };
     window.addEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
     return () =>

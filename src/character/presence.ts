@@ -162,11 +162,39 @@ export function chooseMicroReaction({
       thought: microReactionThought(mood, scene, activeWindow),
     };
   }
+  if (mood.irritation > 0.22 && mood.irritation <= 0.45 && random < 0.34) {
+    return {
+      id: Date.now(),
+      type: random > 0.5 ? "thinking" : "anger",
+      emotion: random > 0.5 ? "worried" : "determined",
+      thought: microReactionThought(mood, scene, activeWindow),
+    };
+  }
+  if (mood.warmth > 0.58 && mood.energy < 0.42 && random < 0.32) {
+    return {
+      id: Date.now(),
+      type: "heart",
+      emotion: random > 0.5 ? "shy" : "blush",
+      thought: microReactionThought(mood, scene, activeWindow),
+    };
+  }
+  if (mood.warmth > 0.5 && mood.energy > 0.52 && random < 0.28) {
+    return {
+      id: Date.now(),
+      type: "sparkles",
+      emotion: random > 0.45 ? "proud" : "happy",
+      thought: microReactionThought(mood, scene, activeWindow),
+    };
+  }
   if (mood.energy > 0.62 && random < 0.35) {
     return { id: Date.now(), type: "sparkles", emotion: "excited" };
   }
   if (mood.warmth < 0.2 && random < 0.3) {
-    return { id: Date.now(), type: "thinking", emotion: "pensive" };
+    return {
+      id: Date.now(),
+      type: "thinking",
+      emotion: random > 0.5 ? "pensive" : "sad",
+    };
   }
   if (scene === "morning" && mood.warmth > 0.45) {
     return { id: Date.now(), type: "sparkles", emotion: "happy" };

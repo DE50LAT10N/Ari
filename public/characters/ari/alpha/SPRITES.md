@@ -29,8 +29,10 @@
 
 | Файл | Когда |
 |------|--------|
-| `idle.png` | neutral + idle / thinking |
+| `idle.png` | neutral + idle |
 | `speaking.png` | state speaking (blip / ответ) |
+
+`neutral.png` показывается при `emotion=neutral` и `state=thinking`.
 
 Проверка: `npm run validate:sprites` — размер, наличие, дубликаты байтов.
 

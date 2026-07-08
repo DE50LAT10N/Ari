@@ -52,84 +52,112 @@ const EMOTION_RULES: EmotionRule[] = [
     weight: 1,
     score: (mood, ctx) => {
       const hour = new Date(ctx.now).getHours();
-      const night = hour >= 23 || hour < 6 ? 0.35 : 0;
-      const lowEnergy = softStep(0.28 - (mood.energy ?? 0), 0.1, 0.08);
-      return { score: 0.15 + night + lowEnergy, reason: ["low energy / late hour"] };
+      const night = hour >= 23 || hour < 6 ? 0.2 : 0;
+      const energy = mood.energy ?? 0;
+      const veryLow = softStep(0.24 - energy, 0.04, 0.06);
+      return { score: 0.14 + night + veryLow * 1.25, reason: ["low energy / late hour"] };
     },
   },
   {
     id: "bored",
     weight: 1,
-    score: (mood) => ({
-      score: 0.12 + softStep(0.38 - (mood.energy ?? 0), 0.12, 0.1),
-      reason: ["energy low"],
-    }),
+    score: (mood) => {
+      const energy = mood.energy ?? 0;
+      const midLow =
+        softStep(0.38 - energy, 0.1, 0.1) * softStep(energy - 0.16, 0.04, 0.06);
+      return { score: 0.13 + midLow, reason: ["energy low"] };
+    },
   },
   {
     id: "excited",
     weight: 1,
     score: (mood) => ({
       score:
-        0.14 +
-        softStep(mood.energy ?? 0, 0.52, 0.1) *
-          (0.65 + softStep(mood.warmth ?? 0, 0.28, 0.1)),
+        0.12 +
+        softStep(mood.energy ?? 0, 0.68, 0.08) *
+          (0.8 + softStep(mood.warmth ?? 0, 0.25, 0.12)),
       reason: ["energy high + warmth"],
     }),
   },
   {
     id: "happy",
     weight: 1,
-    score: (mood) => ({
-      score:
-        0.14 +
-        softStep(mood.warmth ?? 0, 0.32, 0.1) *
-          (0.75 + softStep(mood.energy ?? 0, 0.38, 0.1)),
-      reason: ["warm + medium energy"],
-    }),
+    score: (mood) => {
+      const energy = mood.energy ?? 0;
+      const warmth = mood.warmth ?? 0;
+      const notTooHyper = 1 - softStep(energy - 0.7, 0.04, 0.06) * 0.65;
+      return {
+        score:
+          (0.14 +
+            softStep(warmth, 0.32, 0.1) *
+              (0.75 + softStep(energy - 0.32, 0.08, 0.1))) *
+          notTooHyper,
+        reason: ["warm + medium energy"],
+      };
+    },
   },
   {
     id: "amused",
     weight: 1,
-    score: (mood) => ({
-      score:
-        0.12 +
-        softStep(mood.energy ?? 0, 0.46, 0.1) *
-          (0.65 + softStep(0.16 - (mood.irritation ?? 0), 0, 0.1)),
-      reason: ["high energy + low irritation"],
-    }),
+    score: (mood) => {
+      const energy = mood.energy ?? 0;
+      const playfulBand =
+        softStep(energy - 0.58, 0.06, 0.08) * softStep(0.78 - energy, 0.06, 0.08);
+      return {
+        score:
+          0.12 +
+          playfulBand *
+            (0.85 + softStep(0.16 - (mood.irritation ?? 0), 0, 0.1)),
+        reason: ["high energy + low irritation"],
+      };
+    },
   },
   {
     id: "curious",
     weight: 1,
-    score: (mood) => ({
-      score:
-        0.1 +
-        softStep(mood.energy ?? 0, 0.5, 0.12) *
-          (0.6 + softStep(0.22 - (mood.irritation ?? 0), 0, 0.12)),
-      reason: ["energetic + not irritated"],
-    }),
+    score: (mood) => {
+      const energy = mood.energy ?? 0;
+      const band =
+        softStep(energy, 0.48, 0.08) * softStep(0.68 - energy, 0.08, 0.08);
+      return {
+        score:
+          0.13 +
+          band * (0.75 + softStep(0.2 - (mood.irritation ?? 0), 0, 0.1)),
+        reason: ["energetic + not irritated"],
+      };
+    },
   },
   {
     id: "empathetic",
     weight: 1,
-    score: (mood) => ({
-      score:
+    score: (mood) => {
+      const warmth = mood.warmth ?? 0;
+      const energy = mood.energy ?? 0;
+      const blushZone =
+        softStep(warmth - 0.62, 0.04, 0.06) * softStep(0.4 - energy, 0.06, 0.08);
+      const base =
         0.12 +
-        softStep(mood.warmth ?? 0, 0.48, 0.08) *
-          (0.75 + softStep(0.14 - (mood.irritation ?? 0), 0, 0.08)),
-      reason: ["very warm + calm"],
-    }),
+        softStep(warmth, 0.46, 0.08) *
+          (0.75 + softStep(0.14 - (mood.irritation ?? 0), 0, 0.08));
+      return {
+        score: base * (1 - blushZone * 0.55),
+        reason: ["very warm + calm"],
+      };
+    },
   },
   {
     id: "calm",
     weight: 1,
-    score: (mood) => ({
-      score:
-        0.25 +
-        softStep(0.24 - Math.abs(mood.energy ?? 0.45), 0.1, 0.12) *
-          softStep(0.2 - Math.abs(mood.irritation ?? 0), 0.1, 0.12),
-      reason: ["stable / calm"],
-    }),
+    score: (mood) => {
+      const energy = mood.energy ?? 0;
+      const irritation = mood.irritation ?? 0;
+      const warmth = mood.warmth ?? 0;
+      const centered =
+        softStep(0.28 - Math.abs(energy - 0.44), 0.08, 0.1) *
+        softStep(0.22 - Math.abs(irritation), 0.08, 0.1) *
+        softStep(0.28 - Math.abs(warmth - 0.28), 0.1, 0.12);
+      return { score: 0.22 + centered * 0.45, reason: ["stable / calm"] };
+    },
   },
   {
     id: "pensive",
@@ -147,9 +175,9 @@ const EMOTION_RULES: EmotionRule[] = [
     weight: 1,
     score: (mood) => ({
       score:
-        0.1 +
-        softStep(mood.irritation ?? 0, 0.12, 0.1) *
-          softStep(0.48 - (mood.warmth ?? 0.25), 0.1, 0.18),
+        0.12 +
+        softStep(mood.irritation ?? 0, 0.16, 0.08) *
+          softStep(0.36 - (mood.warmth ?? 0), 0.1, 0.12),
       reason: ["slight irritation + lower warmth"],
     }),
   },
@@ -168,47 +196,70 @@ const EMOTION_RULES: EmotionRule[] = [
     id: "surprised",
     weight: 1,
     score: (mood) => ({
-      score: 0.06 + softStep(mood.energy ?? 0, 0.72, 0.08),
+      score: 0.1 + softStep(mood.energy ?? 0, 0.8, 0.06),
       reason: ["very high energy spike"],
     }),
   },
   {
     id: "proud",
     weight: 1,
-    score: (mood) => ({
-      score:
-        0.12 +
-        softStep(mood.warmth ?? 0, 0.36, 0.1) *
-          softStep(mood.energy ?? 0, 0.4, 0.1),
-      reason: ["warm + energized"],
-    }),
+    score: (mood) => {
+      const warmth = mood.warmth ?? 0;
+      const energy = mood.energy ?? 0;
+      const band =
+        softStep(warmth, 0.4, 0.08) *
+        softStep(0.62 - warmth, 0.08, 0.08) *
+        softStep(energy, 0.44, 0.08) *
+        softStep(0.66 - energy, 0.08, 0.08);
+      return { score: 0.13 + band * 1.4, reason: ["warm + energized"] };
+    },
   },
   {
     id: "determined",
     weight: 1,
-    score: (mood) => ({
-      score:
-        0.08 +
-        softStep(mood.energy ?? 0, 0.48, 0.12) *
-          softStep(mood.irritation ?? 0, 0.06, 0.12),
-      reason: ["focused energy"],
-    }),
+    score: (mood) => {
+      const energy = mood.energy ?? 0;
+      const irritation = mood.irritation ?? 0;
+      return {
+        score:
+          0.11 +
+          softStep(energy, 0.52, 0.1) *
+            softStep(0.72 - energy, 0.1, 0.1) *
+            softStep(irritation, 0.1, 0.1) *
+            softStep(0.28 - irritation, 0.08, 0.1),
+        reason: ["focused energy"],
+      };
+    },
   },
   {
     id: "shy",
     weight: 1,
-    score: (mood) => ({
-      score: 0.1 + softStep(mood.warmth ?? 0, 0.58, 0.08) * softStep(0.42 - (mood.energy ?? 0), 0.1, 0.1),
-      reason: ["very warm + quieter energy"],
-    }),
+    score: (mood) => {
+      const warmth = mood.warmth ?? 0;
+      const energy = mood.energy ?? 0;
+      return {
+        score:
+          0.13 +
+          softStep(warmth, 0.64, 0.07) *
+            softStep(0.36 - energy, 0.08, 0.1) *
+            softStep(energy - 0.14, 0.04, 0.06),
+        reason: ["very warm + quieter energy"],
+      };
+    },
   },
   {
     id: "blush",
     weight: 1,
-    score: (mood) => ({
-      score: 0.1 + softStep(mood.warmth ?? 0, 0.58, 0.07),
-      reason: ["extremely warm"],
-    }),
+    score: (mood) => {
+      const warmth = mood.warmth ?? 0;
+      const energy = mood.energy ?? 0;
+      return {
+        score:
+          0.14 +
+          softStep(warmth, 0.64, 0.06) * softStep(0.44 - energy, 0.08, 0.1),
+        reason: ["extremely warm"],
+      };
+    },
   },
   {
     id: "neutral",

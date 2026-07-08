@@ -41,16 +41,16 @@ function preferredEmotionsFor(
   emotion: CharacterEmotion,
 ): CharacterEmotion[] {
   const byArchetype: Record<MoodArchetype, CharacterEmotion[]> = {
-    irritated: ["annoyed", "determined", "amused"],
-    playful: ["amused", "curious", "happy", "excited"],
-    warm: ["empathetic", "calm", "happy", "proud"],
+    irritated: ["annoyed", "determined", "amused", "worried"],
+    playful: ["amused", "curious", "happy", "excited", "surprised"],
+    warm: ["empathetic", "blush", "happy", "proud", "shy"],
     sleepy: ["sleepy", "bored", "pensive", "calm"],
-    gloomy: ["pensive", "sad", "calm"],
-    curious: ["curious", "determined", "amused"],
-    observant: ["curious", "calm", "pensive"],
-    calm: ["calm", "neutral", "curious"],
+    gloomy: ["pensive", "sad", "worried", "calm"],
+    curious: ["curious", "determined", "amused", "surprised"],
+    observant: ["curious", "calm", "pensive", "determined"],
+    calm: ["calm", "neutral", "curious", "pensive", "empathetic"],
   };
-  return Array.from(new Set([emotion, ...byArchetype[archetype]])).slice(0, 4);
+  return Array.from(new Set([emotion, ...byArchetype[archetype]])).slice(0, 6);
 }
 
 function promptLinesFor(policy: Omit<MoodPolicy, "promptLines">): string[] {

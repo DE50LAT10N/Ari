@@ -24,13 +24,24 @@ describe("avatarEmotionFromMood", () => {
   });
 
   it("aligns irritated status archetype with annoyed sprite", () => {
-    const mood: CharacterMood = {
+    const irritated: CharacterMood = {
       warmth: 0.2,
       energy: 0.55,
       irritation: 0.5,
       updatedAt: Date.now(),
     };
-    expect(deriveMoodArchetype(mood)).toBe("irritated");
-    expect(avatarEmotionFromMood(mood)).toBe("annoyed");
+    expect(deriveMoodArchetype(irritated)).toBe("irritated");
+    expect(avatarEmotionFromMood(irritated)).toBe("annoyed");
+  });
+
+  it("uses classifier or preferred emotions beyond archetype fallback", () => {
+    const playful: CharacterMood = {
+      warmth: 0.35,
+      energy: 0.68,
+      irritation: 0.04,
+      updatedAt: Date.now(),
+    };
+    const emotion = avatarEmotionFromMood(playful);
+    expect(["amused", "curious", "happy", "excited", "surprised"]).toContain(emotion);
   });
 });

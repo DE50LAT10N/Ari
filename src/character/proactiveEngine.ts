@@ -2,7 +2,6 @@ import type { AppSettings } from "../settings/appSettings";
 import type { ProactiveToneSnapshot } from "../memory/memoryTelemetry";
 import {
   isAdviceSkewedToday,
-  isSmalltalkSkewedToday,
 } from "../memory/memoryTelemetry";
 import type { AdviceUrgency } from "./adviceUrgency";
 import {
@@ -51,8 +50,7 @@ export function planProactiveEngineTick(input: {
     input.llmOnline &&
     hasActionableSignals &&
     input.sinceAdviceAttemptMs >= input.adviceIntervalMs &&
-    (input.toneSnapshot.adviceToday === 0 ||
-      isSmalltalkSkewedToday(input.toneSnapshot));
+    input.toneSnapshot.adviceToday === 0;
 
   const adviceReady = shouldAttemptAdviceCycle({
     advisorEnabled: input.settings.advisorEnabled,
@@ -73,21 +71,18 @@ export function planProactiveEngineTick(input: {
     adviceUrgencyLevel: input.urgency.level,
     recentAdviceStreak: input.recentAdviceStreak,
     adviceSkewedToday: isAdviceSkewedToday(input.toneSnapshot),
-    smalltalkSkewedToday: isSmalltalkSkewedToday(input.toneSnapshot),
     adviceToday: input.toneSnapshot.adviceToday,
     sinceAdviceAttemptMs: input.sinceAdviceAttemptMs,
     adviceCooldownMs: input.adviceIntervalMs,
   });
-
-  if (adviceStarved && input.idleGateOpen && !input.loading) {
-    action = "try_advice";
-  }
+  const policyAction = action;
 
   const moodPolicy = deriveMoodPolicy(fromCharacterMood(loadMood()));
   if (
     moodPolicy.initiativeBias < 0.38 &&
     (input.urgency.level === "none" || input.urgency.level === "low") &&
     action === "try_advice" &&
+    !adviceReady &&
     !adviceStarved
   ) {
     action = input.smalltalkReady ? "try_smalltalk" : "silent";
@@ -96,7 +91,8 @@ export function planProactiveEngineTick(input: {
     moodPolicy.initiativeBias > 0.68 &&
     action === "silent" &&
     input.smalltalkReady &&
-    input.urgency.level !== "high"
+    input.urgency.level !== "high" &&
+    !adviceReady
   ) {
     action = "try_smalltalk";
   }
@@ -104,8 +100,8 @@ export function planProactiveEngineTick(input: {
   const protectSmalltalkSlot =
     input.smalltalkReady &&
     input.recentAdviceStreak >= 1 &&
-    input.urgency.level !== "high" &&
-    !isSmalltalkSkewedToday(input.toneSnapshot);
+    (input.urgency.level === "none" || input.urgency.level === "low") &&
+    !adviceReady;
   if (protectSmalltalkSlot) {
     action = "try_smalltalk";
   }
@@ -137,10 +133,18 @@ export function planProactiveEngineTick(input: {
         (candidate) => `${candidate.kind}:${candidate.score.toFixed(2)}`,
       );
       const winner = ranked[0]?.kind;
-      if (winner && winner !== "silent") {
+      if (
+        winner &&
+        winner !== "silent" &&
+        !(policyAction === "try_advice" && adviceReady)
+      ) {
         action = winner;
       }
     }
+  }
+
+  if (adviceStarved && input.idleGateOpen && !input.loading) {
+    action = "try_advice";
   }
 
   const adviceUrgency =
@@ -153,7 +157,7 @@ export function planProactiveEngineTick(input: {
           reasons:
             input.urgency.reasons.length > 0
               ? input.urgency.reasons
-              : ["принудительный совет при actionable signals"],
+              : ["actionable signals, советов сегодня ещё не было"],
         }
       : input.urgency;
 
@@ -165,13 +169,13 @@ export function planProactiveEngineTick(input: {
     adviceUrgency,
     reason: protectSmalltalkSlot
       ? "protected smalltalk timer"
-      : adviceStarved
-      ? "advice starved"
-      : action === "silent"
-        ? "no proactive slot"
-        : relevanceScores
-          ? `ranker ${action}`
-          : action,
+      : adviceStarved && action === "try_advice"
+        ? "advice starved"
+        : action === "silent"
+          ? "no proactive slot"
+          : relevanceScores
+            ? `ranker ${action}`
+            : action,
     relevanceScores,
   };
 }

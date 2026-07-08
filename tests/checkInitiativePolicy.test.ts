@@ -38,19 +38,7 @@ describe("checkInitiativePolicy", () => {
     ).toBe("try_advice");
   });
 
-  it("lets low-urgency advice through when smalltalk is dominating the day", () => {
-    expect(
-      evaluateProactiveTick({
-        adviceReady: true,
-        smalltalkReady: true,
-        idleGateOpen: true,
-        adviceUrgencyLevel: "low",
-        smalltalkSkewedToday: true,
-      }),
-    ).toBe("try_advice");
-  });
-
-  it("prefers advice when no advice today and smalltalk skewed despite streak", () => {
+  it("defers to smalltalk after a low-urgency advice in the streak", () => {
     expect(
       evaluateProactiveTick({
         adviceReady: true,
@@ -58,10 +46,9 @@ describe("checkInitiativePolicy", () => {
         idleGateOpen: true,
         adviceUrgencyLevel: "low",
         recentAdviceStreak: 1,
-        smalltalkSkewedToday: true,
         adviceToday: 0,
       }),
-    ).toBe("try_advice");
+    ).toBe("try_smalltalk");
   });
 
   it("prefers advice at medium urgency even after a recent advice streak", () => {
@@ -112,7 +99,20 @@ describe("checkInitiativePolicy", () => {
     ).toBe("try_advice");
   });
 
-  it("prefers smalltalk after one low-urgency advice in the streak", () => {
+  it("prefers advice when advice is ready even with urgency none", () => {
+    expect(
+      evaluateProactiveTick({
+        adviceReady: true,
+        smalltalkReady: true,
+        idleGateOpen: true,
+        adviceUrgencyLevel: "none",
+        recentAdviceStreak: 2,
+        adviceToday: 10,
+      }),
+    ).toBe("try_advice");
+  });
+
+  it("falls back to smalltalk after one low-urgency advice in the streak", () => {
     expect(
       evaluateProactiveTick({
         adviceReady: true,
