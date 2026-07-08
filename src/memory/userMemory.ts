@@ -1,4 +1,5 @@
 import { normalizeComparableText } from "../platform/textNormalize";
+import { ariLog } from "../platform/logger";
 import { putMany, waitForTransaction } from "./idbUtils";
 
 export type UserMemoryFact = {
@@ -75,9 +76,9 @@ function openDatabase(): Promise<IDBDatabase> {
       }
     };
     request.onblocked = () => {
-      console.warn(
-        "[ari-memory] IndexedDB upgrade blocked by another connection",
-      );
+      ariLog("memory", "warn", {
+        message: "IndexedDB upgrade blocked by another connection",
+      });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);

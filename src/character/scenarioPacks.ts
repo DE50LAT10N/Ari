@@ -1,6 +1,7 @@
 import type { Scenario } from "./scenarioEngine";
 import type { PresenceScene } from "./presence";
 import type { CharacterEmotion } from "../types/character";
+import { pickDeterministic } from "./deterministicSelector";
 
 export type ScenarioPackReaction = {
   emotion: CharacterEmotion;
@@ -135,7 +136,13 @@ export function pickPackReaction(
     return null;
   }
 
-  const picked = matched[Math.floor(Math.random() * matched.length)];
+  const picked = pickDeterministic(
+    `scenario-pack:${ctx.scenario}:${ctx.scene}:${ctx.focusSessionActive}`,
+    matched,
+  );
+  if (!picked) {
+    return null;
+  }
   saveCooldown(picked.key);
   return picked.reaction;
 }

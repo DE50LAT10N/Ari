@@ -401,8 +401,8 @@ export function canEmitAdviceNow(
 export function armProactiveGracePeriod(
   adviceIntervalMs: number,
   smalltalkIntervalMs = adviceIntervalMs,
+  now = Date.now(),
 ): void {
-  const now = Date.now();
   const adviceGraceAt = now - Math.max(adviceIntervalMs, 15_000);
   const smalltalkGraceAt = now - Math.max(smalltalkIntervalMs, 15_000);
   markAdviceAttemptAt(adviceGraceAt);
@@ -415,15 +415,16 @@ export function armProactiveGracePeriod(
 export function ensureProactiveClockStarted(
   adviceIntervalMs = 20 * 60_000,
   smalltalkIntervalMs = adviceIntervalMs,
+  now = Date.now(),
 ): void {
   if (localStorage.getItem(LAST_PROACTIVE_MESSAGE_KEY) === null) {
-    setLastProactiveMessageAt(Date.now() - Math.min(adviceIntervalMs, smalltalkIntervalMs));
+    setLastProactiveMessageAt(now - Math.min(adviceIntervalMs, smalltalkIntervalMs));
   }
   if (localStorage.getItem(LAST_ADVICE_ATTEMPT_KEY) === null) {
-    markAdviceAttemptAt(Date.now() - adviceIntervalMs);
+    markAdviceAttemptAt(now - adviceIntervalMs);
   }
   if (localStorage.getItem(LAST_SMALLTALK_ATTEMPT_KEY) === null) {
-    markSmalltalkAttemptAt(Date.now() - smalltalkIntervalMs);
+    markSmalltalkAttemptAt(now - smalltalkIntervalMs);
   }
   if (localStorage.getItem(LAST_PROACTIVE_ATTEMPT_KEY) === null) {
     localStorage.setItem(

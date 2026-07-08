@@ -16,3 +16,11 @@ export function clamp01(value: number): number {
   }
   return clamp(value, 0, 1);
 }
+
+export function sigmoid(value: number): number {
+  return 1 / (1 + Math.exp(-value));
+}
+
+export function clipWeight(value: number, limit: number): number {
+  return clamp(value, -limit, limit);
+}

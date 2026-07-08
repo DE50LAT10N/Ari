@@ -7,8 +7,11 @@ import { inferEmotionFromReply } from "./emotionPresentation";
 import type { ResponseMode } from "./responseModes";
 import {
   isSolicitationSentence,
+  hasAnyReplyValidationIssue,
+  hasReplyValidationIssue,
   validateCharacterReply,
   type OocValidationResult,
+  type ReplyValidationIssue,
   type ReplyValidationContext,
 } from "./responseValidation";
 
@@ -30,11 +33,11 @@ export type ProcessReplyOptions = {
 export function shouldUseInCharacterFallback(
   validation: OocValidationResult,
 ): boolean {
-  return validation.issues.some((issue) =>
-    ["identity leak", "prompt disclosure", "injection compliance"].includes(
-      issue,
-    ),
-  );
+  return hasAnyReplyValidationIssue(validation.issues, [
+    "identity leak",
+    "prompt disclosure",
+    "injection compliance",
+  ]);
 }
 
 export function buildInCharacterFallback(): ProcessedReply {
@@ -71,7 +74,7 @@ export function processModelReply(
     userAskedQuestion: options.userAskedQuestion,
     recentAssistantReplies: options.recentAssistantReplies,
   });
-  const issues = [...validation.issues];
+  const issues: ReplyValidationIssue[] = [...validation.issues];
 
   if (!parsedEmotion && !options.streamedEmotion) {
     issues.push("missing emotion tag");
@@ -122,7 +125,7 @@ export function trySoftenTrailingQuestionReply(
   options: ProcessReplyOptions,
 ): ProcessedReply {
   const issues = processed.validation.issues;
-  if (!issues.includes("habitual trailing question")) {
+  if (!hasReplyValidationIssue(issues, "habitual trailing question")) {
     return processed;
   }
   if (issues.some((issue) => issue !== "habitual trailing question")) {
@@ -150,8 +153,7 @@ export function trySoftenTrailingQuestionReply(
 }
 
 export function shouldRetryReply(validation: OocValidationResult): boolean {
-  return validation.issues.some((issue) =>
-    [
+  return hasAnyReplyValidationIssue(validation.issues, [
       "emotion tag leak",
       "missing emotion tag",
       "identity leak",
@@ -175,11 +177,12 @@ export function shouldRetryReply(validation: OocValidationResult): boolean {
       "proactive quality",
       "proactive meta commentary",
       "advice novelty",
-    ].includes(issue),
-  );
+    ]);
 }
 
-export function buildCorrectionUserMessage(issues: string[]): string {
+export function buildCorrectionUserMessage(
+  issues: readonly ReplyValidationIssue[],
+): string {
   const lines = [
     "[Системная коррекция: предыдущий ответ нарушил формат или правила. Перепиши реплику.]",
   ];

@@ -1,5 +1,6 @@
 import { embeddingNorm } from "../memory/memoryScoring";
 import { yieldToMain } from "../platform/asyncTimeout";
+import { ariLog } from "../platform/logger";
 
 export type RagChunk = {
   id: string;
@@ -60,7 +61,9 @@ function openDatabase(): Promise<IDBDatabase> {
       }
     };
     request.onblocked = () => {
-      console.warn("[ari-rag] IndexedDB upgrade blocked by another connection");
+      ariLog("rag", "warn", {
+        message: "IndexedDB upgrade blocked by another connection",
+      });
     };
     request.onsuccess = () => {
       if (settled) {

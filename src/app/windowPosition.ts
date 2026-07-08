@@ -4,6 +4,7 @@ import {
   getCurrentWindow,
   primaryMonitor,
 } from "@tauri-apps/api/window";
+import { logError } from "../platform/logger";
 
 type ResizeDirection =
   | "East"
@@ -164,7 +165,7 @@ export async function startWindowResize(
   try {
     await getCurrentWindow().startResizeDragging(direction);
   } catch (error) {
-    console.error("Failed to start window resize", error);
+    logError("Failed to start window resize", error);
   }
 }
 

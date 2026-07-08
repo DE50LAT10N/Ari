@@ -1,4 +1,8 @@
 import type { AdviceUrgencyLevel } from "./adviceUrgency";
+import {
+  PROACTIVE_MIN_RECENT_ADVICE_COOLDOWN_MS,
+  PROACTIVE_RECENT_ADVICE_COOLDOWN_FACTOR,
+} from "./proactivePolicyConfig";
 
 export type ProactiveTickAction =
   | "silent"
@@ -32,7 +36,11 @@ export function evaluateProactiveTick(input: {
   const recentAdviceCooldown =
     streak >= 1 &&
     adviceCooldownMs > 0 &&
-    sinceAdviceAttemptMs < Math.max(adviceCooldownMs * 0.55, 90_000);
+    sinceAdviceAttemptMs <
+      Math.max(
+        adviceCooldownMs * PROACTIVE_RECENT_ADVICE_COOLDOWN_FACTOR,
+        PROACTIVE_MIN_RECENT_ADVICE_COOLDOWN_MS,
+      );
 
   if (
     input.adviceReady &&

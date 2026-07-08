@@ -18,17 +18,15 @@ import { loadMood } from "./mood";
 import { deriveMoodPolicy } from "./moodEngine/moodPolicy";
 import { fromCharacterMood } from "./moodEngine/moodVector";
 
-export type ProactiveEngineDecision = {
-  action: ProactiveTickAction;
-  allowSmalltalk: boolean;
-  adviceReady: boolean;
-  adviceStarved: boolean;
-  adviceUrgency: AdviceUrgency;
-  reason: string;
-  relevanceScores?: string[];
-};
+export type ProactiveDecisionReasonCode =
+  | "protected_smalltalk_timer"
+  | "advice_starved"
+  | "no_proactive_slot"
+  | "ranker"
+  | "try_advice"
+  | "try_smalltalk";
 
-export function planProactiveEngineTick(input: {
+export type ProactiveDecisionInput = {
   settings: AppSettings;
   bundle: InitiativeSignalBundle;
   urgency: AdviceUrgency;
@@ -40,7 +38,24 @@ export function planProactiveEngineTick(input: {
   adviceIntervalMs: number;
   toneSnapshot: ProactiveToneSnapshot;
   recentAdviceStreak: number;
-}): ProactiveEngineDecision {
+};
+
+export type ProactiveDecisionResult = {
+  action: ProactiveTickAction;
+  allowSmalltalk: boolean;
+  adviceReady: boolean;
+  adviceStarved: boolean;
+  adviceUrgency: AdviceUrgency;
+  reasonCode: ProactiveDecisionReasonCode;
+  reason: string;
+  relevanceScores?: string[];
+};
+
+export type ProactiveEngineDecision = ProactiveDecisionResult;
+
+export function planProactiveEngineTick(
+  input: ProactiveDecisionInput,
+): ProactiveDecisionResult {
   const hasActionableSignals = hasSubstantiveAdviceSignals(
     input.bundle,
     input.urgency,
@@ -161,12 +176,25 @@ export function planProactiveEngineTick(input: {
         }
       : input.urgency;
 
+  const reasonCode: ProactiveDecisionReasonCode = protectSmalltalkSlot
+    ? "protected_smalltalk_timer"
+    : adviceStarved && action === "try_advice"
+      ? "advice_starved"
+      : action === "silent"
+        ? "no_proactive_slot"
+        : relevanceScores
+          ? "ranker"
+          : action === "try_advice"
+            ? "try_advice"
+            : "try_smalltalk";
+
   return {
     action,
     allowSmalltalk: action === "try_smalltalk",
     adviceReady,
     adviceStarved,
     adviceUrgency,
+    reasonCode,
     reason: protectSmalltalkSlot
       ? "protected smalltalk timer"
       : adviceStarved && action === "try_advice"

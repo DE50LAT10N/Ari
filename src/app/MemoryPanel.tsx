@@ -21,6 +21,7 @@ import {
   resolveAriInboxItem,
   type AriInboxItem,
 } from "../memory/ariInbox";
+import { logError } from "../platform/logger";
 
 type MemoryPanelProps = {
   onBack: () => void;
@@ -67,7 +68,7 @@ export function MemoryPanel({ onBack }: MemoryPanelProps) {
         ),
       );
     } catch (error) {
-      console.error("Failed to load Ari memory", error);
+      logError("Failed to load Ari memory", error);
       setLoadError(
         error instanceof Error
           ? error.message

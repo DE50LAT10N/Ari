@@ -46,6 +46,7 @@ import {
   getLastSentence,
   isSolicitationSentence,
 } from "./solicitationSemantics";
+import { stripEmotionMarkup } from "./emotionTags";
 
 export type { ProactiveInitiativeMove, ProactiveMoveHint, ProactiveTopicLink, ProactiveTopicChain };
 
@@ -154,10 +155,6 @@ let lastFactsSnapshot: ProactiveSignalFact[] = [];
 
 export function getLastProactiveSignalFacts(): ProactiveSignalFact[] {
   return lastFactsSnapshot;
-}
-
-function stripEmotionTags(text: string): string {
-  return text.replace(/<emotion>[^<]+<\/emotion>/gi, "").trim();
 }
 
 function canUseBacklogFact(
@@ -551,7 +548,7 @@ export function collectProactiveSignalFacts(
       "chat",
       "chat:last-user",
       "Последний вопрос",
-      stripEmotionTags(recentUser).slice(0, 120),
+      stripEmotionMarkup(recentUser).slice(0, 120),
     );
   }
 

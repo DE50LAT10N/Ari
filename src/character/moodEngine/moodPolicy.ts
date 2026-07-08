@@ -6,6 +6,7 @@ import type { MoodAxisConfigTable } from "./axisConfig";
 import { DEFAULT_MOOD_AXES } from "./axisConfig";
 import type { MoodVector } from "./moodVector";
 import { clampVector } from "./moodVector";
+import { clamp01 } from "../../platform/mathUtils";
 
 export type MoodReplyLength = "short" | "normal" | "chatty";
 
@@ -24,13 +25,6 @@ export type MoodPolicy = {
   preferredEmotions: CharacterEmotion[];
   promptLines: string[];
 };
-
-function clamp01(value: number): number {
-  if (!Number.isFinite(value) || Number.isNaN(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(1, value));
-}
 
 function normSigned(value: number | undefined): number {
   return clamp01(((value ?? 0) + 1) / 2);

@@ -3,6 +3,10 @@ import type { AdviceCandidateKind } from "./advicePlanner";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import type { ProactiveSignalFact } from "./proactiveLlmEngine";
 import { recordRelevanceOutcome } from "./relevanceRanker";
+import {
+  summarizeWeightedAdviceOutcomes,
+  type AdviceOutcomeWeightProfile,
+} from "./adviceOutcomeScoring";
 
 export type AdviceOutcome =
   | "helped"
@@ -61,6 +65,14 @@ export type AdviceOutcomeReputation = {
   confidenceBonus: number;
   label: "unknown" | "trusted" | "cautious" | "mixed";
   reasons: string[];
+};
+
+const TOPIC_OUTCOME_WEIGHTS: AdviceOutcomeWeightProfile = {
+  helped: 0.55,
+  resolved: 0.75,
+  ignored: -0.55,
+  stale: -0.45,
+  interrupted: -0.35,
 };
 
 function readOutcomes(now = Date.now()): AdviceOutcomeRecord[] {
@@ -398,21 +410,6 @@ export function getRecentAdviceOutcomes(
     .slice(0, 8);
 }
 
-function outcomeWeight(outcome: AdviceOutcome): number {
-  switch (outcome) {
-    case "helped":
-      return 0.55;
-    case "resolved":
-      return 0.75;
-    case "ignored":
-      return -0.55;
-    case "stale":
-      return -0.45;
-    case "interrupted":
-      return -0.35;
-  }
-}
-
 export function summarizeAdviceOutcomeReputation(input?: {
   topicKey?: string;
   now?: number;
@@ -435,23 +432,11 @@ export function summarizeAdviceOutcomeReputation(input?: {
     };
   }
 
-  let weighted = 0;
-  let totalWeight = 0;
-  let positive = 0;
-  let negative = 0;
-  for (const [index, entry] of outcomes.entries()) {
-    if (!entry.outcome) continue;
-    const recency = 1 / (1 + index * 0.35);
-    const confidence = Math.max(0.3, Math.min(1, entry.confidence));
-    const weight = recency * confidence;
-    const value = outcomeWeight(entry.outcome);
-    weighted += value * weight;
-    totalWeight += weight;
-    if (value > 0) positive += 1;
-    if (value < 0) negative += 1;
-  }
-
-  const score = totalWeight > 0 ? weighted / totalWeight : 0;
+  const { positive, negative, score } = summarizeWeightedAdviceOutcomes(
+    outcomes,
+    TOPIC_OUTCOME_WEIGHTS,
+    input?.limit ?? 8,
+  );
   const label =
     score >= 0.24
       ? "trusted"

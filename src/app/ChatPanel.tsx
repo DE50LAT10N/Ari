@@ -4,14 +4,8 @@ import {
   saveChatHistory,
 } from "../chat/chatHistory";
 import { shouldSendInitiative } from "../character/initiativeGate";
+import type { CharacterMood } from "../character/mood";
 import {
-  describeMoodForPrompt,
-  type CharacterMood,
-} from "../character/mood";
-import {
-  getCurrentMoodVector,
-  isMoodEngineEnabled,
-  moodVectorToPrompt,
   proactiveToMoodEvent,
   type MoodEvent,
 } from "../character/moodEngine";
@@ -21,37 +15,21 @@ import {
 import {
   buildMoodRefusalReply,
   avatarEmotionFromMood,
-  deriveMoodArchetype,
   shouldMoodRefuseRequest,
 } from "../character/moodBehavior";
 import {
-  describeAttention,
   type AttentionState,
 } from "../character/attention";
 import {
-  describeRelationship,
-  describeBondForPrompt,
-  checkBondMilestone,
-  markBondMilestone,
   loadRelationship,
-  updateRelationshipAfterExchange,
 } from "../character/relationship";
-import {
-  deriveRelationshipTone,
-  describeRelationshipTone,
-  describeRelationshipToneConstraints,
-} from "../character/relationshipTone";
-import { buildAvoidPhrases } from "../character/avoidPhraseBuilder";
 import { buildLiveStatusLine } from "../character/liveStatus";
 import {
   canEmitAdviceNow,
   canEmitSmalltalkNow,
-  clearProactiveFailureBackoff,
   getProactiveFailureBackoff,
   markAdviceAttemptAt,
   markSmalltalkAttemptAt,
-  registerProactiveReplySubject,
-  registerProactiveFailure,
   setLastProactiveMessageAt,
   rememberAdviceSubject,
   recordAdviceDecision,
@@ -70,11 +48,6 @@ import {
   type ProactivePackageOptions,
 } from "../character/initiativeContext";
 import {
-  buildMessages,
-  buildUserBehaviorBlock,
-  type RuntimeContext,
-} from "../character/promptBuilder";
-import {
   describeRoutineContext,
   recordActivitySession,
   recordConversationMoment,
@@ -89,10 +62,8 @@ import {
   describeRitualTone,
 } from "../character/dailyRituals";
 import {
-  describePresenceScene,
   type PresenceScene,
 } from "../character/presence";
-import { streamLlm } from "../llm/llmClient";
 import {
   visionModeLabels,
   visionModePrompt,
@@ -100,22 +71,8 @@ import {
   type VisionMode,
 } from "../llm/visionModes";
 import {
-  addEpisodes,
   addOpenLoops,
-  loadOpenLoops,
-  resolveOpenLoops,
-  selectEpisodicContext,
 } from "../memory/episodicMemory";
-import { postprocessConversationMemory } from "../memory/conversationPostprocess";
-import {
-  getLastMemoryConflictDescription,
-  selectUserMemoryContext,
-  dedupeFactsAgainstSummaries,
-  type UserMemorySummary,
-} from "../memory/userMemory";
-import { applyExtractedFacts, shouldAutoCommitOpenLoop } from "../memory/memoryPolicy";
-import { recordContextTrim } from "../memory/memoryTelemetry";
-import { buildTrimmedPromptContext } from "../chat/contextTrim";
 import type { ActiveWindowInfo } from "../platform/activeWindow";
 import {
   getActiveWindowContext,
@@ -154,16 +111,8 @@ const VisionCropper = lazy(() =>
 );
 import { ARI_USER_TYPING_EVENT } from "./avatarMotion";
 import {
-  classifyResponseMode,
-} from "../character/responseModes";
-import {
-  describeAriSelfMemory,
   loadAriSelfMemory,
 } from "../character/selfMemory";
-import { recordFeedbackSignal } from "../character/feedbackSignals";
-import {
-  describeReactionLearningSummary,
-} from "../character/reactionLearning";
 import {
   canUseInitiativeKind,
   classifyInitiativeKind,
@@ -181,9 +130,6 @@ import {
   type InitiativeFeatureVector,
 } from "../character/initiativeScoring";
 import { classifyUserIntent } from "../character/userIntent";
-import { applyRetrievalRerank } from "../memory/retrievalRerank";
-import type { RetrievalSearchMode } from "../memory/retrievalTelemetry";
-import { getMemorySemanticSearchMode } from "../memory/memorySemanticIndex";
 import {
   deriveInterruptibility,
   allowsInitiativeForKind,
@@ -192,7 +138,6 @@ import {
   describeInterruptibility,
 } from "../character/interruptibility";
 import {
-  describeActiveFocusSession,
   endFocusSession,
   getActiveFocusSession,
   isFocusSessionActive,
@@ -204,18 +149,14 @@ import {
   recordFocusSessionStat,
   suggestNextDuration,
 } from "../character/focusPreferences";
-import { countPendingMemoryInboxItems } from "../memory/ariInbox";
-import { addToAriInbox } from "../memory/ariInbox";
 import {
   getDueTasks,
   markTaskReminded,
   snoozeTask,
   loadTasks,
 } from "../tasks/taskStore";
-import { formatGoalLedgerForPrompt } from "../tasks/goalLedger";
 import { tryHandleChatCommand } from "../chat/chatCommands";
 import { ensureGoalForFocus } from "../tasks/goalLedger";
-import { describePinnedProjectContext } from "../character/projectBinder";
 import { buildDistractionPackage } from "../memory/memoryProactive";
 import {
   recordClipboardSignal,
@@ -234,14 +175,12 @@ import {
   getRecentAdviceFeedback,
   loadAdviceLedger,
   refreshAdviceTopicState,
-  rememberAdviceSent,
 } from "../character/adviceLedger";
 import { describeAdviceNoveltyForPrompt, evaluateAdviceNovelty } from "../character/adviceNovelty";
 import {
   buildAdviceObservedState,
   getRecentAdviceOutcomes,
   reconcilePendingAdviceOutcomes,
-  startAdviceOutcomeObservation,
 } from "../character/adviceOutcome";
 import { planAdvice } from "../character/advicePlanner";
 import {
@@ -254,22 +193,14 @@ import {
   buildProactiveWebSearchQuery,
   classifyProactiveReplyTone,
   hasProactiveDebugSignals,
-  shouldProactiveWebSearch,
   type ProactiveReplyTone,
 } from "../character/proactiveTone";
 import { redactSecrets } from "../platform/secretRedaction";
 import {
-  describeWorkingMemory,
   pruneWorkingMemory,
   recordWorkingEvent,
   summarizeWorkingMemory,
 } from "../memory/workingMemory";
-import {
-  describeConversationMemory,
-  recordConversationMemoryExchange,
-  shouldPostprocessConversationMemory,
-  shouldRetrieveLongTermMemory,
-} from "../memory/conversationMemory";
 import { appendTimelineEvent } from "../memory/activityTimeline";
 import { isLlmProviderOnline, isVisionProviderOnline } from "../llm/providerOnline";
 import { readClipboardText, classifyClipboardText } from "../platform/clipboard";
@@ -291,33 +222,14 @@ import {
 import { isBlipVoiceEnabled } from "../settings/appSettings";
 import type { SafeActionProposal } from "../tools/safeActions";
 import { describeSafeActionDetail } from "../tools/safeActions";
-import type { LiveToolPlan } from "../tools/liveTools";
 import {
-  loadLiveTools,
   loadProactiveRuntime,
   loadRagClient,
   loadSafeActions,
   loadScreenCapture,
   loadVisionClient,
 } from "./chatRuntimeLoaders";
-import { yieldToMain, withTimeout } from "../platform/asyncTimeout";
-import { rememberReplyPhrases } from "../character/phraseMemory";
 import { isQuietModeActive } from "../character/quietMode";
-import {
-  biasEmotionByMood,
-  mergeReplyEmotionWithMood,
-} from "../character/emotionPresentation";
-import {
-  buildCorrectionUserMessage,
-  buildInCharacterFallback,
-  processModelReply,
-  shouldRetryReply,
-  shouldUseInCharacterFallback,
-  trySoftenTrailingQuestionReply,
-} from "../character/replyPipeline";
-import { validateCharacterReply } from "../character/responseValidation";
-import { runAdviceFinalGate } from "../character/adviceFinalGate";
-import { buildVisibleAdviceFallback, buildVisibleClarifyingFallback } from "../character/proactiveAdviceFallback";
 import {
   allowsGenericCompanionInitiative,
   dailyInitiativeCap,
@@ -325,7 +237,6 @@ import {
   initiativeRiskTolerance,
   proactiveSmalltalkIntervalMs,
 } from "../character/initiativeConfig";
-import { describeEmotionAntiRepeat } from "../character/emotionHistory";
 import {
   recordInitiativeSuppressed,
   recordProactiveToneEmitted,
@@ -347,22 +258,17 @@ import {
   type LifecycleState,
 } from "../character/lifecycle";
 import {
-  describePreferenceRules,
   parsePreferenceRule,
 } from "../memory/userPreferenceRules";
 import { getBondLevel } from "../character/relationship";
 import {
-  classifyMoodTrigger,
-  describeMoodTrigger,
-  moodTriggerEmotionHint,
-  previewMoodAfterTrigger,
   type MoodTrigger,
 } from "../character/moodTriggers";
 import { useMessageReactions } from "./useMessageReactions";
 import {
-  chooseResponseLength,
   useReplyGeneration,
 } from "./useReplyGeneration";
+import { getErrorMessage } from "./replyGenerationErrors";
 import { useProactiveInitiative } from "./useProactiveInitiative";
 type ChatPanelProps = {
   isOpen: boolean;
@@ -547,114 +453,6 @@ function isWindowDistracting(
   return false;
 }
 
-function getErrorMessage(
-  error: unknown,
-  provider: AppSettings["llmProvider"],
-): string {
-  const message =
-    error instanceof Error && error.message.trim()
-      ? error.message
-      : "Не удалось получить ответ от модели.";
-  if (provider === "gigachat") {
-    if (/401|403|unauthorized|auth/i.test(message)) {
-      return `GigaChat не принял ключ: ${message}. Проверь авторизацию в настройках.`;
-    }
-    if (/timeout|network|fetch|connection|offline|refused/i.test(message)) {
-      return `GigaChat не отвечает: ${message}. Сеть или API решили отдохнуть.`;
-    }
-    return message;
-  }
-  if (/ollama|fetch|connection|network|offline|refused/i.test(message)) {
-    return `Ollama не отвечает: ${message}. Хм. Мозг снаружи решил помедитировать.`;
-  }
-  if (/vision|qwen2\.5vl|model.*not found/i.test(message)) {
-    return `Vision-модель недоступна: ${message}. Глаз не открылся — смотреть мне пока нечем.`;
-  }
-  if (/embedding|index|pdf|rag/i.test(message)) {
-    return `RAG не обработал данные: ${message}. Документ решил быть вредным.`;
-  }
-  return message;
-}
-
-function isAbortError(error: unknown): boolean {
-  return (
-    error instanceof DOMException ||
-    (error instanceof Error &&
-      (error.name === "AbortError" ||
-        error.message.toLowerCase().includes("cancel")))
-  );
-}
-
-function describeProactiveFailure(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim().slice(0, 120);
-  }
-  return String(error).slice(0, 120);
-}
-
-function scheduleThrottledStreamUpdate(
-  content: string,
-  timerRef: { current: number | null },
-  pendingRef: { current: string },
-  onFlush: (value: string) => void,
-  delayMs = 100,
-): void {
-  pendingRef.current = content;
-  if (timerRef.current !== null) {
-    return;
-  }
-  timerRef.current = window.setTimeout(() => {
-    timerRef.current = null;
-    onFlush(pendingRef.current);
-  }, delayMs);
-}
-
-function shouldSuppressProactiveReply(issues: string[]): boolean {
-  return issues.some(
-    (issue) =>
-      issue === "duplicate proactive reply" || issue === "proactive quality",
-  );
-}
-
-function resolveAdviceVisibleFallback(input: {
-  practicalHook?: string;
-  linkNarrative?: string;
-  signalSummary?: string;
-  activeWindow?: ActiveWindowInfo | null;
-}): string | null {
-  const direct = buildVisibleAdviceFallback(input);
-  if (direct) {
-    return direct;
-  }
-  return null;
-}
-
-async function resolveAdviceVisibleFallbackAsync(input: {
-  practicalHook?: string;
-  linkNarrative?: string;
-  signalSummary?: string;
-  activeWindow?: ActiveWindowInfo | null;
-}): Promise<string | null> {
-  const direct = resolveAdviceVisibleFallback(input);
-  if (direct) {
-    return direct;
-  }
-  const { getLastProactiveLlmBundle } = await loadProactiveRuntime();
-  const bundle = getLastProactiveLlmBundle();
-  if (!bundle || bundle.tone !== "advice") {
-    return null;
-  }
-  return buildVisibleAdviceFallback({
-    practicalHook: input.practicalHook ?? bundle.practicalHook,
-    linkNarrative:
-      input.linkNarrative ??
-      bundle.primaryChainSummary ??
-      bundle.narrativeBrief,
-    signalSummary: input.signalSummary,
-    activeWindow: input.activeWindow,
-  });
-}
-
 export function ChatPanel({
   isOpen,
   settings,
@@ -787,16 +585,44 @@ export function ChatPanel({
   });
   const {
     voiceSpeaking,
+    generateReply,
     stopGeneration,
     stopVoice,
     speakMessage,
   } = useReplyGeneration({
     abortControllerRef,
+    streamedContentRef,
+    streamUiTimerRef,
+    pendingStreamContentRef,
+    historyRef,
+    isLoadingRef,
+    activeWindowRef,
+    topOpenLoopRef,
     isOpen,
     settings,
+    ollamaOnline,
     activeWindow,
+    mood,
+    relationship,
+    attention,
+    scene,
+    selfMemory,
+    setError,
+    setHistory,
+    setIsLoading,
+    setHasStreamTokens,
+    setStreamingContent,
+    setStreamingAssistantIndex,
+    setLiveToolStatus,
+    setRelationship,
+    setSelfMemory,
+    onAmbientBubble,
     onEmotionChange,
     onStateChange,
+    onProactiveMessage,
+    onProactiveEmitted,
+    onMoodInteraction,
+    onMoodTrigger,
   });
   const { recordUserAcknowledgedInitiative } = useProactiveInitiative({
     settings,
@@ -1453,1287 +1279,6 @@ export function ChatPanel({
     setLastProactiveMessageAt(now);
     onEmotionChange(clearEmotion, "mood");
     onStateChange(isOpen ? "listening" : "idle");
-  }
-
-  async function generateReply(
-    baseHistory: ChatMessage[],
-    options: {
-      proactive?: boolean;
-      eventDescription?: string;
-      initiativeAnchor?: string;
-      softInitiativeAnchor?: boolean;
-      bannedProactiveTopics?: string[];
-      screenObservation?: {
-        title: string;
-        processName: string;
-        text: string;
-      };
-      initiativeKind?: InitiativeKind;
-      proactiveReplyTone?: ProactiveReplyTone;
-      advisorAngle?: AdvisorAngle;
-      proactiveSignalSummary?: string;
-      proactiveLinkNarrative?: string;
-      proactivePracticalHook?: string;
-      proactiveAdviceSteps?: string[];
-      proactiveCodeExcerpt?: { file: string; text: string };
-      proactiveInitiativeMove?: string;
-      proactiveAdviceCandidateKind?: string;
-      proactiveNoveltyGuidance?: string;
-    } = {},
-  ): Promise<boolean> {
-    if (isLoadingRef.current) {
-      return false;
-    }
-
-    const assistantIndex = baseHistory.length;
-    const controller = new AbortController();
-    let failed = false;
-    let replyEmotion: CharacterEmotion = "neutral";
-    let finalReply = "";
-    let blipStreamActive = false;
-    const assistantMessageId = crypto.randomUUID();
-    let replyMoodContext = mood;
-
-    function applyReplyEmotion(
-      nextEmotion: CharacterEmotion,
-      force = false,
-    ) {
-      if (!force && nextEmotion === "neutral") {
-        return;
-      }
-      const archetype = deriveMoodArchetype(replyMoodContext);
-      const avatarEmotion = avatarEmotionFromMood(replyMoodContext);
-      let emotionToApply = nextEmotion;
-      let reason: "model" | "initiative" | "mood" = options.proactive
-        ? "initiative"
-        : "model";
-      if (archetype === "irritated" || options.proactive) {
-        emotionToApply = avatarEmotion;
-        reason = "mood";
-      }
-      onEmotionChange(emotionToApply, reason);
-    }
-
-    abortControllerRef.current = controller;
-    isLoadingRef.current = true;
-    streamedContentRef.current = "";
-    setError(null);
-    setHistory([
-      ...baseHistory,
-      {
-        role: "assistant",
-        content: "",
-        emotion: "neutral",
-        messageId: assistantMessageId,
-        isCanon: true,
-      },
-    ]);
-    setIsLoading(true);
-    setHasStreamTokens(false);
-    onStateChange("thinking");
-    await yieldToMain();
-
-    const wantAmbientReveal = !isOpen && Boolean(options.proactive);
-    const proactiveWhileOpen = isOpen && Boolean(options.proactive);
-    const blipOptions = {
-      settings,
-      initiative: Boolean(options.proactive) && !proactiveWhileOpen,
-      reply: !options.proactive || proactiveWhileOpen,
-      technical: false as boolean,
-      activeWindow,
-      revealOnly: wantAmbientReveal,
-      ambientWithSound: wantAmbientReveal && isBlipVoiceEnabled(settings),
-      onDisplayUpdate: (displayText: string) => {
-        streamedContentRef.current = displayText;
-        setHasStreamTokens(displayText.length > 0);
-        setHistory((current) =>
-          current.map((message, index) =>
-            index === assistantIndex
-              ? { ...message, content: displayText }
-              : message,
-          ),
-        );
-        if (wantAmbientReveal && displayText.trim()) {
-          onAmbientBubble?.(displayText.slice(0, 220));
-        }
-      },
-      onSpeakingStart: () => {
-        onStateChange("speaking");
-      },
-      onSpeakingEnd: () => {
-        onStateChange(isOpen ? "listening" : "idle");
-      },
-    };
-
-    let streamEpoch = 0;
-    function restartAmbientStream(): void {
-      blipVoiceManager.stop();
-      blipStreamActive = blipVoiceManager.beginStream(blipOptions);
-      if (!blipStreamActive) {
-        setStreamingAssistantIndex(assistantIndex);
-        setStreamingContent("");
-      } else {
-        setStreamingAssistantIndex(null);
-        setStreamingContent(null);
-      }
-    }
-
-    restartAmbientStream();
-
-    try {
-      const proactiveLlm = options.proactive
-        ? await loadProactiveRuntime()
-        : null;
-      const lastUserMessage = [...baseHistory]
-        .reverse()
-        .find(({ role }) => role === "user")?.content ?? "";
-      const moodTrigger =
-        !options.proactive && !options.screenObservation && lastUserMessage
-          ? classifyMoodTrigger(lastUserMessage)
-          : classifyMoodTrigger("");
-      const moodTriggerDescription = describeMoodTrigger(moodTrigger) ?? undefined;
-      const moodForReply = moodTriggerDescription
-        ? previewMoodAfterTrigger(mood, moodTrigger)
-        : mood;
-      replyMoodContext = moodForReply;
-      if (moodTriggerDescription) {
-        onMoodTrigger?.(moodTrigger);
-        const hintedEmotion = moodTriggerEmotionHint(moodTrigger);
-        if (hintedEmotion) {
-          applyReplyEmotion(hintedEmotion);
-        }
-      }
-      const proactiveQuery = [
-        options.eventDescription,
-        options.initiativeKind,
-        lastUserMessage,
-        activeWindow?.processName,
-        activeWindow?.title,
-        "недавний разговор и текущая ситуация пользователя",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const memoryQuery = options.proactive ? proactiveQuery : lastUserMessage;
-      const retrieveUserMemory =
-        settings.userMemoryEnabled &&
-        shouldRetrieveLongTermMemory(memoryQuery, {
-          proactive: Boolean(options.proactive),
-          ragEnabled: settings.ragEnabled,
-        });
-      let rawMemory: Awaited<
-        ReturnType<Awaited<ReturnType<typeof loadRagClient>>["searchRag"]>
-      > = [];
-      let rawUserMemory: Awaited<
-        ReturnType<typeof selectUserMemoryContext>
-      > = { facts: [], summaries: [] as UserMemorySummary[] };
-      let episodicMemory: Awaited<
-        ReturnType<typeof selectEpisodicContext>
-      > = { episodes: [], openLoops: [] };
-      if (
-        (settings.ragEnabled || retrieveUserMemory) &&
-        memoryQuery.trim() &&
-        !options.proactive
-      ) {
-        setLiveToolStatus(
-          settings.ragEnabled ? "ищу в документах…" : "читаю память…",
-        );
-        await yieldToMain();
-      }
-      type ContextBundle = [
-        PromiseSettledResult<
-          Awaited<
-            ReturnType<Awaited<ReturnType<typeof loadRagClient>>["searchRag"]>
-          >
-        >,
-        PromiseSettledResult<
-          Awaited<ReturnType<typeof selectUserMemoryContext>>
-        >,
-        PromiseSettledResult<
-          Awaited<ReturnType<typeof selectEpisodicContext>>
-        >,
-      ];
-      const emptyContextResults: ContextBundle = [
-        { status: "fulfilled", value: [] },
-        {
-          status: "fulfilled",
-          value: { facts: [], summaries: [] as UserMemorySummary[] },
-        },
-        { status: "fulfilled", value: { episodes: [], openLoops: [] } },
-      ];
-      let contextResults: ContextBundle;
-      const ragClient =
-        settings.ragEnabled && memoryQuery.trim()
-          ? await loadRagClient()
-          : null;
-      try {
-        contextResults = await withTimeout(
-          Promise.allSettled([
-            ragClient
-              ? ragClient.searchRag(memoryQuery, settings)
-              : Promise.resolve([]),
-            retrieveUserMemory
-              ? selectUserMemoryContext(
-                  memoryQuery,
-                  options.proactive ? 6 : 8,
-                  options.proactive ? 2 : 3,
-                  settings,
-                )
-              : Promise.resolve({
-                  facts: [],
-                  summaries: [] as UserMemorySummary[],
-                }),
-            retrieveUserMemory
-              ? selectEpisodicContext(memoryQuery, settings)
-              : Promise.resolve({ episodes: [], openLoops: [] }),
-          ]),
-          40_000,
-          "Сбор контекста",
-        );
-      } catch (contextError) {
-        logError("Context retrieval timed out", contextError);
-        contextResults = emptyContextResults;
-      }
-      if (contextResults[0].status === "fulfilled") {
-        rawMemory = contextResults[0].value;
-      } else {
-        logError("RAG retrieval failed", contextResults[0].reason);
-      }
-      if (contextResults[1].status === "fulfilled") {
-        rawUserMemory = contextResults[1].value;
-      } else {
-        logError("User memory retrieval failed", contextResults[1].reason);
-      }
-      if (contextResults[2].status === "fulfilled") {
-        episodicMemory = contextResults[2].value;
-      } else {
-        logError("Episodic memory retrieval failed", contextResults[2].reason);
-      }
-      const ragMode = ragClient?.getRagSearchMode() ?? "none";
-      const memoryMode = getMemorySemanticSearchMode();
-      const searchMode: RetrievalSearchMode =
-        ragMode === "ivf" || memoryMode === "ivf"
-          ? "ivf"
-          : ragMode === "linear" || memoryMode === "linear"
-            ? "linear"
-            : "none";
-      let reranked = {
-        rag: rawMemory,
-        facts: rawUserMemory.facts,
-        episodes: episodicMemory.episodes,
-      };
-      try {
-        reranked = await withTimeout(
-          applyRetrievalRerank({
-            query: memoryQuery,
-            settings,
-            ragMatches: rawMemory,
-            facts: rawUserMemory.facts,
-            episodes: episodicMemory.episodes,
-            searchMode,
-          }),
-          15_000,
-          "Переранжирование",
-        );
-      } catch (rerankError) {
-        logError("Retrieval rerank failed", rerankError);
-      }
-      setLiveToolStatus(null);
-      const memory = reranked.rag;
-      const rerankedFacts = reranked.facts;
-      const rerankedEpisodes = reranked.episodes;
-      topOpenLoopRef.current = episodicMemory.openLoops[0]?.text;
-      const userMemory = {
-        facts: dedupeFactsAgainstSummaries(
-          rerankedFacts,
-          rawUserMemory.summaries,
-        ),
-        summaries: rawUserMemory.summaries,
-      };
-      const episodicForPrompt = {
-        episodes: rerankedEpisodes,
-        openLoops: episodicMemory.openLoops,
-      };
-
-      let liveToolContext: string | undefined;
-      const ragFound = memory.length > 0;
-      const liveToolsModule =
-        settings.webToolsEnabled &&
-        isLlmProviderOnline(settings, ollamaOnline) &&
-        lastUserMessage.trim()
-          ? await loadLiveTools()
-          : null;
-      const needsExplicitTool =
-        liveToolsModule?.needsExplicitLiveToolPlanner(lastUserMessage) ?? false;
-      const needsWebFallback =
-        liveToolsModule?.shouldAutoWebSearch(lastUserMessage, {
-        ragEnabled: settings.ragEnabled,
-        ragMatchCount: memory.length,
-      });
-      const proactiveReplyTone =
-        options.proactiveReplyTone ??
-        (options.proactive && options.initiativeKind
-          ? classifyProactiveReplyTone({
-              initiativeKind: options.initiativeKind,
-              advisorAngle: options.advisorAngle,
-              anchor: options.initiativeAnchor,
-            })
-          : undefined);
-      if (
-        settings.webToolsEnabled &&
-        options.proactive &&
-        proactiveReplyTone === "advice" &&
-        isLlmProviderOnline(settings, ollamaOnline)
-      ) {
-        try {
-          const proactiveTools = liveToolsModule ?? (await loadLiveTools());
-          const proactiveBundle = buildInitiativeSignalBundle(settings, {
-            processName: activeWindow?.processName,
-            windowTitle: activeWindow?.title,
-          });
-          if (
-            shouldProactiveWebSearch(
-              proactiveBundle,
-              proactiveReplyTone,
-              settings,
-              options.initiativeAnchor,
-              options.proactiveAdviceCandidateKind,
-            )
-          ) {
-            const query = buildProactiveWebSearchQuery(
-              proactiveBundle,
-              options.initiativeAnchor,
-            );
-            setLiveToolStatus("ищу в интернете…");
-            const raw = await withTimeout(
-              proactiveTools.runLiveTool({ tool: "web_search", query }, settings),
-              30_000,
-              "Проактивный поиск",
-            );
-            liveToolContext = proactiveTools.formatLiveToolContext(
-              { tool: "web_search", query },
-              raw,
-            );
-          }
-        } catch (toolError) {
-          logError("Proactive web search failed", toolError);
-        } finally {
-          setLiveToolStatus(null);
-        }
-      }
-      if (
-        liveToolsModule &&
-        settings.webToolsEnabled &&
-        !options.proactive &&
-        isLlmProviderOnline(settings, ollamaOnline) &&
-        lastUserMessage.trim() &&
-        (needsExplicitTool || (!ragFound && needsWebFallback))
-      ) {
-        try {
-          let plan: LiveToolPlan | null = null;
-          if (needsExplicitTool) {
-            plan = await liveToolsModule.planLiveToolUse(lastUserMessage, settings);
-          }
-          if (!plan && needsWebFallback && !ragFound) {
-            plan = {
-              tool: "web_search" as const,
-              query: lastUserMessage.trim().slice(0, 200),
-            };
-          }
-          if (plan) {
-            if (plan.tool === "web_search") {
-              setLiveToolStatus("ищу в интернете…");
-            }
-            const raw = await liveToolsModule.runLiveTool(plan, settings);
-            liveToolContext = liveToolsModule.formatLiveToolContext(plan, raw);
-          }
-        } catch (toolError) {
-          logError("Live tool failed", toolError);
-        } finally {
-          setLiveToolStatus(null);
-        }
-      }
-
-      const moodStyle = isMoodEngineEnabled(settings)
-        ? moodVectorToPrompt(getCurrentMoodVector().vector)
-        : null;
-      const moodPrompt = moodStyle?.promptModifier ?? describeMoodForPrompt(moodForReply);
-      const responseLength = chooseResponseLength(
-        lastUserMessage,
-        memory.length,
-        Boolean(options.proactive),
-        proactiveReplyTone,
-        moodForReply,
-        moodStyle?.responseParams,
-      );
-      const responseMode = classifyResponseMode({
-        message: lastUserMessage,
-        proactive: options.proactive,
-        screenObservation: Boolean(options.screenObservation),
-        eventDescription: options.eventDescription,
-        initiativeKind: options.initiativeKind,
-        proactiveReplyTone,
-        useIntentClassifier: settings.intentClassifierEnabled,
-      });
-      blipOptions.technical = responseMode === "technical_help";
-      const relationshipToneKey = deriveRelationshipTone(relationship, moodForReply);
-      const relationshipTone = describeRelationshipTone(relationshipToneKey);
-      const recentPhrases = buildAvoidPhrases();
-      const recentAssistantReplies = baseHistory
-        .filter((message) => message.role === "assistant")
-        .map((message) => message.content)
-        .slice(-5);
-      const workSession = describeActiveFocusSession(getActiveFocusSession());
-      const userAskedQuestion =
-        liveToolsModule?.isQuestionLikeMessage(lastUserMessage) ?? false;
-      const validationContext = {
-        hasVision: Boolean(options.screenObservation),
-        hasMemory:
-          userMemory.facts.length > 0 ||
-          userMemory.summaries.length > 0 ||
-          episodicForPrompt.episodes.length > 0 ||
-          episodicForPrompt.openLoops.length > 0 ||
-          Boolean(describeAriSelfMemory(selfMemory)),
-        hasRag: memory.length > 0,
-        hasLiveTool: Boolean(liveToolContext),
-        userAskedQuestion,
-        proactive: Boolean(options.proactive),
-        proactiveReplyTone,
-        responseMode,
-        moodArchetype: deriveMoodArchetype(moodForReply),
-        hasDebugSignals:
-          Boolean(options.proactive) &&
-          proactiveReplyTone === "advice" &&
-          hasProactiveDebugSignals(
-            buildInitiativeSignalBundle(settings, {
-              processName: activeWindow?.processName,
-              windowTitle: activeWindow?.title,
-            }),
-          ),
-        proactiveInitiativeMove: options.proactiveInitiativeMove,
-      };
-      const processReplyOptions = {
-        responseMode,
-        validationContext,
-        streamedEmotion: replyEmotion,
-        recentAssistantReplies,
-        proactive: Boolean(options.proactive),
-        userAskedQuestion,
-      };
-      const emotionGuidance = describeEmotionAntiRepeat(moodForReply);
-      let runtimeContext: RuntimeContext = {
-        memory,
-        activeWindow,
-        proactive: options.proactive,
-        userFacts: userMemory.facts.map(({ text }) => text),
-        userFactDetails: userMemory.facts.map(
-          ({ text, importance, confidence }) => ({
-            text,
-            importance,
-            confidence,
-          }),
-        ),
-        memorySummaries: userMemory.summaries.map(({ title, text }) => ({
-          title,
-          text,
-        })),
-        episodes: episodicForPrompt.episodes,
-        openLoops: episodicForPrompt.openLoops,
-        eventDescription: options.eventDescription,
-        initiativeAnchor: options.initiativeAnchor,
-        softInitiativeAnchor: options.softInitiativeAnchor,
-        bannedProactiveTopics: options.bannedProactiveTopics,
-        mood: moodPrompt,
-        relationship: `${describeRelationship(
-          relationship,
-        )}. ${describeBondForPrompt(relationship, settings.romanceMode)}; тон: ${relationshipTone}`,
-        relationshipToneConstraints:
-          describeRelationshipToneConstraints(relationshipToneKey),
-        attention: describeAttention(attention),
-        routine: describeRoutineContext(),
-        scene: describePresenceScene(scene),
-        safeActionsAvailable: settings.safeActionsEnabled,
-        responseMode,
-        selfMemory: [describeAriSelfMemory(selfMemory), describeReactionLearningSummary()]
-          .filter(Boolean)
-          .join(". "),
-        initiativeKind: options.initiativeKind,
-        proactiveReplyTone,
-        responseLength,
-        screenObservation: options.screenObservation,
-        avoidPhrases: recentPhrases,
-        emotionGuidance: emotionGuidance ?? undefined,
-        workSession,
-        behaviorSettings:
-          buildUserBehaviorBlock(settings, describePreferenceRules()) ||
-          undefined,
-        workingMemory: describeWorkingMemory() || undefined,
-        conversationMemory: describeConversationMemory() || undefined,
-        moodTrigger: moodTriggerDescription,
-        liveToolContext,
-        projectPinnedContext: describePinnedProjectContext() || undefined,
-        goalLedger: formatGoalLedgerForPrompt() || undefined,
-        proactiveSignalSummary: options.proactiveSignalSummary,
-        proactiveLinkNarrative: options.proactiveLinkNarrative,
-        proactivePracticalHook: options.proactivePracticalHook,
-        proactiveAdviceSteps: options.proactiveAdviceSteps,
-        proactiveCodeExcerpt: options.proactiveCodeExcerpt,
-        proactiveInitiativeMove: options.proactiveInitiativeMove,
-        proactiveNoveltyGuidance: options.proactiveNoveltyGuidance,
-      };
-      const fittedBundle = buildTrimmedPromptContext(
-        baseHistory,
-        runtimeContext,
-        settings,
-      );
-      const fittedHistory = fittedBundle.fittedHistory;
-      runtimeContext = fittedBundle.runtimeContext;
-      if (fittedBundle.trimNotes.length) {
-        fittedBundle.trimNotes.forEach((note) => recordContextTrim(note));
-        ariLog("prompt-context", "debug", {
-          contextTrim: fittedBundle.trimNotes.join(", "),
-        });
-      }
-      const tokenEstimate = Math.ceil(
-        (fittedHistory.reduce(
-          (total, message) => total + message.content.length,
-          0,
-        ) +
-          memory.reduce((total, fragment) => total + fragment.text.length, 0) +
-          userMemory.facts.reduce(
-            (total, fact) => total + fact.text.length,
-            0,
-          )) /
-          4,
-      );
-      ariLog("prompt-context", "debug", {
-        provider: settings.llmProvider,
-        responseMode,
-        relationshipTone,
-        moodSummary: describeMoodForPrompt(mood),
-        scene,
-        memoryCount: userMemory.facts.length,
-        episodeCount: episodicForPrompt.episodes.length,
-        ragCount: memory.length,
-        tokenEstimate,
-        finalUserMessage: lastUserMessage.slice(0, 120),
-        initiativeReason: options.eventDescription,
-      });
-      ariLog("runtime", "debug", {
-        emotion: replyEmotion,
-        visualState: "thinking",
-        responseMode,
-        lastInitiative: options.eventDescription,
-      });
-
-      async function clearVisibleStreamDraft(): Promise<void> {
-        if (streamUiTimerRef.current) {
-          window.clearTimeout(streamUiTimerRef.current);
-          streamUiTimerRef.current = null;
-        }
-        streamedContentRef.current = "";
-        pendingStreamContentRef.current = "";
-        setHasStreamTokens(false);
-        setStreamingContent(null);
-        setStreamingAssistantIndex(assistantIndex);
-        setHistory((current) =>
-          current.map((message, index) =>
-            index === assistantIndex ? { ...message, content: "" } : message,
-          ),
-        );
-        await yieldToMain();
-      }
-
-      async function runStream(
-        messages: ReturnType<typeof buildMessages>,
-        streamOptions: { revealToUser?: boolean } = {},
-      ): Promise<string> {
-        const revealToUser = streamOptions.revealToUser !== false;
-        const epoch = ++streamEpoch;
-        if (epoch > 1 && wantAmbientReveal && revealToUser) {
-          restartAmbientStream();
-        }
-        return withTimeout(
-          streamLlm(
-            messages,
-            settings,
-            (streamedContent) => {
-              if (epoch !== streamEpoch) {
-                return;
-              }
-              streamedContentRef.current = streamedContent;
-              if (!revealToUser) {
-                return;
-              }
-              if (blipStreamActive) {
-                blipVoiceManager.feedStream(streamedContent, replyEmotion);
-                if (streamedContent) {
-                  setHasStreamTokens(true);
-                  setHistory((current) =>
-                    current.map((message, index) =>
-                      index === assistantIndex
-                        ? { ...message, content: streamedContent }
-                        : message,
-                    ),
-                  );
-                }
-                return;
-              }
-
-              if (streamedContent) {
-                setHasStreamTokens(true);
-                onStateChange("speaking");
-              }
-
-              scheduleThrottledStreamUpdate(
-                streamedContent,
-                streamUiTimerRef,
-                pendingStreamContentRef,
-                (value) => {
-                  setStreamingContent(value);
-                  if (wantAmbientReveal && value.trim()) {
-                    onAmbientBubble?.(value.slice(0, 220));
-                  }
-                },
-              );
-            },
-            (emotion) => {
-              if (epoch !== streamEpoch) {
-                return;
-              }
-              if (!revealToUser) {
-                return;
-              }
-              replyEmotion = emotion;
-              setHistory((current) =>
-                current.map((message, index) =>
-                  index === assistantIndex
-                    ? { ...message, emotion }
-                    : message,
-                ),
-              );
-            },
-            controller.signal,
-          ),
-          180_000,
-          "Генерация ответа",
-        );
-      }
-
-      let reply = await runStream(buildMessages(fittedHistory, runtimeContext));
-      let processed = processModelReply(reply, processReplyOptions);
-      processed = trySoftenTrailingQuestionReply(processed, processReplyOptions);
-
-      const shouldValidateProactiveWithLlm =
-        options.proactive &&
-        isLlmProviderOnline(settings, ollamaOnline) &&
-        settings.llmProvider !== "gigachat";
-      if (shouldValidateProactiveWithLlm) {
-        const proactiveBundle = proactiveLlm?.getLastProactiveLlmBundle();
-        const proactiveFacts = proactiveLlm?.getLastProactiveSignalFacts() ?? [];
-        const maxProactiveRegens =
-          settings.llmProvider === "gigachat"
-            ? proactiveReplyTone === "advice"
-              ? 1
-              : 0
-            : 2;
-        for (let attempt = 0; attempt <= maxProactiveRegens; attempt += 1) {
-          if (!proactiveBundle || !processed.content.trim()) {
-            break;
-          }
-          const quality = await proactiveLlm!.validateProactiveReplyLlm(
-            settings,
-            proactiveBundle,
-            processed.content,
-            proactiveFacts,
-          );
-          if (quality.acceptable) {
-            break;
-          }
-          if (attempt >= maxProactiveRegens) {
-            processed = {
-              ...processed,
-              validation: {
-                valid: false,
-                issues: [
-                  ...processed.validation.issues.filter(
-                    (issue) => issue !== "proactive quality",
-                  ),
-                  "proactive quality",
-                ],
-              },
-            };
-            break;
-          }
-          const correctionIssues = [
-            ...processed.validation.issues.filter(
-              (issue) => issue !== "proactive quality",
-            ),
-            ...(quality.issues.includes("proactive meta commentary")
-              ? ["proactive meta commentary"]
-              : []),
-            ...(quality.issues.includes("missing fact quote")
-              ? ["proactive quality"]
-              : []),
-            "proactive quality",
-          ];
-          const correctionHistory: ChatMessage[] = [
-            ...fittedHistory,
-            { role: "assistant", content: reply },
-            {
-              role: "user",
-              content: buildCorrectionUserMessage(
-                [...new Set(correctionIssues)],
-              ),
-            },
-          ];
-          try {
-            await clearVisibleStreamDraft();
-            reply = await runStream(
-              buildMessages(correctionHistory, runtimeContext),
-              { revealToUser: false },
-            );
-            processed = processModelReply(reply, processReplyOptions);
-            processed = trySoftenTrailingQuestionReply(
-              processed,
-              processReplyOptions,
-            );
-          } catch (retryError) {
-            logError("Proactive reply regen failed", retryError);
-            break;
-          }
-        }
-      }
-
-      if (
-        options.proactive &&
-        proactiveReplyTone === "advice" &&
-        settings.llmProvider === "gigachat" &&
-        processed.content.trim()
-      ) {
-        const proactiveBundle = proactiveLlm?.getLastProactiveLlmBundle();
-        const proactiveFacts = proactiveLlm?.getLastProactiveSignalFacts() ?? [];
-        if (proactiveBundle) {
-          const localQuality = proactiveLlm!.localReplyQualityCheck(
-            proactiveBundle,
-            processed.content,
-            proactiveFacts,
-          );
-          if (
-            localQuality &&
-            (localQuality.issues.includes("single-factor generic") ||
-              localQuality.issues.includes("thin-context generic") ||
-              localQuality.issues.includes("missing clipboard quote"))
-          ) {
-            const clarifying = buildVisibleClarifyingFallback(
-              proactiveFacts,
-              proactiveBundle,
-            );
-            if (clarifying) {
-              processed = {
-                content: clarifying,
-                emotion:
-                  processed.emotion === "neutral"
-                    ? "curious"
-                    : processed.emotion,
-                validation: {
-                  valid: true,
-                  issues: processed.validation.issues.filter(
-                    (issue) => issue !== "single-factor generic",
-                  ),
-                },
-              };
-            }
-          }
-        }
-      }
-
-      if (shouldRetryReply(processed.validation)) {
-        const firstProcessed = processed;
-        ariLog("reply-meta", "debug", {
-          oocValidation: `retry: ${processed.validation.issues.join(", ")}`,
-          responseMode,
-        });
-        const correctionHistory: ChatMessage[] = [
-          ...fittedHistory,
-          { role: "assistant", content: reply },
-          {
-            role: "user",
-            content: buildCorrectionUserMessage(processed.validation.issues),
-          },
-        ];
-        try {
-          await clearVisibleStreamDraft();
-          reply = await runStream(
-            buildMessages(correctionHistory, runtimeContext),
-            { revealToUser: false },
-          );
-          const retryProcessed = processModelReply(reply, processReplyOptions);
-          const softenedRetry = trySoftenTrailingQuestionReply(
-            retryProcessed,
-            processReplyOptions,
-          );
-          processed =
-            softenedRetry.content.trim() || !firstProcessed.content.trim()
-              ? softenedRetry
-              : firstProcessed;
-        } catch (retryError) {
-          if (firstProcessed.content.trim()) {
-            logError("Reply correction failed, using first reply", retryError);
-            processed = firstProcessed;
-          } else {
-            throw retryError;
-          }
-        }
-      }
-
-      if (
-        !options.proactive &&
-        shouldRetryReply(processed.validation) &&
-        processed.validation.issues.includes("habitual trailing question")
-      ) {
-        const beforeSecondRetry = processed;
-        const correctionHistory: ChatMessage[] = [
-          ...fittedHistory,
-          { role: "assistant", content: reply },
-          {
-            role: "user",
-            content: buildCorrectionUserMessage(processed.validation.issues),
-          },
-        ];
-        try {
-          await clearVisibleStreamDraft();
-          reply = await runStream(
-            buildMessages(correctionHistory, runtimeContext),
-            { revealToUser: false },
-          );
-          const secondRetry = processModelReply(reply, processReplyOptions);
-          const softenedSecond = trySoftenTrailingQuestionReply(
-            secondRetry,
-            processReplyOptions,
-          );
-          processed =
-            softenedSecond.content.trim() || !beforeSecondRetry.content.trim()
-              ? softenedSecond
-              : beforeSecondRetry;
-        } catch (retryError) {
-          if (beforeSecondRetry.content.trim()) {
-            logError(
-              "Second trailing-question correction failed, using prior reply",
-              retryError,
-            );
-            processed = beforeSecondRetry;
-          } else {
-            throw retryError;
-          }
-        }
-      }
-
-      if (
-        shouldRetryReply(processed.validation) &&
-        shouldUseInCharacterFallback(processed.validation)
-      ) {
-        processed = buildInCharacterFallback();
-      }
-
-      if (
-        options.proactive &&
-        proactiveReplyTone === "advice" &&
-        shouldSuppressProactiveReply(processed.validation.issues)
-      ) {
-        const fallback = await resolveAdviceVisibleFallbackAsync({
-          practicalHook: options.proactivePracticalHook,
-          linkNarrative: options.proactiveLinkNarrative,
-          signalSummary: options.proactiveSignalSummary,
-          activeWindow,
-        });
-        if (fallback) {
-          processed = {
-            content: fallback,
-            emotion:
-              processed.emotion === "neutral" ? "curious" : processed.emotion,
-            validation: {
-              valid: true,
-              issues: processed.validation.issues.filter(
-                (issue) =>
-                  issue !== "proactive quality" &&
-                  issue !== "duplicate proactive reply",
-              ),
-            },
-          };
-        }
-      }
-
-      if (
-        options.proactive &&
-        proactiveReplyTone === "advice" &&
-        processed.content.trim()
-      ) {
-        const proactiveBundle = proactiveLlm?.getLastProactiveLlmBundle();
-        const proactiveFacts = proactiveLlm?.getLastProactiveSignalFacts() ?? [];
-        if (proactiveBundle) {
-          const finalGate = runAdviceFinalGate({
-            text: processed.content,
-            bundle: proactiveBundle,
-            facts: proactiveFacts,
-          });
-          if (finalGate.status === "repaired") {
-            const repairedValidation = validateCharacterReply(finalGate.text, {
-              ...processReplyOptions.validationContext,
-              responseMode,
-              proactive: processReplyOptions.proactive,
-              userAskedQuestion: processReplyOptions.userAskedQuestion,
-              recentAssistantReplies: processReplyOptions.recentAssistantReplies,
-              proactiveInitiativeMove: options.proactiveInitiativeMove,
-            });
-            processed = {
-              content: finalGate.text,
-              emotion:
-                processed.emotion === "neutral" ? "curious" : processed.emotion,
-              validation: {
-                valid: repairedValidation.valid,
-                issues: repairedValidation.valid
-                  ? []
-                  : [
-                      ...new Set([
-                        ...repairedValidation.issues,
-                        "proactive quality",
-                      ]),
-                    ],
-              },
-            };
-          } else if (finalGate.status === "rejected") {
-            processed = {
-              ...processed,
-              validation: {
-                valid: false,
-                issues: [
-                  ...new Set([
-                    ...processed.validation.issues,
-                    "proactive quality",
-                  ]),
-                ],
-              },
-            };
-          }
-        }
-      }
-
-      if (
-        options.proactive &&
-        shouldSuppressProactiveReply(processed.validation.issues)
-      ) {
-        recordInitiativeSuppressed(
-          `proactive reply novelty: ${processed.validation.issues.join(", ")}`,
-        );
-        failed = true;
-        setHistory(baseHistory);
-        if (wantAmbientReveal) {
-          onAmbientBubble?.(null);
-        }
-        return false;
-      }
-
-      if (streamUiTimerRef.current) {
-        window.clearTimeout(streamUiTimerRef.current);
-        streamUiTimerRef.current = null;
-      }
-      setStreamingContent(null);
-      setStreamingAssistantIndex(null);
-      finalReply = processed.content;
-      replyEmotion = mergeReplyEmotionWithMood(
-        biasEmotionByMood(processed.emotion, moodForReply),
-        moodForReply,
-      );
-      if (options.proactive) {
-        replyEmotion = avatarEmotionFromMood(moodForReply);
-      }
-      applyReplyEmotion(replyEmotion, true);
-      if (options.proactive && settings.proactiveOpenChat && !isOpen) {
-        onProactiveMessage();
-      }
-      const adviceEntry =
-        options.proactive &&
-        proactiveReplyTone === "advice" &&
-        finalReply.trim()
-          ? rememberAdviceSent({
-              messageId: assistantMessageId,
-              initiativeKind: options.initiativeKind,
-              tone: proactiveReplyTone,
-              anchor: options.initiativeAnchor,
-              signalSummary: options.proactiveSignalSummary,
-              linkNarrative: options.proactiveLinkNarrative,
-              practicalHook: options.proactivePracticalHook,
-              initiativeMove: options.proactiveInitiativeMove,
-              adviceCandidateKind: options.proactiveAdviceCandidateKind,
-              replyText: finalReply,
-              processName: activeWindow?.processName,
-              windowTitle: activeWindow?.title,
-            })
-          : null;
-      if (adviceEntry) {
-        const observedBundle = buildInitiativeSignalBundle(settings, {
-          processName: activeWindowRef.current?.processName,
-          windowTitle: activeWindowRef.current?.title,
-        });
-        const observedFacts = (
-          await loadProactiveRuntime()
-        ).collectProactiveSignalFacts({
-          bundle: observedBundle,
-          tone: "advice",
-          candidateTopics: options.initiativeAnchor
-            ? [options.initiativeAnchor]
-            : undefined,
-          recentUserMessage: [...baseHistory]
-            .reverse()
-            .find((message) => message.role === "user")
-            ?.content,
-        });
-        startAdviceOutcomeObservation({
-          adviceId: adviceEntry.id,
-          topicKey: adviceEntry.topicKey,
-          candidateKind: options.proactiveAdviceCandidateKind,
-          beforeState: buildAdviceObservedState({
-            topicKey: adviceEntry.topicKey,
-            bundle: observedBundle,
-            facts: observedFacts,
-            processName: activeWindowRef.current?.processName,
-            windowTitle: activeWindowRef.current?.title,
-          }),
-        });
-      }
-      setHistory((current) =>
-        current.map((message, index) =>
-          index === assistantIndex
-            ? {
-                ...message,
-                content: finalReply,
-                emotion: replyEmotion,
-                ...(adviceEntry ? { adviceId: adviceEntry.id } : {}),
-              }
-            : message,
-        ),
-      );
-      rememberReplyPhrases(finalReply, Boolean(options.proactive));
-      if (options.proactive && finalReply.trim()) {
-        clearProactiveFailureBackoff();
-        registerProactiveReplySubject(options.initiativeAnchor, finalReply);
-      }
-      ariLog("reply-meta", "debug", {
-        oocValidation: processed.validation.valid
-          ? "passed"
-          : processed.validation.issues.join(", "),
-        responseMode,
-      });
-
-      if (
-        settings.safeActionsEnabled &&
-        !options.proactive &&
-        !options.screenObservation &&
-        lastUserMessage
-      ) {
-        void loadSafeActions().then((safeActions) =>
-          safeActions
-            .extractSafeAction(lastUserMessage, finalReply, settings, {
-              activeWindow,
-            })
-            .then((action) => {
-              if (!action) return;
-              ariLog("reply-meta", "debug", {
-                lastActionProposal: action.title,
-              });
-              setHistory((current) =>
-                current.map((message) =>
-                  message.messageId === assistantMessageId &&
-                  message.role === "assistant" &&
-                  !message.action
-                    ? { ...message, action }
-                    : message,
-                ),
-              );
-            })
-            .catch((actionError: unknown) => {
-              logError("Safe action extraction failed", actionError);
-            }),
-        );
-      }
-
-      if (
-        !options.proactive &&
-        !options.screenObservation &&
-        lastUserMessage
-      ) {
-        const userIntentForMood = classifyUserIntent(lastUserMessage);
-        const isAdviceRequest =
-          (userIntentForMood.intent === "technical_help" ||
-            userIntentForMood.intent === "emotional_support" ||
-            userIntentForMood.intent === "question") &&
-          userIntentForMood.confidence >= 0.7;
-        onMoodInteraction?.(isAdviceRequest ? "help_request" : "chat_positive");
-        setRelationship((current) => {
-          const updated = updateRelationshipAfterExchange(
-            current,
-            lastUserMessage,
-            replyEmotion,
-          );
-          const milestone = checkBondMilestone(current, updated);
-          if (milestone) {
-            const marked = markBondMilestone(updated, milestone.level);
-            setHistory((hist) => [
-              ...hist,
-              {
-                role: "assistant",
-                content: milestone.message,
-                emotion: milestone.emotion,
-              },
-            ]);
-            return marked;
-          }
-          return updated;
-        });
-        setSelfMemory((current) =>
-          recordFeedbackSignal({
-            kind: "conversation_exchange",
-            userMessage: lastUserMessage,
-            assistantReply: finalReply,
-            emotion: replyEmotion,
-            currentSelfMemory: current,
-          }).selfMemory ?? current,
-        );
-        recordConversationMemoryExchange({
-          userMessage: lastUserMessage,
-          assistantReply: finalReply,
-          emotion: replyEmotion,
-        });
-      }
-
-      if (
-        settings.userMemoryEnabled &&
-        !options.proactive &&
-        !options.screenObservation &&
-        lastUserMessage &&
-        shouldPostprocessConversationMemory(lastUserMessage, finalReply)
-      ) {
-        void loadOpenLoops()
-          .then((loops) =>
-            postprocessConversationMemory(
-              lastUserMessage,
-              finalReply,
-              loops,
-              settings,
-            ),
-          )
-          .then(async ({ facts, episode, openLoops, resolvedLoopIds }) => {
-            const { autoCommitted, inboxed } = await applyExtractedFacts(
-              facts,
-              lastUserMessage,
-            );
-            if (autoCommitted || inboxed) {
-              const parts: string[] = [];
-              if (autoCommitted) {
-                parts.push(`${autoCommitted} в факты`);
-              }
-              if (inboxed) {
-                parts.push(`${inboxed} во входящие`);
-              }
-            }
-            if (countPendingMemoryInboxItems() >= 3 && !isQuietModeActive(settings, activeWindow)) {
-              setHistory((current) => [
-                ...current,
-                {
-                  role: "assistant",
-                  content:
-                    "Есть кандидаты в память — загляни во «Входящие» в настройках.",
-                  emotion: "curious",
-                },
-              ]);
-            }
-            ariLog("memory", "debug", {
-              lastMemoryConflict: getLastMemoryConflictDescription(),
-            });
-            if (episode) {
-              await addEpisodes([episode]);
-            }
-            for (const loop of openLoops) {
-              if (shouldAutoCommitOpenLoop(loop)) {
-                await addOpenLoops([loop]);
-                continue;
-              }
-              addToAriInbox({
-                kind: loop.dueAt ? "reminder" : "open_thread",
-                title: loop.text.slice(0, 120),
-                body: loop.text,
-                sourceMessage: lastUserMessage,
-                confidence: loop.confidence ?? 0.7,
-                reason: loop.dueAt
-                  ? "Напоминание — требует подтверждения"
-                  : "Автоизвлечение open loop",
-                metadata: loop.dueAt
-                  ? { dueAt: String(loop.dueAt) }
-                  : undefined,
-              });
-            }
-            await resolveOpenLoops(resolvedLoopIds);
-          })
-          .catch((postprocessError: unknown) => {
-            logError("Conversation memory postprocess failed", postprocessError);
-          });
-      }
-    } catch (requestError) {
-      if (isAbortError(requestError)) {
-        if (blipStreamActive) {
-          blipVoiceManager.stop();
-        }
-        if (!streamedContentRef.current) {
-          setHistory(baseHistory);
-        }
-      } else {
-        failed = true;
-        if (!streamedContentRef.current) {
-          setHistory(baseHistory);
-        }
-        if (options.proactive) {
-          logError("Proactive message generation failed", requestError);
-          const failureReason = describeProactiveFailure(requestError);
-          const backoff = registerProactiveFailure(failureReason);
-          recordInitiativeSuppressed(
-            `proactive generation failed; backoff ${Math.ceil(
-              (backoff.until - Date.now()) / 60_000,
-            )}m: ${failureReason}`,
-          );
-          if (wantAmbientReveal) {
-            onAmbientBubble?.(null);
-          }
-        } else {
-          setError(getErrorMessage(requestError, settings.llmProvider));
-          playUiSound("error", settings.soundsEnabled, isQuietHours(settings));
-          onEmotionChange("surprised", options.proactive ? "initiative" : "model");
-          onStateChange("error");
-        }
-      }
-    } finally {
-      abortControllerRef.current = null;
-      isLoadingRef.current = false;
-      setIsLoading(false);
-      setHasStreamTokens(false);
-      if (streamUiTimerRef.current) {
-        window.clearTimeout(streamUiTimerRef.current);
-        streamUiTimerRef.current = null;
-      }
-      setStreamingContent(null);
-      setStreamingAssistantIndex(null);
-      if (!failed) {
-        if (blipStreamActive) {
-          await blipVoiceManager.endStreamAsync(finalReply);
-        }
-        if (options.proactive && !isOpen) {
-          onProactiveEmitted?.(replyEmotion);
-        }
-        onStateChange(isOpen ? "listening" : "idle");
-      } else if (wantAmbientReveal) {
-        onAmbientBubble?.(null);
-      }
-    }
-    return !failed;
   }
 
   function insertQuickCommand(value: string): void {

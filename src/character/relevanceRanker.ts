@@ -4,7 +4,12 @@ import type { AdviceUrgency } from "./adviceUrgency";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import type { ProactiveToneSnapshot } from "../memory/memoryTelemetry";
 import type { ProactiveSignalFact } from "./proactiveLlmEngine";
-import { isClipboardSemanticallyRich } from "../platform/clipboardSemantics";
+import { classifyClipboardSignal } from "../platform/clipboardClassifier";
+import {
+  classifyProcessProfiles,
+  looksLikeSourceFile,
+} from "../platform/processProfiles";
+import { clipWeight, sigmoid } from "../platform/mathUtils";
 
 export type RelevanceCandidateKind =
   | "try_advice"
@@ -355,14 +360,6 @@ function dot(
   return score;
 }
 
-function sigmoid(value: number): number {
-  return 1 / (1 + Math.exp(-value));
-}
-
-function clipWeight(value: number): number {
-  return Math.max(-WEIGHT_LIMIT, Math.min(WEIGHT_LIMIT, value));
-}
-
 function normalizeRelevanceKind(
   kind?: string,
   fallback?: RelevanceCandidateKind,
@@ -382,27 +379,28 @@ function processHints(bundle: InitiativeSignalBundle): {
   toolTerminal: number;
   toolBrowser: number;
 } {
-  const process = [
-    bundle.window?.processName,
-    bundle.advisor.currentProcess,
-    bundle.advisor.currentTitle,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+  const profiles = classifyProcessProfiles({
+    processName: bundle.window?.processName ?? bundle.advisor.currentProcess,
+    title: bundle.window?.title ?? bundle.advisor.currentTitle,
+    editorFile: bundle.editorFile,
+  });
   return {
-    toolIde: /cursor|code|devenv|idea|webstorm|pycharm|rider|sublime|notepad\+\+/.test(
-      process,
-    )
-      ? 1
-      : 0,
-    toolTerminal: /terminal|powershell|cmd|pwsh|wezterm|windows terminal|alacritty/.test(
-      process,
-    )
-      ? 1
-      : 0,
-    toolBrowser: /chrome|edge|firefox|browser|opera|brave/.test(process) ? 1 : 0,
+    toolIde: profiles.ide ? 1 : 0,
+    toolTerminal: profiles.terminal ? 1 : 0,
+    toolBrowser: profiles.browser ? 1 : 0,
   };
+}
+
+function isDiagnosticClipboardKind(
+  kind: ReturnType<typeof classifyClipboardSignal>["kind"],
+): boolean {
+  return kind === "stacktrace" || kind === "diagnostic";
+}
+
+function isRichClipboardKind(
+  kind: ReturnType<typeof classifyClipboardSignal>["kind"],
+): boolean {
+  return kind === "code" || isDiagnosticClipboardKind(kind);
 }
 
 function clipboardStats(
@@ -418,16 +416,14 @@ function clipboardStats(
     ...bundle.clipboardSnippets.map((clip) => clip.text),
     ...facts.filter((fact) => fact.kind === "clipboard").map((fact) => fact.detail),
   ];
-  const joined = clipTexts.join("\n");
   const hasClipboard = clipTexts.length > 0;
-  const rich = clipTexts.some(isClipboardSemanticallyRich);
+  const classifications = clipTexts.map((text) => classifyClipboardSignal(text).kind);
+  const rich = classifications.some(isRichClipboardKind);
   const diagnostic =
     bundle.clipboardSnippets.some((clip) =>
       ["stacktrace", "diagnostic"].includes(clip.kind),
     ) ||
-    /error|exception|failed|cannot|denied|not found|traceback|panic|ошиб/i.test(
-      joined,
-    );
+    classifications.some(isDiagnosticClipboardKind);
   return {
     clipboard: hasClipboard ? 1 : 0,
     clipboardRich: rich ? 1 : 0,
@@ -606,17 +602,16 @@ function featuresFromLedger(entry: AdviceLedgerEntry): RelevanceFeatureVector {
     (entry.tone === "smalltalk" ? "try_smalltalk" : "try_advice")) as
     | RelevanceCandidateKind
     | undefined;
+  const clipboardKind = classifyClipboardSignal(text).kind;
+  const hasClipboardReference = /буфер|clipboard|clip:/i.test(text);
+  const diagnostic = isDiagnosticClipboardKind(clipboardKind);
   return {
     bias: 1,
-    clipboard: /буфер|clipboard/i.test(text) ? 1 : 0,
-    clipboardRich: isClipboardSemanticallyRich(text) ? 1 : 0,
-    clipboardDiagnostic: /error|exception|failed|ошиб|traceback|panic/i.test(text)
-      ? 1
-      : 0,
-    terminalError: /error|exception|failed|ошиб|traceback|panic/i.test(text)
-      ? 1
-      : 0,
-    toolIde: /\.tsx?|\.jsx?|\.rs|\.py|cursor|ide/i.test(text) ? 1 : 0,
+    clipboard: hasClipboardReference || isRichClipboardKind(clipboardKind) ? 1 : 0,
+    clipboardRich: isRichClipboardKind(clipboardKind) ? 1 : 0,
+    clipboardDiagnostic: diagnostic ? 1 : 0,
+    terminalError: diagnostic ? 1 : 0,
+    toolIde: classifyProcessProfiles({ title: text }).ide || looksLikeSourceFile(text) ? 1 : 0,
     query: /поиск|query|docs|rag|http/i.test(text) ? 1 : 0,
     task: /задач|цель|task/i.test(text) ? 1 : 0,
     breakDue: /перерыв|отдох|пауза/i.test(text) ? 1 : 0,
@@ -641,38 +636,24 @@ function featuresFromOutcomeRecord(
   ]
     .filter(Boolean)
     .join("\n");
-  const toolText = [
-    state?.processName,
-    state?.windowTitle,
-    state?.editorFile,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+  const profiles = classifyProcessProfiles({
+    processName: state?.processName,
+    title: state?.windowTitle,
+    editorFile: state?.editorFile,
+  });
+  const clipboardKind = classifyClipboardSignal(text).kind;
   const hasClipboard =
     factIds.some((id) => id.startsWith("clip:")) || /буфер|clipboard|clip:/i.test(text);
   const hasDiagnostic =
     Boolean(state?.hasErrorSignal) ||
-    /error|exception|failed|cannot|denied|not found|traceback|panic|ошиб/i.test(
-      text,
-    );
+    isDiagnosticClipboardKind(clipboardKind);
   return {
     bias: 1,
-    toolIde:
-      /cursor|code|devenv|idea|webstorm|pycharm|rider|sublime|notepad\+\+/.test(
-        toolText,
-      ) || /\.[tj]sx?|\.jsx?|\.rs|\.py|\.md|\.json/i.test(state?.editorFile ?? "")
-        ? 1
-        : 0,
-    toolTerminal:
-      /terminal|powershell|cmd|pwsh|wezterm|windows terminal|alacritty/.test(
-        toolText,
-      )
-        ? 1
-        : 0,
-    toolBrowser: /chrome|edge|firefox|browser|opera|brave/.test(toolText) ? 1 : 0,
+    toolIde: profiles.ide || looksLikeSourceFile(state?.editorFile) ? 1 : 0,
+    toolTerminal: profiles.terminal ? 1 : 0,
+    toolBrowser: profiles.browser ? 1 : 0,
     clipboard: hasClipboard ? 1 : 0,
-    clipboardRich: isClipboardSemanticallyRich(text) ? 1 : 0,
+    clipboardRich: isRichClipboardKind(clipboardKind) ? 1 : 0,
     clipboardDiagnostic: hasClipboard && hasDiagnostic ? 1 : 0,
     terminalError: hasDiagnostic ? 1 : 0,
     stuck: Math.min(1, Math.max(0, state?.stuckScore ?? 0)),
@@ -732,7 +713,7 @@ function applyRelevanceUpdate(input: {
     if (Math.abs(value) <= 0.001) {
       continue;
     }
-    current[key] = clipWeight((current[key] ?? 0) - rate * error * value);
+    current[key] = clipWeight((current[key] ?? 0) - rate * error * value, WEIGHT_LIMIT);
   }
   saveWeights({ ...weights, [input.kind]: current });
   appendLearningEvent({

@@ -4,6 +4,7 @@ import { isInitiativeTopicAllowed } from "./advisorEngine";
 import type { InitiativeSignalBundle } from "./initiativeContext";
 import { pruneWorkingMemory } from "../memory/workingMemory";
 import { formatGoalLedgerForPrompt } from "../tasks/goalLedger";
+import { stripEmotionMarkup } from "./emotionTags";
 
 export type RichProactiveContextInput = {
   bundle: InitiativeSignalBundle;
@@ -29,10 +30,6 @@ const WM_KIND_LABELS: Record<string, string> = {
 
 function formatMinutes(ms: number): number {
   return Math.max(1, Math.round(ms / 60_000));
-}
-
-function stripEmotionTags(text: string): string {
-  return text.replace(/<emotion>[^<]+<\/emotion>/gi, "").trim();
 }
 
 export function buildAdviceBrief(
@@ -202,7 +199,7 @@ export function buildRichProactiveContext(
       ?.content;
   if (recentUser) {
     lines.push(
-      `Последний вопрос пользователя: ${stripEmotionTags(recentUser).slice(0, 120)}`,
+      `Последний вопрос пользователя: ${stripEmotionMarkup(recentUser).slice(0, 120)}`,
     );
   }
 
@@ -212,7 +209,7 @@ export function buildRichProactiveContext(
     for (const turn of recentDialog) {
       const role = turn.role === "user" ? "пользователь" : "Ari";
       lines.push(
-        `- ${role}: ${stripEmotionTags(turn.content).slice(0, 120)}`,
+        `- ${role}: ${stripEmotionMarkup(turn.content).slice(0, 120)}`,
       );
     }
   }

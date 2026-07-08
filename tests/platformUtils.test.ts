@@ -4,6 +4,8 @@ import {
   clamp01,
   clampSignedUnit,
   clampUnit,
+  clipWeight,
+  sigmoid,
 } from "../src/platform/mathUtils";
 import { hashStringDjb2 } from "../src/platform/hashUtils";
 import {
@@ -14,6 +16,7 @@ import { truncateWithEllipsis } from "../src/platform/textUtils";
 import { loadJson, saveJsonTail } from "../src/platform/jsonStorage";
 import { parseJsonSafe, httpErrorFromResponse } from "../src/platform/httpUtils";
 import { redactAndTruncate } from "../src/platform/secretRedaction";
+import { sanitizeBase64ImagePayload } from "../src/llm/imagePayloadParser";
 
 describe("platform mathUtils", () => {
   it("clamps signed unit range", () => {
@@ -33,6 +36,12 @@ describe("platform mathUtils", () => {
   it("clamps01 with NaN guard", () => {
     expect(clamp01(Number.NaN)).toBe(0);
     expect(clamp01(0.8)).toBe(0.8);
+  });
+
+  it("clips weights and computes sigmoid", () => {
+    expect(clipWeight(2, 0.7)).toBe(0.7);
+    expect(clipWeight(-2, 0.7)).toBe(-0.7);
+    expect(sigmoid(0)).toBe(0.5);
   });
 });
 
@@ -94,6 +103,14 @@ describe("platform httpUtils", () => {
 
   it("formats http errors", () => {
     expect(httpErrorFromResponse(500, "boom", "Ollama")).toContain("HTTP 500");
+  });
+});
+
+describe("imagePayloadParser", () => {
+  it("strips data URL prefix and whitespace", () => {
+    expect(
+      sanitizeBase64ImagePayload(" data:image/png;base64, ab c\n "),
+    ).toBe("abc");
   });
 });
 

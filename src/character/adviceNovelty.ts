@@ -22,6 +22,7 @@ export type AdviceNoveltyIssue = {
 };
 
 const RECENT_ADVICE_WINDOW_MS = 6 * 60 * 60_000;
+const ADVICE_NOVELTY_TEXT_SIMILARITY_THRESHOLD = 0.32;
 const HIGH_RISK_ARCHETYPES: AdviceArchetype[] = [
   "timebox_refocus",
   "one_file_focus",
@@ -129,6 +130,39 @@ export function adviceTokenOverlap(left?: string, right?: string): number {
   return hits / Math.max(leftWords.size, rightWords.length);
 }
 
+function charTrigrams(value?: string): Set<string> {
+  const normalized = normalizeAdviceText(value).replace(/\s+/g, " ");
+  const compact = `  ${normalized}  `;
+  const grams = new Set<string>();
+  for (let index = 0; index <= compact.length - 3; index += 1) {
+    const gram = compact.slice(index, index + 3).trim();
+    if (gram.length >= 2) {
+      grams.add(gram);
+    }
+  }
+  return grams;
+}
+
+function jaccard(left: Set<string>, right: Set<string>): number {
+  if (!left.size || !right.size) {
+    return 0;
+  }
+  let intersection = 0;
+  for (const item of left) {
+    if (right.has(item)) {
+      intersection += 1;
+    }
+  }
+  return intersection / (left.size + right.size - intersection);
+}
+
+export function adviceTextSimilarity(left?: string, right?: string): number {
+  return Math.max(
+    adviceTokenOverlap(left, right),
+    jaccard(charTrigrams(left), charTrigrams(right)),
+  );
+}
+
 export function adviceEntryText(entry: AdviceLedgerEntry): string {
   return [entry.practicalHook, entry.replyText, entry.linkNarrative]
     .filter(Boolean)
@@ -177,9 +211,9 @@ export function evaluateAdviceNovelty(input: {
     }
     if (
       Math.max(
-        adviceTokenOverlap(input.text, entry.practicalHook),
-        adviceTokenOverlap(input.text, entry.replyText),
-      ) >= 0.32
+        adviceTextSimilarity(input.text, entry.practicalHook),
+        adviceTextSimilarity(input.text, entry.replyText),
+      ) >= ADVICE_NOVELTY_TEXT_SIMILARITY_THRESHOLD
     ) {
       textMatches += 1;
     }
@@ -190,7 +224,10 @@ export function evaluateAdviceNovelty(input: {
     if (archetype !== "unknown" && replyArchetype === archetype) {
       archetypeMatches += 1;
     }
-    if (adviceTokenOverlap(input.text, reply) >= 0.32) {
+    if (
+      adviceTextSimilarity(input.text, reply) >=
+      ADVICE_NOVELTY_TEXT_SIMILARITY_THRESHOLD
+    ) {
       textMatches += 1;
     }
   }

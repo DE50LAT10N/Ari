@@ -67,6 +67,31 @@ describe("relevanceRanker", () => {
     expect(ranked[0]?.reasons.join(" ")).toMatch(/clipboard rich|IDE/i);
   });
 
+  it("derives diagnostic clipboard features through the shared classifier", () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "WindowsTerminal.exe",
+      windowTitle: "npm run test",
+      sessionMinutes: 3,
+    });
+
+    const scored = scoreRelevanceCandidate("terminal_error_triage", {
+      bundle,
+      facts: [
+        {
+          id: "clip:trace",
+          kind: "clipboard",
+          label: "clipboard",
+          detail:
+            "Traceback (most recent call last):\n  File \"app.py\", line 12, in <module>\nValueError: broken",
+        },
+      ],
+    });
+
+    expect(scored.features.clipboardDiagnostic).toBe(1);
+    expect(scored.features.terminalError).toBe(1);
+    expect(scored.features.toolTerminal).toBe(1);
+  });
+
   it("prefers smalltalk when only the smalltalk timer is ready", () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {});
     const ranked = rankRelevanceCandidates(["try_smalltalk", "silent"], {

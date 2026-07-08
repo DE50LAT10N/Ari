@@ -22,6 +22,7 @@ import { httpErrorFromResponse, parseJsonSafe } from "../platform/httpUtils";
 import { searchIvfIndex, type IvfIndex } from "../memory/ivfIndex";
 import { clearStoredIvfIndex, resolveIvfIndex } from "../memory/ivfStore";
 import type { RetrievalSearchMode } from "../memory/retrievalTelemetry";
+import { logError } from "../platform/logger";
 
 type EmbedResponse = {
   embeddings?: unknown;
@@ -201,7 +202,7 @@ export async function searchRag(
       "RAG поиск",
     );
   } catch (error) {
-    console.warn("RAG search failed:", error);
+    logError("RAG search failed", error);
     return [];
   }
 }
@@ -230,7 +231,7 @@ async function searchRagInner(
     const model = resolveEmbeddingModel(settings);
     const detail =
       error instanceof Error ? error.message : "неизвестная ошибка embeddings";
-    console.warn(`RAG embedding failed (${model}):`, detail);
+    logError(`RAG embedding failed (${model})`, detail);
     return [];
   }
   const queryNorm = embeddingNorm(queryEmbedding);

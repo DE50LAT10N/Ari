@@ -1801,98 +1801,6 @@ button {
   font-size: 10px;
 }
 
-.memory-intent-add {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 112px 26px;
-  gap: 5px;
-}
-
-.memory-intent-add input {
-  min-width: 0;
-  border: 1px solid rgb(255 255 255 / 9%);
-  border-radius: 7px;
-  outline: none;
-  background: rgb(255 255 255 / 6%);
-  color: #fff;
-  font-size: 8px;
-  user-select: text;
-}
-
-.memory-intent-add button {
-  border: 0;
-  border-radius: 7px;
-  background: rgb(150 89 143 / 55%);
-  color: #fff;
-  cursor: pointer;
-}
-
-.memory-loop {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: start;
-  gap: 5px;
-  padding: 6px 7px;
-  border-radius: 8px;
-  background: rgb(255 255 255 / 5%);
-}
-
-.memory-loop.resolved {
-  opacity: 0.48;
-}
-
-.memory-loop-content {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.memory-loop-content > span {
-  color: rgb(255 255 255 / 65%);
-  font-size: 9px;
-  line-height: 1.35;
-}
-
-.memory-loop-content label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: rgb(255 255 255 / 36%);
-  font-size: 8px;
-}
-
-.memory-loop-content input {
-  min-width: 0;
-  flex: 1;
-  border: 1px solid rgb(255 255 255 / 9%);
-  border-radius: 6px;
-  outline: none;
-  background: rgb(255 255 255 / 5%);
-  color: rgb(255 255 255 / 72%);
-  font-size: 8px;
-}
-
-.memory-loop-reminder {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.memory-loop-reminder > span {
-  min-width: 0;
-  flex: 1;
-  color: rgb(196 173 215 / 58%);
-  font-size: 8px;
-}
-
-.memory-loop-reminder button {
-  width: auto;
-  height: 20px;
-  padding: 0 5px;
-  font-size: 8px;
-}
-
-.memory-loop button,
 .memory-episode > button {
   width: 24px;
   height: 24px;
@@ -2734,45 +2642,6 @@ button {
   }
 }
 
-.permission-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-
-.permission-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.message-branch-actions {
-  display: none;
-}
-
-.message-meta {
-  display: block;
-  opacity: 0.55;
-  font-size: 10px;
-  margin-top: 4px;
-}
-
-.work-task-list {
-  list-style: none;
-  padding: 0;
-  margin: 8px 0 16px;
-}
-
-.work-task-list li {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 0;
-}
-
 .focus-prompt-bar {
   display: flex;
   flex-direction: column;
@@ -2816,8 +2685,7 @@ button {
   justify-content: flex-end;
 }
 
-.focus-body-double,
-.pomodoro-body-double {
+.focus-body-double {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -2839,22 +2707,6 @@ button {
   cursor: pointer;
 }
 
-.ari-desk-backdrop {
-  position: fixed;
-  inset: 0;
-  border: 0;
-  background: transparent;
-  z-index: 14;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 180ms ease;
-}
-
-.ari-desk-backdrop.visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 .app-panel-surface {
   opacity: 0;
   pointer-events: none;
@@ -2868,26 +2720,6 @@ button {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0) scale(1);
-}
-
-.ari-desk-panel {
-  position: absolute;
-  top: 48px;
-  right: 8px;
-  z-index: 15;
-  width: 210px;
-  padding: 10px;
-  border-radius: 12px;
-  border: 1px solid rgb(255 255 255 / 12%);
-  background: rgb(29 26 38 / 97%);
-  box-shadow: 0 14px 28px rgb(0 0 0 / 38%);
-}
-
-.ari-desk-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
 }
 
 .ari-desk-list {
@@ -2905,26 +2737,6 @@ button {
 .ari-desk-list dd {
   margin: 2px 0 0;
   font-size: 11px;
-  color: #fff;
-}
-
-.memory-tabs {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.memory-tabs button {
-  padding: 4px 10px;
-  border-radius: 8px;
-  border: 1px solid rgb(255 255 255 / 12%);
-  background: transparent;
-  color: rgb(255 255 255 / 70%);
-  cursor: pointer;
-}
-
-.memory-tabs button.active {
-  background: rgb(157 100 151 / 20%);
   color: #fff;
 }
 
@@ -2995,18 +2807,6 @@ button {
   margin-bottom: 4px;
 }
 
-.review-block {
-  margin-top: 12px;
-}
-
-.review-pre {
-  white-space: pre-wrap;
-  font-size: 12px;
-  padding: 8px;
-  border-radius: 8px;
-  background: rgb(255 255 255 / 4%);
-}
-
 .ari-desk-highlight {
   margin: 8px 12px 0;
   font-size: 12px;
@@ -3024,13 +2824,6 @@ button {
   gap: 4px;
 }
 
-.ari-desk-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.tts-settings-panel .settings-toggle-field,
 .blip-voice-settings-panel .settings-toggle-field {
   display: flex;
   justify-content: space-between;
@@ -3038,23 +2831,19 @@ button {
   gap: 8px;
 }
 
-.tts-settings-panel .settings-toggle-field small,
 .blip-voice-settings-panel .settings-toggle-field small {
   display: block;
   opacity: 0.75;
   font-size: 11px;
 }
 
-.tts-test-row,
 .blip-test-row {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.tts-action-btn,
 .blip-action-btn,
-.tts-stop-btn,
 .blip-stop-btn,
 .read-aloud-btn {
   border: 1px solid rgb(255 255 255 / 14%);
@@ -3064,9 +2853,7 @@ button {
   cursor: pointer;
 }
 
-.tts-stop-btn:hover,
 .blip-stop-btn:hover,
-.tts-action-btn:hover,
 .blip-action-btn:hover,
 .read-aloud-btn:hover {
   background: rgb(255 255 255 / 12%);
@@ -3153,15 +2940,6 @@ button {
 .message-reaction-option:hover,
 .message-reaction-option.selected {
   background: rgb(255 255 255 / 10%);
-}
-
-.tts-path-input {
-  width: 100%;
-  resize: vertical;
-  min-height: 44px;
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 12px;
-  word-break: break-all;
 }
 
 .settings-inline-button {
@@ -3346,35 +3124,6 @@ button {
   z-index: 39;
   border: 0;
   background: transparent;
-}
-
-.ari-desk-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 0 14px 12px;
-}
-
-.ari-desk-controls button {
-  border: 1px solid rgb(255 255 255 / 14%);
-  background: rgb(255 255 255 / 6%);
-  color: inherit;
-  border-radius: 10px;
-  padding: 6px 10px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.ari-desk-edit {
-  display: grid;
-  gap: 8px;
-  padding: 0 14px 12px;
-}
-
-.ari-desk-edit label {
-  display: grid;
-  gap: 4px;
-  font-size: 12px;
 }
 
 .memory-fact-item.memory-archived {

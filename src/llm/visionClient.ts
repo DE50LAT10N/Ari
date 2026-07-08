@@ -6,23 +6,15 @@ import { loadOllamaModel, unloadOllamaModel } from "./localLlmClient";
 import { resolveModel } from "./modelRouter";
 import { getVisionSource } from "./visionConfig";
 import { logError } from "../platform/logger";
+import { sanitizeBase64ImagePayload } from "./imagePayloadParser";
 
 type VisionResponse = {
   message?: { content?: unknown };
   error?: unknown;
 };
 
-function sanitizeBase64Image(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.startsWith("data:")) {
-    const comma = trimmed.indexOf(",");
-    return comma >= 0 ? trimmed.slice(comma + 1).replace(/\s+/g, "") : trimmed;
-  }
-  return trimmed.replace(/\s+/g, "");
-}
-
 function validateCapture(capture: ScreenCapture): string {
-  const image = sanitizeBase64Image(capture.imageBase64);
+  const image = sanitizeBase64ImagePayload(capture.imageBase64);
   if (!image || image.length < 256) {
     throw new Error(
       "Снимок пустой или повреждён. Убедитесь, что активное окно видно на экране.",

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSettings } from "../src/settings/appSettings";
 import {
   invalidateActivitySignalsCache,
+  recordFileFocus,
   recordInputFriction,
   recordClipboardSignal,
   summarizeActivitySignals,
@@ -96,6 +97,33 @@ describe("activitySignals input friction", () => {
     expect(summary.recentCorrectionChurns).toBe(1);
     expect(summary.inputFrictionScore).toBeGreaterThanOrEqual(1.5);
     expect(JSON.stringify(summary)).not.toContain("password");
+  });
+
+  it("redacts secrets from stored activity text fields", () => {
+    const now = Date.now();
+    recordFileFocus({
+      process: "Cursor.exe",
+      title: "token=supersecretvalue",
+      file: "config password=hunter2",
+      repo: "desktop-character",
+      branch: "feature/api_key=abc123",
+      dwellMs: 60_000,
+      at: now,
+    });
+    recordInputFriction({
+      frictionKind: "active_dwell",
+      process: "Cursor.exe",
+      title: "secret=local-token",
+      file: "notes token=abc123",
+      dwellMs: 60_000,
+      at: now + 1,
+    });
+
+    const stored = JSON.stringify(summarizeActivitySignals(now + 1));
+    expect(stored).toContain("[REDACTED]");
+    expect(stored).not.toContain("hunter2");
+    expect(stored).not.toContain("supersecretvalue");
+    expect(stored).not.toContain("local-token");
   });
 
   it("recognizes diagnostic clipboard as substantive context", () => {

@@ -5,6 +5,7 @@ import { moodInitiativeBias } from "./mood";
 import { deriveMoodArchetype } from "./moodBehavior";
 import type { UserIntent } from "./userIntent";
 import type { InitiativeKind } from "./initiativeKinds";
+import { clipWeight, sigmoid } from "../platform/mathUtils";
 
 export type InitiativeRisk = "low" | "medium" | "high";
 export type InitiativeValue = "low" | "medium" | "high";
@@ -183,14 +184,6 @@ function saveAdaptiveWeights(weights: AdaptiveWeights): void {
   localStorage.setItem(ADAPTIVE_KEY, JSON.stringify(weights));
 }
 
-function clipWeight(value: number): number {
-  return Math.max(-WEIGHT_CLIP, Math.min(WEIGHT_CLIP, value));
-}
-
-function sigmoid(value: number): number {
-  return 1 / (1 + Math.exp(-value));
-}
-
 function intentFeature(intent?: UserIntent): number {
   if (!intent) {
     return 0;
@@ -262,22 +255,26 @@ export function recordInitiativeOutcome(
   const error = prediction - target;
 
   const next: AdaptiveWeights = {
-    bias: clipWeight(weights.bias - LEARNING_RATE * error),
-    risk: clipWeight(weights.risk - LEARNING_RATE * error * features.riskRank),
-    value: clipWeight(weights.value - LEARNING_RATE * error * features.valueRank),
+    bias: clipWeight(weights.bias - LEARNING_RATE * error, WEIGHT_CLIP),
+    risk: clipWeight(weights.risk - LEARNING_RATE * error * features.riskRank, WEIGHT_CLIP),
+    value: clipWeight(weights.value - LEARNING_RATE * error * features.valueRank, WEIGHT_CLIP),
     sceneFocus: clipWeight(
       weights.sceneFocus - LEARNING_RATE * error * features.sceneFocus,
+      WEIGHT_CLIP,
     ),
     sceneNight: clipWeight(
       weights.sceneNight - LEARNING_RATE * error * features.sceneNight,
+      WEIGHT_CLIP,
     ),
-    hour: clipWeight(weights.hour - LEARNING_RATE * error * features.hourBucket),
-    mood: clipWeight(weights.mood - LEARNING_RATE * error * features.moodBias),
+    hour: clipWeight(weights.hour - LEARNING_RATE * error * features.hourBucket, WEIGHT_CLIP),
+    mood: clipWeight(weights.mood - LEARNING_RATE * error * features.moodBias, WEIGHT_CLIP),
     ignored: clipWeight(
       weights.ignored - LEARNING_RATE * error * features.ignoredCount,
+      WEIGHT_CLIP,
     ),
     intent: clipWeight(
       weights.intent - LEARNING_RATE * error * features.intentWeight,
+      WEIGHT_CLIP,
     ),
   };
   saveAdaptiveWeights(next);

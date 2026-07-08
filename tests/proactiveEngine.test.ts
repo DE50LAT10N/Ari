@@ -50,6 +50,7 @@ describe("proactiveEngine", () => {
 
     expect(decision.action).toBe("try_smalltalk");
     expect(decision.allowSmalltalk).toBe(true);
+    expect(decision.reasonCode).toBe("try_smalltalk");
   });
 
   it("escalates starved actionable advice without changing smalltalk code path", () => {
@@ -81,6 +82,7 @@ describe("proactiveEngine", () => {
     expect(decision.action).toBe("try_advice");
     expect(decision.adviceStarved).toBe(true);
     expect(decision.adviceUrgency.level).toBe("low");
+    expect(decision.reasonCode).toBe("advice_starved");
   });
 
   it("protects smalltalk when advice is not ready after an advice streak", () => {
@@ -101,6 +103,7 @@ describe("proactiveEngine", () => {
 
     expect(decision.action).toBe("try_smalltalk");
     expect(decision.reason).toBe("protected smalltalk timer");
+    expect(decision.reasonCode).toBe("protected_smalltalk_timer");
   });
 
   it("does not protect smalltalk over ready medium-urgency advice", () => {

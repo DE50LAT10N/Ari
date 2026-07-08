@@ -1,5 +1,6 @@
 import type { CharacterEmotion } from "../types/character";
 import type { MicroReactionType, PresenceScene } from "./presence";
+import { pickDeterministic } from "./deterministicSelector";
 
 export type SilentReactionKind =
   | "return"
@@ -96,5 +97,5 @@ export function getSilentReaction(
   if (Date.now() - last < cooldown) return null;
   if (kind === "ambient" && (scene === "away" || scene === "night")) return null;
   lastTriggered.set(kind, Date.now());
-  return options[Math.floor(Math.random() * options.length)];
+  return pickDeterministic(`silent-reaction:${kind}`, options) ?? null;
 }

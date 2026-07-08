@@ -54,9 +54,65 @@ function allowsEmotionalChoiceOffer(
   );
 }
 
+export const REPLY_VALIDATION_ISSUES = [
+  "emotion tag leak",
+  "missing emotion tag",
+  "identity leak",
+  "prompt disclosure",
+  "injection compliance",
+  "vision claim without observation",
+  "memory claim without injected memory",
+  "RAG claim without fragments",
+  "corporate tone",
+  "service phrase",
+  "masculine self reference",
+  "assistant tone",
+  "question spam",
+  "habitual trailing question",
+  "implicit solicitation",
+  "empty reply",
+  "evasive reply",
+  "duplicate reply",
+  "duplicate proactive reply",
+  "shallow advice",
+  "proactive quality",
+  "proactive meta commentary",
+  "advice novelty",
+  "single-factor generic",
+  "thin-context generic",
+  "missing clipboard quote",
+  "missing fact quote",
+] as const;
+
+export type ReplyValidationIssue = (typeof REPLY_VALIDATION_ISSUES)[number];
+
+const REPLY_VALIDATION_ISSUE_SET = new Set<string>(REPLY_VALIDATION_ISSUES);
+
+export function toReplyValidationIssues(
+  issues: readonly string[],
+): ReplyValidationIssue[] {
+  return issues.filter((issue): issue is ReplyValidationIssue =>
+    REPLY_VALIDATION_ISSUE_SET.has(issue),
+  );
+}
+
+export function hasReplyValidationIssue(
+  issues: readonly ReplyValidationIssue[],
+  issue: ReplyValidationIssue,
+): boolean {
+  return issues.includes(issue);
+}
+
+export function hasAnyReplyValidationIssue(
+  issues: readonly ReplyValidationIssue[],
+  expected: readonly ReplyValidationIssue[],
+): boolean {
+  return issues.some((issue) => expected.includes(issue));
+}
+
 export type OocValidationResult = {
   valid: boolean;
-  issues: string[];
+  issues: ReplyValidationIssue[];
 };
 
 const SERVICE_PHRASE_PATTERN =
@@ -84,7 +140,7 @@ export function validateCharacterReply(
   reply: string,
   context: ReplyValidationContext,
 ): OocValidationResult {
-  const issues: string[] = [];
+  const issues: ReplyValidationIssue[] = [];
   if (/^\s*emotion\s*[:\-]?\s*[a-z]+\b/im.test(reply)) {
     issues.push("emotion tag leak");
   }

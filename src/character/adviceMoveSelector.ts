@@ -1,5 +1,9 @@
 import type { AdviceCandidate, AdvicePlan } from "./advicePlanner";
-import type { AdviceOutcome, AdviceOutcomeRecord } from "./adviceOutcome";
+import type { AdviceOutcomeRecord } from "./adviceOutcome";
+import {
+  summarizeWeightedAdviceOutcomes,
+  type AdviceOutcomeWeightProfile,
+} from "./adviceOutcomeScoring";
 import type { ProactiveSignalFact } from "./proactiveLlmEngine";
 
 export type AdviceMoveKind =
@@ -52,6 +56,14 @@ const ALL_MOVES: AdviceMoveKind[] = [
   "take_break",
   "memory_pattern",
 ];
+
+const MOVE_OUTCOME_WEIGHTS: AdviceOutcomeWeightProfile = {
+  resolved: 0.85,
+  helped: 0.65,
+  interrupted: -0.55,
+  stale: -0.5,
+  ignored: -0.65,
+};
 
 function hasFact(
   facts: ProactiveSignalFact[],
@@ -177,21 +189,6 @@ function guidanceForMove(move: AdviceMoveKind): string {
   }
 }
 
-function outcomeWeight(outcome: AdviceOutcome): number {
-  switch (outcome) {
-    case "resolved":
-      return 0.85;
-    case "helped":
-      return 0.65;
-    case "interrupted":
-      return -0.55;
-    case "stale":
-      return -0.5;
-    case "ignored":
-      return -0.65;
-  }
-}
-
 function emptyMoveReputation(move: AdviceMoveKind): AdviceMoveReputation {
   return {
     move,
@@ -220,23 +217,11 @@ export function summarizeAdviceMoveReputation(input: {
     return emptyMoveReputation(input.move);
   }
 
-  let weighted = 0;
-  let totalWeight = 0;
-  let positive = 0;
-  let negative = 0;
-  for (const [index, entry] of relevant.entries()) {
-    if (!entry.outcome) continue;
-    const value = outcomeWeight(entry.outcome);
-    const recency = 1 / (1 + index * 0.35);
-    const confidence = Math.max(0.3, Math.min(1, entry.confidence));
-    const weight = recency * confidence;
-    weighted += value * weight;
-    totalWeight += weight;
-    if (value > 0) positive += 1;
-    if (value < 0) negative += 1;
-  }
-
-  const score = totalWeight > 0 ? weighted / totalWeight : 0;
+  const { positive, negative, score } = summarizeWeightedAdviceOutcomes(
+    relevant,
+    MOVE_OUTCOME_WEIGHTS,
+    input.limit ?? 8,
+  );
   const label =
     negative >= 2 && score <= -0.4
       ? "blocked"

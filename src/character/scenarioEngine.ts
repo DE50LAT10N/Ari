@@ -8,6 +8,7 @@ import {
   isCodingProcess as checkCodingProcess,
   isDistractingWindow,
 } from "../platform/windowContext";
+import { pickDeterministic } from "./deterministicSelector";
 
 export type Scenario =
   | "app_start"
@@ -350,16 +351,22 @@ function pickPreferredEmotion(
   if (!definition.preferredEmotions.length) {
     return "neutral";
   }
-  const index = Math.floor(Math.random() * definition.preferredEmotions.length);
-  return definition.preferredEmotions[index] ?? "neutral";
+  return (
+    pickDeterministic(
+      `scenario-emotion:${definition.id}`,
+      definition.preferredEmotions,
+    ) ?? "neutral"
+  );
 }
 
 function pickLocalLine(definition: ScenarioDefinition): string | null {
   if (!definition.localLines?.length) {
     return null;
   }
-  const index = Math.floor(Math.random() * definition.localLines.length);
-  return definition.localLines[index] ?? null;
+  return (
+    pickDeterministic(`scenario-line:${definition.id}`, definition.localLines) ??
+    null
+  );
 }
 
 let scenarioTimesCache: Partial<Record<Scenario, number>> | null = null;

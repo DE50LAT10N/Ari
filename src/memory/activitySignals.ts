@@ -1,4 +1,4 @@
-import { redactAndTruncate } from "../platform/secretRedaction";
+import { redactAndTruncate, redactSecrets } from "../platform/secretRedaction";
 import { isClipboardSemanticallyRich } from "../platform/clipboardSemantics";
 
 export type ClipboardSignalKind =
@@ -96,6 +96,11 @@ const INPUT_FRICTION_WINDOW_MS = 35 * 60 * 1000;
 const REPEATED_ERROR_THRESHOLD = 2;
 
 let cache: ActivitySignal[] | null = null;
+
+function sanitizeActivityText(value: string | undefined, maxLength: number): string | undefined {
+  const sanitized = redactSecrets(value?.trim() ?? "").slice(0, maxLength);
+  return sanitized || undefined;
+}
 
 function loadRaw(): ActivitySignal[] {
   if (cache) {
@@ -209,17 +214,18 @@ export function recordFileFocus(input: {
   at?: number;
 }): void {
   const dwellMs = Math.max(0, Math.round(input.dwellMs));
-  if (dwellMs < 30_000 || !input.process.trim()) {
+  const process = sanitizeActivityText(input.process, 120);
+  if (dwellMs < 30_000 || !process) {
     return;
   }
   pushSignal({
     id: crypto.randomUUID(),
     kind: "file_focus",
-    process: input.process.slice(0, 120),
-    title: input.title?.slice(0, 200),
-    file: input.file?.slice(0, 160),
-    repo: input.repo?.slice(0, 120),
-    branch: input.branch?.slice(0, 80),
+    process,
+    title: sanitizeActivityText(input.title, 200),
+    file: sanitizeActivityText(input.file, 160),
+    repo: sanitizeActivityText(input.repo, 120),
+    branch: sanitizeActivityText(input.branch, 80),
     dwellMs,
     at: input.at ?? Date.now(),
   });
@@ -272,11 +278,13 @@ export function recordInputFriction(input: {
   burstCount?: number;
   at?: number;
 }): void {
-  const process = input.process.trim().slice(0, 120);
+  const process = sanitizeActivityText(input.process, 120);
   if (!process) {
     return;
   }
   const at = input.at ?? Date.now();
+  const title = sanitizeActivityText(input.title, 200);
+  const file = sanitizeActivityText(input.file, 160);
   const entries = pruneActivitySignals(at);
   const last = [...entries]
     .reverse()
@@ -285,7 +293,7 @@ export function recordInputFriction(input: {
         entry.kind === "input_friction" &&
         entry.frictionKind === input.frictionKind &&
         entry.process === process &&
-        (entry.file ?? entry.title) === (input.file ?? input.title),
+        (entry.file ?? entry.title) === (file ?? title),
     );
   if (last && at - last.at < 3 * 60_000) {
     return;
@@ -295,8 +303,8 @@ export function recordInputFriction(input: {
     kind: "input_friction",
     frictionKind: input.frictionKind,
     process,
-    title: input.title?.slice(0, 200),
-    file: input.file?.slice(0, 160),
+    title,
+    file,
     idleSeconds:
       input.idleSeconds !== undefined
         ? Math.max(0, Math.round(input.idleSeconds))

@@ -57,11 +57,36 @@ import { buildMemoryCallbackPackage } from "../memory/memoryProactive";
 import { getHighPriorityOpenTasks, getNextTask } from "../tasks/taskStore";
 import { loadProactiveRuntime } from "./chatRuntimeLoaders";
 import { isLlmProviderOnline } from "../llm/providerOnline";
+import type { Clock, RandomSource } from "../character/runtimePrimitives";
+import {
+  randomChance,
+  randomJitterMs,
+  systemClock,
+  systemRandom,
+} from "../character/runtimePrimitives";
+import {
+  AUTO_VISION_JITTER_MS,
+  AUTO_VISION_MIN_DELAY_MS,
+  PROACTIVE_ADVICE_STREAK_MEMORY_BOOST,
+  PROACTIVE_ADVICE_STREAK_THREAD_BOOST,
+  PROACTIVE_BASE_UNFINISHED_THREAD_PROBABILITY,
+  PROACTIVE_IMMERSED_COMPANION_SESSION_MIN_MS,
+  PROACTIVE_IMMERSED_COMPANION_SILENCE_MIN_MS,
+  PROACTIVE_LOOP_TICK_MS,
+  PROACTIVE_MAX_MEMORY_CALLBACK_PROBABILITY,
+  PROACTIVE_MAX_UNFINISHED_THREAD_PROBABILITY,
+  PROACTIVE_PRUNE_TICK_MS,
+} from "../character/proactivePolicyConfig";
+import {
+  createProactiveTimerController,
+  type ProactiveTimerController,
+} from "./proactiveTimerController";
+import {
+  useLatestRef,
+  useStableCallbackRef,
+} from "./useStableCallbackRef";
 
 type InitiativeLaunchResult = { sent: boolean; suppressReason?: string };
-
-const COMPANION_SESSION_MIN_MS = 15 * 60 * 1000;
-const COMPANION_SILENCE_MIN_MS = 12 * 60 * 1000;
 
 export function useProactiveInitiative(input: {
   settings: AppSettings;
@@ -114,6 +139,8 @@ export function useProactiveInitiative(input: {
     companionSilenceMs: number;
   }) => Promise<boolean>;
   runAutoVisionGlance: () => Promise<boolean>;
+  clock?: Clock;
+  random?: RandomSource;
 }) {
   const {
     settings,
@@ -138,21 +165,19 @@ export function useProactiveInitiative(input: {
     launchAdviceFromEngine,
     tryGenericCompanionInitiative,
     runAutoVisionGlance,
+    clock = systemClock,
+    random = systemRandom,
   } = input;
-  const getProactiveTimingRef = useRef(getProactiveTiming);
-  const proactiveBundleOptionsRef = useRef(proactiveBundleOptions);
-  const prepareProactivePackageRef = useRef(prepareProactivePackage);
-  const launchProactiveInitiativeRef = useRef(launchProactiveInitiative);
-  const launchAdviceFromEngineRef = useRef(launchAdviceFromEngine);
-  const tryGenericCompanionInitiativeRef = useRef(tryGenericCompanionInitiative);
-  const runAutoVisionGlanceRef = useRef(runAutoVisionGlance);
-  getProactiveTimingRef.current = getProactiveTiming;
-  proactiveBundleOptionsRef.current = proactiveBundleOptions;
-  prepareProactivePackageRef.current = prepareProactivePackage;
-  launchProactiveInitiativeRef.current = launchProactiveInitiative;
-  launchAdviceFromEngineRef.current = launchAdviceFromEngine;
-  tryGenericCompanionInitiativeRef.current = tryGenericCompanionInitiative;
-  runAutoVisionGlanceRef.current = runAutoVisionGlance;
+  const getProactiveTimingRef = useLatestRef(getProactiveTiming);
+  const proactiveBundleOptionsRef = useLatestRef(proactiveBundleOptions);
+  const prepareProactivePackageRef = useLatestRef(prepareProactivePackage);
+  const launchProactiveInitiativeRef = useLatestRef(launchProactiveInitiative);
+  const launchAdviceFromEngineRef = useLatestRef(launchAdviceFromEngine);
+  const tryGenericCompanionInitiativeRef = useLatestRef(tryGenericCompanionInitiative);
+  const runAutoVisionGlanceRef = useLatestRef(runAutoVisionGlance);
+  const clockRef = useLatestRef(clock);
+  const randomRef = useLatestRef(random);
+  const proactiveTimerRef = useRef<ProactiveTimerController | null>(null);
 
   const recordUserAcknowledgedInitiative = useCallback(() => {
     if (
@@ -165,26 +190,8 @@ export function useProactiveInitiative(input: {
     markInitiativeAcknowledged();
   }, [lastInitiativeFeaturesRef, settings.adaptiveInitiativeEnabled]);
 
-  useEffect(() => {
-    if (!settings.proactiveEnabled) {
-      proactiveWasEnabledRef.current = false;
-      return;
-    }
-
-    const adviceIntervalMs = proactiveAdviceIntervalMs(settings);
-    const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
-    ensureProactiveClockStarted(adviceIntervalMs, smalltalkIntervalMs);
-    if (!proactiveWasEnabledRef.current) {
-      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs);
-      proactiveWasEnabledRef.current = true;
-    }
-    const intervalKey = `${settings.proactiveAdviceIntervalMinutes}:${settings.proactiveSmalltalkIntervalMinutes}`;
-    if (lastProactiveIntervalRef.current !== intervalKey) {
-      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs);
-      lastProactiveIntervalRef.current = intervalKey;
-    }
-
-    const checkInitiative = async () => {
+  const checkInitiativeRef = useStableCallbackRef(async () => {
+      const now = clockRef.current.now();
       if (isQuietModeActive(settings, activeWindowRef.current)) {
         return;
       }
@@ -194,22 +201,24 @@ export function useProactiveInitiative(input: {
       if (blocksInitiative(lifecycleRef.current)) {
         return;
       }
-      if (getProactiveFailureBackoff()) {
+      if (getProactiveFailureBackoff(now)) {
         return;
       }
       const activityAgoMs = Math.max(
-        Date.now() - lastUserActivityRef.current,
+        now - lastUserActivityRef.current,
         userIdleSecondsRef.current * 1000,
       );
       const companionSilenceMs = getCompanionSilenceMs();
       const proactiveTiming = getProactiveTimingRef.current();
       const sessionMs = proactiveTiming.sessionMs;
       const immersedCompanion =
-        companionSilenceMs >= COMPANION_SILENCE_MIN_MS &&
-        sessionMs >= COMPANION_SESSION_MIN_MS &&
+        companionSilenceMs >= PROACTIVE_IMMERSED_COMPANION_SILENCE_MIN_MS &&
+        sessionMs >= PROACTIVE_IMMERSED_COMPANION_SESSION_MIN_MS &&
         Boolean(activeWindowRef.current) &&
         settings.activityTrackingEnabled;
       const llmOnline = isLlmProviderOnline(settings, ollamaOnline);
+      const adviceIntervalMs = proactiveAdviceIntervalMs(settings);
+      const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
       const activeLevel = settings.initiativeLevel === "active";
       const adviceIdleMs = Math.min(2 * 60 * 1000, smalltalkIntervalMs);
       const smalltalkIdleMs =
@@ -246,7 +255,6 @@ export function useProactiveInitiative(input: {
       });
       setLastAdviceUrgency(urgency);
 
-      const now = Date.now();
       const sinceAdviceAttempt = now - getLastAdviceAttemptAt();
       const sinceSmalltalkAttempt = now - getLastSmalltalkAttemptAt();
       const smalltalkReady =
@@ -256,7 +264,7 @@ export function useProactiveInitiative(input: {
       const adviceChannelReady =
         canEvaluateAdvice && canEmitAdviceNow(settings, now);
       const idleGateOpen = canEvaluateAdvice;
-      const toneSnapshot = getProactiveToneSnapshot();
+      const toneSnapshot = getProactiveToneSnapshot(now);
       const workContext = isProactiveWorkContext({
         bundle: signalBundle,
         sessionMinutes: proactiveTiming.sessionMinutes,
@@ -333,13 +341,22 @@ export function useProactiveInitiative(input: {
       const longSilence = activityAgoMs >= 20 * 60_000;
       const adviceStreak = countRecentAdviceStreak();
       const memoryRollBoost =
-        adviceStreak >= 2 ? 0.22 : adviceStreak >= 1 ? 0.12 : 0;
+        adviceStreak >= 2
+          ? PROACTIVE_ADVICE_STREAK_MEMORY_BOOST.many
+          : adviceStreak >= 1
+            ? PROACTIVE_ADVICE_STREAK_MEMORY_BOOST.one
+            : 0;
       const tryMemory =
         ritualPending ||
         longSilence ||
         (!activeLevel &&
-          Math.random() <
-            Math.min(0.72, idleLineProbability(settings) + memoryRollBoost));
+          randomChance(
+            randomRef.current,
+            Math.min(
+              PROACTIVE_MAX_MEMORY_CALLBACK_PROBABILITY,
+              idleLineProbability(settings) + memoryRollBoost,
+            ),
+          ));
 
       if (
         !workContext &&
@@ -370,11 +387,18 @@ export function useProactiveInitiative(input: {
 
       if (
         !activeLevel &&
-        Math.random() <
+        randomChance(
+          randomRef.current,
           Math.min(
-            0.35,
-            0.1 + (adviceStreak >= 2 ? 0.18 : adviceStreak >= 1 ? 0.08 : 0),
-          ) &&
+            PROACTIVE_MAX_UNFINISHED_THREAD_PROBABILITY,
+            PROACTIVE_BASE_UNFINISHED_THREAD_PROBABILITY +
+              (adviceStreak >= 2
+                ? PROACTIVE_ADVICE_STREAK_THREAD_BOOST.many
+                : adviceStreak >= 1
+                  ? PROACTIVE_ADVICE_STREAK_THREAD_BOOST.one
+                  : 0),
+          ),
+        ) &&
         canUseInitiativeKind("unfinished_thread", { cooldownMs: smalltalkIntervalMs })
       ) {
         const nudge = getHighPriorityOpenTasks()[0] ?? getNextTask();
@@ -407,23 +431,49 @@ export function useProactiveInitiative(input: {
         companionSilenceMs,
       });
       void generic;
-    };
+    });
 
-    const timer = window.setInterval(checkInitiative, 15_000);
-    return () => window.clearInterval(timer);
+  useEffect(() => {
+    if (!settings.proactiveEnabled) {
+      proactiveWasEnabledRef.current = false;
+      proactiveTimerRef.current?.stop();
+      return;
+    }
+
+    const adviceIntervalMs = proactiveAdviceIntervalMs(settings);
+    const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
+    const now = clockRef.current.now();
+    ensureProactiveClockStarted(adviceIntervalMs, smalltalkIntervalMs, now);
+    if (!proactiveWasEnabledRef.current) {
+      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs, now);
+      proactiveWasEnabledRef.current = true;
+    }
+    const intervalKey = `${settings.proactiveAdviceIntervalMinutes}:${settings.proactiveSmalltalkIntervalMinutes}`;
+    if (lastProactiveIntervalRef.current !== intervalKey) {
+      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs, now);
+      lastProactiveIntervalRef.current = intervalKey;
+    }
+
+    if (!proactiveTimerRef.current) {
+      proactiveTimerRef.current = createProactiveTimerController({
+        intervalMs: PROACTIVE_LOOP_TICK_MS,
+        task: () => checkInitiativeRef.current(),
+      });
+    }
+    proactiveTimerRef.current.update({
+      intervalMs: PROACTIVE_LOOP_TICK_MS,
+      task: () => checkInitiativeRef.current(),
+    });
+    proactiveTimerRef.current.start();
+    return () => proactiveTimerRef.current?.stop();
   }, [
-    settings,
-    ollamaOnline,
-    isOpen,
-    activeWindowRef,
-    historyRef,
-    lifecycleRef,
-    userIdleSecondsRef,
-    lastUserActivityRef,
-    lastVisionObservationRef,
-    isLoadingRef,
+    settings.proactiveEnabled,
+    settings.proactiveAdviceIntervalMinutes,
+    settings.proactiveSmalltalkIntervalMinutes,
     proactiveWasEnabledRef,
     lastProactiveIntervalRef,
+    checkInitiativeRef,
+    clockRef,
   ]);
 
   useEffect(() => {
@@ -440,7 +490,7 @@ export function useProactiveInitiative(input: {
       }
     };
     runPrune();
-    const timer = window.setInterval(runPrune, 60_000);
+    const timer = window.setInterval(runPrune, PROACTIVE_PRUNE_TICK_MS);
     return () => window.clearInterval(timer);
   }, [settings.adaptiveInitiativeEnabled]);
 
@@ -451,7 +501,11 @@ export function useProactiveInitiative(input: {
 
     let timer: number;
     const schedule = () => {
-      const delay = 8 * 60_000 + Math.random() * 12 * 60_000;
+      const delay = randomJitterMs(
+        randomRef.current,
+        AUTO_VISION_MIN_DELAY_MS,
+        AUTO_VISION_JITTER_MS,
+      );
       timer = window.setTimeout(() => {
         void runAutoVisionGlanceRef.current().finally(schedule);
       }, delay);

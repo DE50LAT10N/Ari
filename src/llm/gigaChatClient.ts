@@ -22,6 +22,7 @@ import {
   enqueueGigaChatRequest,
   recordGigaChatThrottle,
 } from "./gigaChatRateLimit";
+import { sanitizeBase64ImagePayload } from "./imagePayloadParser";
 
 const AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
 const API_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1";
@@ -260,17 +261,8 @@ export async function streamGigaChat(
   });
 }
 
-function sanitizeBase64Image(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.startsWith("data:")) {
-    const comma = trimmed.indexOf(",");
-    return comma >= 0 ? trimmed.slice(comma + 1).replace(/\s+/g, "") : trimmed;
-  }
-  return trimmed.replace(/\s+/g, "");
-}
-
 function base64Bytes(base64: string): Uint8Array {
-  const binary = atob(sanitizeBase64Image(base64));
+  const binary = atob(sanitizeBase64ImagePayload(base64));
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 

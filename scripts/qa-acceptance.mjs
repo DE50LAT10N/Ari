@@ -94,6 +94,22 @@ const chatPanel = fs.readFileSync(
   path.join(root, "src/app/ChatPanel.tsx"),
   "utf8",
 );
+const useProactiveInitiative = fs.readFileSync(
+  path.join(root, "src/app/useProactiveInitiative.ts"),
+  "utf8",
+);
+const useReplyGeneration = fs.readFileSync(
+  path.join(root, "src/app/useReplyGeneration.ts"),
+  "utf8",
+);
+const replyRevisionPipeline = fs.readFileSync(
+  path.join(root, "src/app/replyRevisionPipeline.ts"),
+  "utf8",
+);
+const checkInitiativePolicy = fs.readFileSync(
+  path.join(root, "src/character/checkInitiativePolicy.ts"),
+  "utf8",
+);
 const signalChecks = [
   ["recordClipboardSignal", "clipboard capture wired"],
   ["recordFileFocus", "file focus wired"],
@@ -168,7 +184,8 @@ if (
   appTsx.includes("enqueueProactiveRequest") &&
   !appTsx.includes("interactionEvent") &&
   !chatPanel.includes("interactionEvent") &&
-  chatPanel.includes("drainProactiveRequests")
+  !useProactiveInitiative.includes("interactionEvent") &&
+  useProactiveInitiative.includes("drainProactiveRequests")
 ) {
   pass("proactive-qa", "proactiveBridge replaces legacy interactionEvent");
 } else {
@@ -185,8 +202,8 @@ if (
 }
 
 if (
-  chatPanel.includes("resolveAdviceVisibleFallback") ||
-  chatPanel.includes("buildVisibleAdviceFallback")
+  replyRevisionPipeline.includes("resolveAdviceVisibleFallback") ||
+  replyRevisionPipeline.includes("buildVisibleAdviceFallback")
 ) {
   pass("proactive-qa", "local fallback after failed LLM attempt");
 } else {
@@ -292,8 +309,10 @@ if (
 }
 
 if (
-  chatPanel.includes("afterAdviceAttempt") &&
-  chatPanel.includes("retry_advice_later")
+  (checkInitiativePolicy.includes("afterAdviceAttempt") &&
+    checkInitiativePolicy.includes("retry_advice_later")) ||
+  (useReplyGeneration.includes("registerProactiveFailure") &&
+    useProactiveInitiative.includes("getProactiveFailureBackoff"))
 ) {
   pass("proactive-qa", "failed advice backs off instead of hard return");
 } else {
@@ -321,7 +340,7 @@ if (!chatPanel.includes("?? activeWindowRef.current?.title")) {
   fail("proactive-qa", "window title fallback still bypasses anchor dedup");
 }
 
-if (chatPanel.includes("armProactiveGracePeriod")) {
+if (useProactiveInitiative.includes("armProactiveGracePeriod")) {
   pass("proactive-qa", "proactive grace period on enable");
 } else {
   fail("proactive-qa", "missing proactive grace period");

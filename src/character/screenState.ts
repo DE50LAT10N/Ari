@@ -1,4 +1,6 @@
 import type { InitiativeSignalBundle } from "./initiativeContext";
+import { classifyClipboardSignal } from "../platform/clipboardClassifier";
+import { primaryProcessProfile } from "../platform/processProfiles";
 
 export type ScreenAppKind =
   | "ide"
@@ -21,20 +23,17 @@ export type ScreenState = {
   evidence: string[];
 };
 
-const TERMINAL_PROCESS = /(?:terminal|powershell|cmd|wt\.exe|wezterm|alacritty|iterm)/i;
-const BROWSER_PROCESS = /(?:chrome|firefox|edge|msedge|brave|opera|vivaldi|browser)/i;
-const IDE_PROCESS = /(?:cursor|code|devenv|idea|rider|pycharm|webstorm|rustrover|zed|vim|neovim|sublime)/i;
-const COMM_PROCESS = /(?:slack|teams|telegram|discord|zoom|outlook|mail)/i;
 const ERROR_HINT = /(?:error|exception|traceback|panic|failed|fail|ошиб|stack|assert|cannot|undefined|null)/i;
 const TEST_HINT = /(?:test|spec|vitest|jest|pytest|cargo test|assert|expected|received|failed)/i;
 
 function classifyApp(processName = "", title = ""): ScreenAppKind {
-  const haystack = `${processName} ${title}`;
-  if (TERMINAL_PROCESS.test(haystack)) return "terminal";
-  if (IDE_PROCESS.test(haystack)) return "ide";
-  if (BROWSER_PROCESS.test(haystack)) return "browser";
-  if (COMM_PROCESS.test(haystack)) return "communication";
-  return "other";
+  const profile = primaryProcessProfile({ processName, title });
+  return profile === "entertainment" ? "other" : profile;
+}
+
+function isDiagnosticClipboard(text: string): boolean {
+  const kind = classifyClipboardSignal(text).kind;
+  return kind === "stacktrace" || kind === "diagnostic";
 }
 
 function pushUnique(values: string[], value?: string): void {
@@ -49,7 +48,7 @@ function pushUnique(values: string[], value?: string): void {
 function latestProblemText(bundle: InitiativeSignalBundle): string | undefined {
   const stack = [...bundle.clipboardSnippets]
     .reverse()
-    .find((clip) => clip.kind === "stacktrace");
+    .find((clip) => clip.kind === "stacktrace" || isDiagnosticClipboard(clip.text));
   if (stack) {
     return stack.text.slice(0, 180);
   }
@@ -70,7 +69,7 @@ function latestProblemText(bundle: InitiativeSignalBundle): string | undefined {
 function collectErrorHints(bundle: InitiativeSignalBundle): string[] {
   const hints: string[] = [];
   for (const clip of bundle.clipboardSnippets) {
-    if (clip.kind === "stacktrace" || ERROR_HINT.test(clip.text)) {
+    if (clip.kind === "stacktrace" || isDiagnosticClipboard(clip.text)) {
       pushUnique(hints, clip.text.split(/\r?\n/).find((line) => ERROR_HINT.test(line)) ?? clip.text);
     }
   }

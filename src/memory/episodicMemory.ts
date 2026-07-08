@@ -1,5 +1,6 @@
 import { normalizeComparableText } from "../platform/textNormalize";
 import { notifyNew } from "../character/notifications";
+import { ariLog } from "../platform/logger";
 import {
   addTask,
   completeTask,
@@ -68,9 +69,9 @@ function openDatabase(): Promise<IDBDatabase> {
       }
     };
     request.onblocked = () => {
-      console.warn(
-        "[ari-episodes] IndexedDB upgrade blocked by another connection",
-      );
+      ariLog("memory", "warn", {
+        message: "Episodic IndexedDB upgrade blocked by another connection",
+      });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
