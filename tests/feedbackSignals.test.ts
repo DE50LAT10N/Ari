@@ -7,6 +7,9 @@ import {
 import {
   recordFeedbackSignal,
 } from "../src/character/feedbackSignals";
+import { defaultSettings } from "../src/settings/appSettings";
+import { updateMoodFromEvents } from "../src/character/moodEngine";
+import { deriveMoodArchetype } from "../src/character/moodBehavior";
 import { buildAvoidPhrases } from "../src/character/avoidPhraseBuilder";
 import { MESSAGE_REACTIONS } from "../src/character/messageReactions";
 import { resetAdviceOutcomesForTests } from "../src/character/adviceOutcome";
@@ -124,5 +127,33 @@ describe("feedbackSignals", () => {
     });
 
     expect(buildAvoidPhrases()).toContain("UNIQUE_BAD_ADVICE_PHRASE");
+  });
+
+  it("routes assistant ignored feedback into a strong mood event", () => {
+    const result = recordFeedbackSignal({
+      kind: "assistant_ignored",
+      messageId: "msg-ignored",
+      source: "chat",
+      proactive: false,
+      ageMs: 6 * 60_000,
+      ignoredStreak: 2,
+      timestamp: 10_000,
+    });
+
+    expect(result.moodEvents[0]?.type).toBe("assistant_ignored");
+    const mood = updateMoodFromEvents({
+      settings: defaultSettings,
+      events: result.moodEvents,
+      now: 10_000,
+      options: { applyDecay: false },
+    }).nextMood;
+
+    expect(mood.irritation ?? 0).toBeGreaterThan(0.38);
+    expect(deriveMoodArchetype({
+      warmth: mood.warmth ?? 0,
+      energy: mood.energy ?? 0,
+      irritation: mood.irritation ?? 0,
+      updatedAt: 10_000,
+    })).toBe("irritated");
   });
 });

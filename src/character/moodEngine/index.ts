@@ -235,6 +235,7 @@ export function moodVectorToPrompt(
 
 export {
   adviceIgnoredToMoodEvents,
+  assistantIgnoredToMoodEvent,
   emotionToMoodEvent,
   interactionToMoodEvent,
   proactiveToMoodEvent,

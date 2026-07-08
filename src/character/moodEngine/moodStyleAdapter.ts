@@ -38,7 +38,15 @@ export function adaptMoodToStyle(
   // Keep prompt continuity by reusing existing, battle-tested mood prompt block.
   // Safety invariant: this modifier affects only style/tone/tempo/emotion hints.
   const legacyMood = toCharacterMood(vector, now, axisConfig);
+  const dominantMoodBlock =
+    classification.archetype === "irritated"
+      ? [
+          "Dominant mood override: irritated/guarded.",
+          "Style priority: short, dry, less service-like; warmth may soften cruelty but must not erase irritation.",
+        ]
+      : [`Dominant mood: ${classification.archetype}.`];
   const promptModifier = [
+    ...dominantMoodBlock,
     describeMoodForPrompt(legacyMood),
     "Mood policy knobs:",
     ...policy.promptLines,

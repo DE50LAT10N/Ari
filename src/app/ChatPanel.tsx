@@ -9,6 +9,7 @@ import {
   proactiveToMoodEvent,
   type MoodEvent,
 } from "../character/moodEngine";
+import { recordFeedbackSignal } from "../character/feedbackSignals";
 import {
   MESSAGE_REACTIONS,
 } from "../character/messageReactions";
@@ -270,6 +271,13 @@ import {
 } from "./useReplyGeneration";
 import { getErrorMessage } from "./replyGenerationErrors";
 import { useProactiveInitiative } from "./useProactiveInitiative";
+import {
+  acknowledgeAllAssistantMessages,
+  acknowledgeAssistantMessage,
+  getInteractionAcknowledgementSummary,
+  pruneIgnoredAssistantMessages,
+  trackAssistantMessageForAcknowledgement,
+} from "../character/interactionAcknowledgement";
 type ChatPanelProps = {
   isOpen: boolean;
   settings: AppSettings;
@@ -540,6 +548,7 @@ export function ChatPanel({
   const recapBusyRef = useRef(false);
   const topOpenLoopRef = useRef<string | undefined>(undefined);
   const lastInitiativeFeaturesRef = useRef<InitiativeFeatureVector | null>(null);
+  const trackedAssistantAckKeysRef = useRef<Set<string> | null>(null);
   const autoVisionBusyRef = useRef(false);
   const characterStateRef = useRef(characterState);
   const focusSessionSnapshotRef = useRef(getActiveFocusSession());
@@ -660,7 +669,10 @@ export function ChatPanel({
       generationInProgress: isLoadingRef.current,
       quietModeActive: isQuietModeActive(settings, activeWindow),
       typingIdleSeconds: userIdleSeconds,
-      recentIgnoredInitiatives: getRecentIgnoredInitiativeCount(),
+      recentIgnoredInitiatives: Math.max(
+        getRecentIgnoredInitiativeCount(),
+        getInteractionAcknowledgementSummary().ignoredStreak,
+      ),
     });
   }
 
@@ -939,6 +951,52 @@ export function ChatPanel({
 
     return () => window.clearTimeout(timer);
   }, [history]);
+
+  useEffect(() => {
+    const keyFor = (message: ChatMessage, index: number) =>
+      message.messageId ?? `${index}:${message.content.slice(0, 80)}`;
+    if (trackedAssistantAckKeysRef.current === null) {
+      trackedAssistantAckKeysRef.current = new Set(
+        history
+          .map((message, index) =>
+            message.role === "assistant" ? keyFor(message, index) : "",
+          )
+          .filter(Boolean),
+      );
+      return;
+    }
+    for (const [index, message] of history.entries()) {
+      if (message.role !== "assistant" || !message.content.trim()) {
+        continue;
+      }
+      const key = keyFor(message, index);
+      if (trackedAssistantAckKeysRef.current.has(key)) {
+        continue;
+      }
+      trackedAssistantAckKeysRef.current.add(key);
+      trackAssistantMessageForAcknowledgement({
+        message: {
+          ...message,
+          messageId: message.messageId ?? key,
+        },
+      });
+    }
+  }, [history]);
+
+  useEffect(() => {
+    const flushIgnored = () => {
+      const ignored = pruneIgnoredAssistantMessages();
+      for (const signal of ignored) {
+        const result = recordFeedbackSignal(signal);
+        for (const event of result.moodEvents) {
+          onProactiveMoodEvent?.(event);
+        }
+      }
+    };
+    flushIgnored();
+    const timer = window.setInterval(flushIgnored, 30_000);
+    return () => window.clearInterval(timer);
+  }, [onProactiveMoodEvent]);
 
   useEffect(() => {
     const lastAssistant = [...history]
@@ -1375,6 +1433,8 @@ export function ChatPanel({
     if (!content || isLoading) {
       return;
     }
+
+    acknowledgeAllAssistantMessages();
 
     if (teachMode) {
       parsePreferenceRule(content);
@@ -3465,12 +3525,16 @@ export function ChatPanel({
                                 : "Blip voice"
                             }
                             disabled={isLoading && index === history.length - 1}
-                            onClick={() =>
+                            onClick={() => {
+                              acknowledgeAssistantMessage(
+                                message.messageId ??
+                                  `${index}:${message.content.slice(0, 80)}`,
+                              );
                               void speakMessage(
                                 message.content,
                                 message.emotion,
-                              )
-                            }
+                              );
+                            }}
                           >
                             🔊
                           </button>

@@ -173,6 +173,9 @@ class BlipVoiceManager {
     if (!shouldAmbientTextReveal(options)) {
       return false;
     }
+    if (this.active || this.streamSession) {
+      this.stop();
+    }
 
     const token = this.sessionToken;
     const audioEnabled = shouldGateSpeech(options);
@@ -210,7 +213,7 @@ class BlipVoiceManager {
           return;
         }
         options.onDisplayUpdate?.(displayText);
-        if (displayText.length > 0) {
+        if (displayText.length > 0 && session.audioEnabled) {
           if (!this.active) {
             this.active = true;
             dispatchVoiceChanged();
@@ -381,6 +384,9 @@ class BlipVoiceManager {
       return false;
     }
 
+    if (this.active || this.streamSession) {
+      this.stop();
+    }
     const token = this.sessionToken;
     this.active = true;
     dispatchVoiceChanged();
@@ -496,14 +502,18 @@ class BlipVoiceManager {
   }
 
   private finishSpeaking(options: BlipSpeakOptions): void {
-    if (!this.active) {
-      return;
-    }
-    const onIdle = this.streamSession?.onIdle;
+    const session = this.streamSession;
+    const wasActive = this.active;
+    const speakingStarted = session?.speakingStarted ?? wasActive;
+    const onIdle = session?.onIdle;
     this.streamSession = null;
     this.active = false;
-    dispatchVoiceChanged();
-    options.onSpeakingEnd?.();
+    if (wasActive) {
+      dispatchVoiceChanged();
+    }
+    if (speakingStarted) {
+      options.onSpeakingEnd?.();
+    }
     onIdle?.();
   }
 }

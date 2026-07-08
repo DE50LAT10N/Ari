@@ -16,6 +16,7 @@ export type ChatMessage = {
   parentMessageId?: string;
   isCanon?: boolean;
   messageId?: string;
+  proactive?: boolean;
   adviceId?: string;
   adviceFeedback?: import("../character/adviceLedger").AdviceFeedback;
   focusRecap?: FocusRecapMeta;

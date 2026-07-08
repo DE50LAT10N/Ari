@@ -6,6 +6,7 @@ import { deriveMoodArchetype } from "./moodBehavior";
 import type { UserIntent } from "./userIntent";
 import type { InitiativeKind } from "./initiativeKinds";
 import { clipWeight, sigmoid } from "../platform/mathUtils";
+import { getInteractionAcknowledgementSummary } from "./interactionAcknowledgement";
 
 export type InitiativeRisk = "low" | "medium" | "high";
 export type InitiativeValue = "low" | "medium" | "high";
@@ -394,7 +395,10 @@ export function markInitiativeAcknowledged(): void {
 }
 
 export function getRecentIgnoredInitiativeCount(): number {
-  return prunePendingWindow(loadPendingEntries()).length;
+  return Math.max(
+    prunePendingWindow(loadPendingEntries()).length,
+    getInteractionAcknowledgementSummary().ignoredStreak,
+  );
 }
 
 function initiativeTopicOverlapText(description: string): string {

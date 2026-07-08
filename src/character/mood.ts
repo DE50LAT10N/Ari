@@ -60,7 +60,10 @@ export function decayMood(mood: CharacterMood): CharacterMood {
   const elapsedHours = Math.max(0, Date.now() - mood.updatedAt) / 3_600_000;
   const factor = Math.exp(-elapsedHours / 4);
   const drift = getDailyMoodDrift();
-  const relationship = loadRelationshipBondWarmth();
+  const irritationBase = mood.irritation * factor + drift.irritation * 0.35;
+  const relationship =
+    loadRelationshipBondWarmth() *
+    Math.max(0, 1 - Math.max(0, irritationBase - 0.12) * 2.8);
 
   return {
     warmth: clampSignedUnit(
@@ -70,7 +73,7 @@ export function decayMood(mood: CharacterMood): CharacterMood {
         (mood.warmth - 0.25 - drift.warmth - relationship) * factor,
     ),
     energy: clampSignedUnit(0.45 + drift.energy + (mood.energy - 0.45 - drift.energy) * factor),
-    irritation: clampSignedUnit(mood.irritation * factor + drift.irritation * 0.35),
+    irritation: clampSignedUnit(irritationBase),
     updatedAt: Date.now(),
   };
 }

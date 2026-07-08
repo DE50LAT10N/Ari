@@ -160,6 +160,7 @@ export async function runReplyPostprocess(
             ...message,
             content: finalReply,
             emotion: replyEmotion,
+            ...(options.proactive ? { proactive: true } : {}),
             ...(adviceEntry ? { adviceId: adviceEntry.id } : {}),
           }
         : message,

@@ -11,6 +11,7 @@ import {
 } from "../character/messageReactions";
 import { blipVoiceManager } from "../character/blipVoiceManager";
 import { recordFeedbackSignal } from "../character/feedbackSignals";
+import { acknowledgeAssistantMessage } from "../character/interactionAcknowledgement";
 import type { MoodEvent } from "../character/moodEngine";
 import type { AriSelfMemory } from "../character/selfMemory";
 
@@ -106,6 +107,7 @@ export function useMessageReactions(input: {
 
   const markAdviceFeedback = useCallback(
     (messageIndex: number, adviceId: string, feedback: AdviceFeedback) => {
+      acknowledgeAssistantMessage(input.history[messageIndex]?.messageId);
       const result = recordFeedbackSignal({
         kind: "advice_feedback",
         adviceId,
@@ -135,6 +137,7 @@ export function useMessageReactions(input: {
 
       const nextReaction = message.reaction === emoji ? undefined : emoji;
       setOpenReactionMenuIndex(null);
+      acknowledgeAssistantMessage(message.messageId);
 
       if (!nextReaction) {
         input.setHistory((current) =>

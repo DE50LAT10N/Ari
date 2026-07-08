@@ -54,6 +54,7 @@ import {
   getCurrentMoodLayers,
   moodVectorToPrompt,
 } from "../character/moodEngine";
+import { getInteractionAcknowledgementSummary } from "../character/interactionAcknowledgement";
 
 type DeskSnapshot = {
   focusSession: FocusSession | null;
@@ -106,6 +107,7 @@ type ProactiveDebug = {
   moodPolicy: string;
   moodLayers: string;
   moodTimeline: string[];
+  acknowledgementStatus: string;
 };
 
 function buildSnapshot(): DeskSnapshot {
@@ -149,6 +151,7 @@ function buildProactiveDebug(): ProactiveDebug {
   const relevance = describeRelevanceRankerForDiagnostics();
   const moodLayers = getCurrentMoodLayers({ now });
   const moodPolicy = moodVectorToPrompt(moodLayers.vector).policy;
+  const acknowledgement = getInteractionAcknowledgementSummary(now);
   const cadence = urgency
     ? computeCadencePressure(
         urgency,
@@ -216,6 +219,11 @@ function buildProactiveDebug(): ProactiveDebug {
     relevanceRecentUpdates: relevance.recentUpdates,
     moodPolicy: `${moodPolicy.archetype} · len ${moodPolicy.replyLength} · thought ${moodPolicy.thoughtBubbleChance.toFixed(2)} · initiative ${moodPolicy.initiativeBias.toFixed(2)}`,
     moodLayers: `now ${moodLayers.vector.warmth.toFixed(2)}/${moodLayers.vector.energy.toFixed(2)}/${moodLayers.vector.irritation.toFixed(2)} · base ${moodLayers.baselineVector.warmth.toFixed(2)}/${moodLayers.baselineVector.energy.toFixed(2)}/${moodLayers.baselineVector.irritation.toFixed(2)} · react ${moodLayers.reactiveVector.warmth.toFixed(2)}/${moodLayers.reactiveVector.energy.toFixed(2)}/${moodLayers.reactiveVector.irritation.toFixed(2)}`,
+    acknowledgementStatus: `pending ${acknowledgement.pending} · ignored ${acknowledgement.ignoredStreak} · repair ${
+      acknowledgement.lastRepairAt
+        ? `${Math.max(0, Math.round((now - acknowledgement.lastRepairAt) / 1000))}s ago`
+        : "—"
+    } · source ${acknowledgement.lastIgnoredSource ?? "—"}`,
     moodTimeline: formatMoodTimelineForDiagnostics(4),
   };
 }
@@ -425,6 +433,10 @@ export function AriDiagnosticsSection() {
             <div>
               <dt>Mood layers</dt>
               <dd>{proactiveDebug.moodLayers}</dd>
+            </div>
+            <div>
+              <dt>Acknowledgement</dt>
+              <dd>{proactiveDebug.acknowledgementStatus}</dd>
             </div>
             {proactiveDebug.moodTimeline.length > 0 && (
               <div>

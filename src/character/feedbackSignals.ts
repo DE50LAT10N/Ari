@@ -5,6 +5,7 @@ import { updateAdviceFeedback } from "./adviceLedger";
 import { recordAdviceFeedbackOutcome } from "./adviceOutcome";
 import type { MessageReaction } from "./messageReactions";
 import {
+  assistantIgnoredToMoodEvent,
   proactiveToMoodEvent,
   reactionToMoodEvent,
   type MoodEvent,
@@ -41,6 +42,16 @@ export type FeedbackSignal =
       assistantReply: string;
       emotion: CharacterEmotion;
       currentSelfMemory?: AriSelfMemory;
+      timestamp?: number;
+    }
+  | {
+      kind: "assistant_ignored";
+      messageId: string;
+      source: "chat" | "proactive" | "ambient";
+      proactive: boolean;
+      adviceId?: string;
+      ageMs: number;
+      ignoredStreak: number;
       timestamp?: number;
     };
 
@@ -137,6 +148,22 @@ export function recordFeedbackSignal(
           entry: updated,
           feedback: signal.feedback,
           source: signal.source,
+          timestamp: signal.timestamp,
+        }),
+      ],
+    };
+  }
+
+  if (signal.kind === "assistant_ignored") {
+    return {
+      moodEvents: [
+        assistantIgnoredToMoodEvent({
+          messageId: signal.messageId,
+          source: signal.source,
+          proactive: signal.proactive,
+          adviceId: signal.adviceId,
+          ageMs: signal.ageMs,
+          ignoredStreak: signal.ignoredStreak,
           timestamp: signal.timestamp,
         }),
       ],

@@ -117,8 +117,33 @@ export async function playBlip(options: PlayBlipOptions): Promise<void> {
   source.connect(gain);
   gain.connect(context.destination);
   activeSources.add(source);
-  source.onended = () => activeSources.delete(source);
-  source.start();
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      activeSources.delete(source);
+      try {
+        source.disconnect();
+      } catch {
+        // already disconnected
+      }
+      try {
+        gain.disconnect();
+      } catch {
+        // already disconnected
+      }
+      resolve();
+    };
+    source.onended = finish;
+    try {
+      source.start();
+    } catch {
+      finish();
+    }
+  });
 }
 
 export function stopAllBlips(): void {

@@ -367,19 +367,23 @@ export function App() {
 
     if (reason !== "mood" && reason === "model") {
       setMood((currentMood) => {
+        let nextMood: CharacterMood;
         if (!isMoodEngineEnabled(settingsRef.current)) {
-          return applyEmotionToMood(currentMood, softened);
+          nextMood = applyEmotionToMood(currentMood, softened);
+        } else {
+          const result = updateMoodFromEvents({
+            settings: settingsRef.current,
+            events: [emotionToMoodEvent({ emotion: softened })],
+          });
+          nextMood = {
+            warmth: result.nextMood.warmth ?? currentMood.warmth,
+            energy: result.nextMood.energy ?? currentMood.energy,
+            irritation: result.nextMood.irritation ?? currentMood.irritation,
+            updatedAt: Date.now(),
+          };
         }
-        const result = updateMoodFromEvents({
-          settings: settingsRef.current,
-          events: [emotionToMoodEvent({ emotion: softened })],
-        });
-        return {
-          warmth: result.nextMood.warmth ?? currentMood.warmth,
-          energy: result.nextMood.energy ?? currentMood.energy,
-          irritation: result.nextMood.irritation ?? currentMood.irritation,
-          updatedAt: Date.now(),
-        };
+        moodRef.current = nextMood;
+        return nextMood;
       });
     }
     recordEmotion(softened, reason);
@@ -392,6 +396,17 @@ export function App() {
     const target = explicitEmotion ?? avatarEmotionFromMood(moodRef.current);
     handleEmotionChange(target, "mood");
   }, [handleEmotionChange]);
+
+  const applyMoodResult = useCallback(
+    (nextMood: CharacterMood) => {
+      const saved = saveMood(nextMood);
+      moodRef.current = saved;
+      setMood(saved);
+      syncAvatarEmotionFromMood(avatarEmotionFromMood(saved));
+      return saved;
+    },
+    [syncAvatarEmotionFromMood],
+  );
 
   const applyInteractionMood = useCallback(
     (
@@ -407,10 +422,7 @@ export function App() {
       intensity = 1,
     ) => {
       if (!isMoodEngineEnabled(settingsRef.current)) {
-        const next = applyInteractionToMood(moodRef.current, interaction);
-        setMood(next);
-        const preferred = avatarEmotionFromMood(next);
-        syncAvatarEmotionFromMood(preferred);
+        applyMoodResult(applyInteractionToMood(moodRef.current, interaction));
         return;
       }
 
@@ -419,20 +431,14 @@ export function App() {
         events: [interactionToMoodEvent({ interaction, intensity })],
         options: { applyDecay: false },
       });
-      setMood({
+      applyMoodResult({
         warmth: result.nextMood.warmth ?? moodRef.current.warmth,
         energy: result.nextMood.energy ?? moodRef.current.energy,
         irritation: result.nextMood.irritation ?? moodRef.current.irritation,
         updatedAt: Date.now(),
       });
-      syncAvatarEmotionFromMood(avatarEmotionFromMood({
-        warmth: result.nextMood.warmth ?? moodRef.current.warmth,
-        energy: result.nextMood.energy ?? moodRef.current.energy,
-        irritation: result.nextMood.irritation ?? moodRef.current.irritation,
-        updatedAt: Date.now(),
-      }));
     },
-    [syncAvatarEmotionFromMood],
+    [applyMoodResult],
   );
 
   const applyMoodEngineEvents = useCallback(
@@ -451,11 +457,9 @@ export function App() {
         irritation: result.nextMood.irritation ?? moodRef.current.irritation,
         updatedAt: Date.now(),
       };
-      moodRef.current = nextMood;
-      setMood(nextMood);
-      syncAvatarEmotionFromMood(avatarEmotionFromMood(nextMood));
+      applyMoodResult(nextMood);
     },
-    [syncAvatarEmotionFromMood],
+    [applyMoodResult],
   );
 
   useEffect(() => {
@@ -920,10 +924,7 @@ export function App() {
       const count =
         (event as CustomEvent<{ count?: number }>).detail?.count ?? 1;
       if (!isMoodEngineEnabled(settingsRef.current)) {
-        const next = applyRepeatedIgnoreMood(moodRef.current, count);
-        setMood(next);
-        const preferred = avatarEmotionFromMood(next);
-        syncAvatarEmotionFromMood(preferred);
+        applyMoodResult(applyRepeatedIgnoreMood(moodRef.current, count));
         return;
       }
 
@@ -932,7 +933,7 @@ export function App() {
     window.addEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
     return () =>
       window.removeEventListener(ADVICE_IGNORED_EVENT, handleAdviceIgnored);
-  }, [applyMoodEngineEvents, syncAvatarEmotionFromMood]);
+  }, [applyMoodEngineEvents, applyMoodResult]);
 
   useEffect(() => {
     if (!settings.pomodoroEnabled) return;
@@ -1457,9 +1458,7 @@ export function App() {
                   };
                 }
               }
-              moodRef.current = nextMood;
-              setMood(nextMood);
-              syncAvatarEmotionFromMood(avatarEmotionFromMood(nextMood));
+              applyMoodResult(nextMood);
             }}
           />
         </Suspense>

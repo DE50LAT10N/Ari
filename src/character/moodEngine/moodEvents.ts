@@ -217,3 +217,36 @@ export function adviceIgnoredToMoodEvents(count = 1): MoodEvent[] {
   );
 }
 
+export function assistantIgnoredToMoodEvent(input: {
+  messageId: string;
+  source: "chat" | "proactive" | "ambient";
+  proactive: boolean;
+  adviceId?: string;
+  ageMs: number;
+  ignoredStreak: number;
+  timestamp?: number;
+}): MoodEvent {
+  const timestamp = input.timestamp ?? Date.now();
+  const streak = Math.max(1, input.ignoredStreak);
+  return {
+    id: `assistant-ignored:${input.messageId}:${timestamp}`,
+    type: "assistant_ignored",
+    source: input.proactive ? "proactive" : "ui_interaction",
+    intensity: Math.min(2, 0.95 + (streak - 1) * 0.22),
+    confidence: 0.9,
+    timestamp,
+    metadata: {
+      messageId: input.messageId,
+      source: input.source,
+      proactive: input.proactive,
+      adviceId: input.adviceId,
+      ageMs: input.ageMs,
+      ignoredStreak: streak,
+    },
+    impact: {
+      warmth: -0.2 - Math.min(0.18, (streak - 1) * 0.04),
+      energy: -0.08 - Math.min(0.08, (streak - 1) * 0.02),
+      irritation: 0.34 + Math.min(0.22, (streak - 1) * 0.06),
+    },
+  };
+}
