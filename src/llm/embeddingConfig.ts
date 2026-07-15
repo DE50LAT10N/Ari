@@ -4,10 +4,11 @@ import { getVisionSource } from "./visionConfig";
 export type EmbeddingSource = "gigachat" | "ollama" | "none";
 
 export function getEmbeddingSource(settings: AppSettings): EmbeddingSource {
-  if (settings.llmProvider === "ollama") {
-    return "ollama";
+  const configured = settings.embeddingSource ?? "gigachat";
+  if (configured !== "none") {
+    return configured;
   }
-  return settings.embeddingSource ?? "gigachat";
+  return settings.llmProvider === "ollama" ? "ollama" : "gigachat";
 }
 
 export function isEmbeddingSourceConfigured(settings: AppSettings): boolean {
@@ -23,9 +24,6 @@ export function resolveEmbeddingModel(settings: AppSettings): string {
 }
 
 export function usesLocalOllamaAuxiliary(settings: AppSettings): boolean {
-  if (settings.llmProvider === "ollama") {
-    return false;
-  }
   return (
     getEmbeddingSource(settings) === "ollama" ||
     getVisionSource(settings) === "ollama"

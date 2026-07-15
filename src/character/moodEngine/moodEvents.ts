@@ -244,9 +244,9 @@ export function assistantIgnoredToMoodEvent(input: {
       ignoredStreak: streak,
     },
     impact: {
-      warmth: -0.2 - Math.min(0.18, (streak - 1) * 0.04),
-      energy: -0.08 - Math.min(0.08, (streak - 1) * 0.02),
-      irritation: 0.34 + Math.min(0.22, (streak - 1) * 0.06),
+      warmth: -0.1 - Math.min(0.1, (streak - 1) * 0.03),
+      energy: -0.04 - Math.min(0.06, (streak - 1) * 0.02),
+      irritation: 0.16 + Math.min(0.14, (streak - 1) * 0.04),
     },
   };
 }

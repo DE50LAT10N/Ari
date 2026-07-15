@@ -84,6 +84,7 @@ describe("proactiveTone", () => {
   });
 
   it("enables proactive web search for debug signals", () => {
+    const webEnabledSettings = { ...defaultSettings, webToolsEnabled: true };
     recordClipboardSignal({
       clipKind: "stacktrace",
       snippet: "TypeError: Cannot read properties of undefined",
@@ -93,7 +94,7 @@ describe("proactiveTone", () => {
       windowTitle: "app.ts - project - Cursor",
     });
     expect(
-      shouldProactiveWebSearch(bundle, "advice", defaultSettings, "отладка"),
+      shouldProactiveWebSearch(bundle, "advice", webEnabledSettings, "отладка"),
     ).toBe(true);
     expect(
       shouldProactiveWebSearch(bundle, "smalltalk", defaultSettings),
@@ -101,6 +102,7 @@ describe("proactiveTone", () => {
   });
 
   it("enables proactive web search for researchable anchors and candidate kinds", () => {
+    const webEnabledSettings = { ...defaultSettings, webToolsEnabled: true };
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "CHANGELOG.md - Ari - Cursor",
@@ -109,7 +111,7 @@ describe("proactiveTone", () => {
       shouldProactiveWebSearch(
         bundle,
         "advice",
-        defaultSettings,
+        webEnabledSettings,
         "how to configure vite library",
         "docs_lookup",
       ),

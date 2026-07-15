@@ -14,9 +14,7 @@ import {
   MESSAGE_REACTIONS,
 } from "../character/messageReactions";
 import {
-  buildMoodRefusalReply,
   avatarEmotionFromMood,
-  shouldMoodRefuseRequest,
 } from "../character/moodBehavior";
 import {
   type AttentionState,
@@ -34,6 +32,7 @@ import {
   setLastProactiveMessageAt,
   rememberAdviceSubject,
   recordAdviceDecision,
+  registerProactiveFailure,
 } from "../character/proactiveState";
 import {
   getLastAdviceUrgency,
@@ -221,6 +220,8 @@ import {
   isTooLongForAutoBlip,
 } from "../character/blipVoiceManager";
 import { isBlipVoiceEnabled } from "../settings/appSettings";
+import { buildEngineeringMentorContext } from "../ide/mentorContext";
+import { isIdeAdvisorSnapshotFresh } from "../ide/snapshotFreshness";
 import type { SafeActionProposal } from "../tools/safeActions";
 import { describeSafeActionDetail } from "../tools/safeActions";
 import {
@@ -271,6 +272,7 @@ import {
 } from "./useReplyGeneration";
 import { getErrorMessage } from "./replyGenerationErrors";
 import { useProactiveInitiative } from "./useProactiveInitiative";
+import { useIdeAdvisorBridge } from "./useIdeAdvisorBridge";
 import {
   acknowledgeAllAssistantMessages,
   acknowledgeAssistantMessage,
@@ -318,6 +320,18 @@ type ChatPanelProps = {
 
 const STARTING_LINE =
   "Ну привет. Я Ari. Можешь сделать вид, что открыл чат случайно.";
+
+function ideEditorLabel(uri?: string): string | null {
+  if (!uri) return null;
+  const parts = uri.split(/[\\/]/).filter(Boolean);
+  const tail = parts[parts.length - 1];
+  if (!tail) return uri.slice(0, 80);
+  try {
+    return decodeURIComponent(tail);
+  } catch {
+    return tail;
+  }
+}
 const QUICK_COMMAND_GROUPS: Array<{
   title: string;
   commands: Array<{ label: string; value: string; hint?: string }>;
@@ -507,6 +521,11 @@ export function ChatPanel({
   const [streamingAssistantIndex, setStreamingAssistantIndex] = useState<
     number | null
   >(null);
+  const ideAdvisor = useIdeAdvisorBridge(
+    settings.onboardingCompleted &&
+      settings.ideAdvisorEnabled &&
+      settings.adviceCodeReadingEnabled,
+  );
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const quickCommandRef = useRef<HTMLDivElement>(null);
@@ -616,6 +635,7 @@ export function ChatPanel({
     attention,
     scene,
     selfMemory,
+    ideSnapshot: ideAdvisor.snapshot,
     setError,
     setHistory,
     setIsLoading,
@@ -885,12 +905,16 @@ export function ChatPanel({
   }, [pomodoro.phase, bodyDoubling, settings.soundsEnabled]);
 
   useEffect(() => {
-    if (
-      !isOpen ||
-      isLoading ||
-      voiceSpeaking ||
-      blipVoiceManager.isSpeaking()
-    ) {
+    if (!isOpen || isLoading) {
+      return;
+    }
+    if (voiceSpeaking || blipVoiceManager.isSpeaking()) {
+      return;
+    }
+    if (characterState === "speaking") {
+      onStateChange(
+        userIdleSeconds >= CHAT_TYPING_IDLE_SECONDS ? "idle" : "listening",
+      );
       return;
     }
     if (userIdleSeconds >= CHAT_TYPING_IDLE_SECONDS) {
@@ -898,7 +922,14 @@ export function ChatPanel({
     } else {
       onStateChange("listening");
     }
-  }, [isOpen, isLoading, voiceSpeaking, userIdleSeconds, onStateChange]);
+  }, [
+    isOpen,
+    isLoading,
+    voiceSpeaking,
+    characterState,
+    userIdleSeconds,
+    onStateChange,
+  ]);
 
   useEffect(() => {
     historyRef.current = history;
@@ -1053,6 +1084,37 @@ export function ChatPanel({
           ? shutdownError.message
           : "Не удалось полностью выключить Ari.",
       );
+    }
+  }
+
+  async function handleIdeAdvisorClick() {
+    const result = await ideAdvisor.refresh();
+    const pairingFile = result.status.connectionFile;
+    if (result.status.connection === "waiting" && pairingFile) {
+      try {
+        await navigator.clipboard.writeText(pairingFile);
+        setLiveToolStatus(
+          "Путь к файлу подключения IDE скопирован. В VS Code запусти: Ari: Pair IDE Advisor from Connection File.",
+        );
+      } catch {
+        setLiveToolStatus(`Файл подключения IDE: ${pairingFile}`);
+      }
+      return;
+    }
+    if (result.error) {
+      setLiveToolStatus(`IDE Bridge недоступен: ${result.error}`);
+    } else if (result.status.connection === "paired") {
+      setLiveToolStatus(
+        result.snapshot
+          ? `IDE Advisor обновлён: revision ${result.snapshot.revision}.`
+          : "IDE Advisor подключён, но свежий snapshot пока не получен.",
+      );
+    } else if (result.status.connection === "expired") {
+      setLiveToolStatus("Pairing-сессия IDE истекла. Нажми ещё раз для новой сессии.");
+    } else if (result.status.connection === "waiting") {
+      setLiveToolStatus("IDE Bridge ждёт подключения, но pairing-файл ещё не готов.");
+    } else {
+      setLiveToolStatus("IDE Advisor не подключён.");
     }
   }
 
@@ -1276,10 +1338,10 @@ export function ChatPanel({
       isLoadingRef.current = false;
       setVisionLoading(false);
       if (!visionPaused) {
-        window.setTimeout(
-          () => onStateChange(isOpen ? "listening" : "idle"),
-          500,
-        );
+      window.setTimeout(
+        () => onStateChange(isOpen ? "listening" : "idle"),
+        500,
+      );
       }
     }
   }
@@ -1518,13 +1580,6 @@ export function ChatPanel({
   }
 
   async function approveAction(action: SafeActionProposal) {
-    if (shouldMoodRefuseRequest(mood, "action")) {
-      updateAction(action.id, {
-        status: "rejected",
-        result: buildMoodRefusalReply(mood, "action"),
-      });
-      return;
-    }
     updateAction(action.id, { status: "running", result: "Выполняю…" });
     const safeActions = await loadSafeActions();
     try {
@@ -1601,11 +1656,15 @@ export function ChatPanel({
     immersedCompanion: boolean;
     companionSilenceMs: number;
   }): Promise<boolean> {
+    if (getProactiveFailureBackoff()) {
+      return false;
+    }
     if (
       !allowsGenericCompanionInitiative(
         input.activityAgoMs,
         input.plannedSilenceMs,
         {
+          activeLevel: settings.initiativeLevel === "active",
           immersedCompanion: input.immersedCompanion,
           companionSilenceMs: input.companionSilenceMs,
           companionSilenceMinMs: COMPANION_SILENCE_MIN_MS,
@@ -1621,14 +1680,7 @@ export function ChatPanel({
     }
 
     if (input.llmOnline) {
-      let pkg = await prepareProactivePackage("check_in", proactiveBundleOptions());
-      if (!pkg) {
-        pkg = buildProactiveInitiativePackage(
-          settings,
-          "check_in",
-          proactiveBundleOptions(),
-        );
-      }
+      const pkg = await prepareProactivePackage("check_in", proactiveBundleOptions());
       if (!pkg) {
         return false;
       }
@@ -1640,8 +1692,8 @@ export function ChatPanel({
     }
 
     recordInitiativeSuppressed("llm offline");
-    return false;
-  }
+        return false;
+      }
 
   function getProactiveTiming(now = Date.now()) {
     const windowMs = observedWindowRef.current
@@ -1675,6 +1727,25 @@ export function ChatPanel({
     const lastUserMessage = [...historyRef.current]
       .reverse()
       .find((message) => message.role === "user")?.content;
+    const ideMentorContext =
+      ideAdvisor.snapshot &&
+      settings.onboardingCompleted &&
+      settings.ideAdvisorEnabled &&
+      settings.adviceCodeReadingEnabled &&
+      isIdeAdvisorSnapshotFresh(ideAdvisor.snapshot)
+        ? buildEngineeringMentorContext(ideAdvisor.snapshot, {
+            mode: "mentor_debug",
+            maxContentChars: 6_000,
+            maxDiagnostics: 30,
+            maxTests: 5,
+          })
+        : null;
+    const proactiveIdeExcerpts = ideMentorContext?.evidence
+      .filter((evidence) => evidence.source !== "workspace")
+      .map((evidence) => ({
+        file: evidence.uri ?? `IDE ${evidence.source}`,
+        text: evidence.content,
+      }));
     return {
       sessionMinutes: timing.sessionMinutes,
       windowMinutes: timing.windowMinutes,
@@ -1685,6 +1756,9 @@ export function ChatPanel({
       codingSessionMinutes: timing.sessionMinutes,
       recentUserMessage: lastUserMessage,
       recentChatTurns: recentTurns,
+      proactiveIdeExcerpts:
+        proactiveIdeExcerpts?.length ? proactiveIdeExcerpts : undefined,
+      ideEditorFile: ideAdvisor.snapshot?.activeEditor?.uri,
       urgency: extra.urgency ?? getLastAdviceUrgency() ?? undefined,
       ...extra,
     };
@@ -1694,13 +1768,6 @@ export function ChatPanel({
     kind: InitiativeKind,
     options: ProactivePackageOptions = {},
   ): Promise<ProactiveInitiativePackage | null> {
-    const backoff = getProactiveFailureBackoff();
-    if (backoff) {
-      recordInitiativeSuppressed(
-        `proactive backoff ${Math.ceil((backoff.until - Date.now()) / 60_000)}m`,
-      );
-      return null;
-    }
     if (!isOpen && isLlmProviderOnline(settings, ollamaOnline)) {
       onAmbientBubble?.("…");
     }
@@ -1767,7 +1834,7 @@ export function ChatPanel({
           );
           const ragClient = await loadRagClient();
           const ragHits = await ragClient.searchRag(ragQuery, settings);
-          ragSnippets = ragHits
+          ragSnippets = ragHits.matches
             .slice(0, 3)
             .map((hit) => hit.text.trim().slice(0, 420))
             .filter(Boolean);
@@ -1777,6 +1844,18 @@ export function ChatPanel({
       }
       const codeExcerpt =
         tone === "advice" ? await loadCurrentCodeExcerpt(settings, bundle) : null;
+      const contextExcerpts = [
+        ...(codeExcerpt
+          ? [{ file: codeExcerpt.file, text: codeExcerpt.text }]
+          : []),
+        ...(mergedOpts.proactiveIdeExcerpts ?? []),
+      ].filter(
+        (excerpt, index, all) =>
+          all.findIndex(
+            (candidate) =>
+              candidate.file === excerpt.file && candidate.text === excerpt.text,
+          ) === index,
+      );
       const adviceFacts = proactive.collectProactiveSignalFacts({
         bundle,
         tone,
@@ -1789,9 +1868,7 @@ export function ChatPanel({
         urgency: mergedOpts.urgency,
         recentChatTurns: mergedOpts.recentChatTurns,
         ragSnippets: ragSnippets.length ? ragSnippets : undefined,
-        codeExcerpts: codeExcerpt
-          ? [{ file: codeExcerpt.file, text: codeExcerpt.text }]
-          : undefined,
+        codeExcerpts: contextExcerpts.length ? contextExcerpts : undefined,
       });
       const adviceTopicKey = buildAdviceTopicKey({
         anchor: preliminaryAnchor,
@@ -1864,72 +1941,10 @@ export function ChatPanel({
         recentChatTurns: mergedOpts.recentChatTurns,
         llmOnline: true,
         ragSnippets: ragSnippets.length ? ragSnippets : undefined,
-        codeExcerpts: codeExcerpt
-          ? [{ file: codeExcerpt.file, text: codeExcerpt.text }]
-          : undefined,
+        codeExcerpts: contextExcerpts.length ? contextExcerpts : undefined,
         adviceCandidate: advicePlan?.selected,
+        requirePracticalHook: tone === "advice",
       });
-      if (
-        llmBundle.tone === "advice" &&
-        !llmBundle.practicalHook &&
-        !(llmBundle.adviceSteps && llmBundle.adviceSteps.length)
-      ) {
-        const retry = await proactive.synthesizeProactiveBundle(settings, {
-          bundle,
-          tone: "advice",
-          bannedTopics: banned,
-          candidateTopics,
-          sessionMinutes: mergedOpts.sessionMinutes,
-          windowMinutes: mergedOpts.windowMinutes,
-          companionSilenceMs: mergedOpts.companionSilenceMs,
-          recentUserMessage: mergedOpts.recentUserMessage,
-          urgency: mergedOpts.urgency,
-          recentChatTurns: mergedOpts.recentChatTurns,
-          llmOnline: true,
-          requirePracticalHook: true,
-          codeExcerpts: codeExcerpt
-            ? [{ file: codeExcerpt.file, text: codeExcerpt.text }]
-            : undefined,
-          adviceCandidate: advicePlan?.selected,
-        });
-        if (retry.practicalHook || retry.adviceSteps?.length) {
-          llmBundle = retry;
-        }
-      }
-      if (
-        tone === "advice" &&
-        llmBundle.shouldSend &&
-        proactive.isThinAdviceContext(adviceFacts)
-      ) {
-        const hookText = llmBundle.practicalHook ?? "";
-        if (
-          proactive.isThinContextGenericAdvice(hookText, adviceFacts, llmBundle) ||
-          proactive.isGenericAdviceText(hookText)
-        ) {
-          const clarifying = proactive.buildClarifyingProbeBundle(
-            {
-              bundle,
-              tone: "advice",
-              bannedTopics: banned,
-              candidateTopics,
-              sessionMinutes: mergedOpts.sessionMinutes,
-              windowMinutes: mergedOpts.windowMinutes,
-              companionSilenceMs: mergedOpts.companionSilenceMs,
-              recentUserMessage: mergedOpts.recentUserMessage,
-              urgency: mergedOpts.urgency,
-              recentChatTurns: mergedOpts.recentChatTurns,
-              ragSnippets: ragSnippets.length ? ragSnippets : undefined,
-              adviceCandidate: advicePlan?.selected,
-            },
-            adviceFacts,
-            "thin context generic synthesis",
-          );
-          if (clarifying) {
-            llmBundle = clarifying;
-            proactive.setLastProactiveLlmBundle(clarifying, adviceFacts);
-          }
-        }
-      }
       if (tone === "advice" && llmBundle.shouldSend) {
         const hookText = [
           llmBundle.practicalHook,
@@ -1950,80 +1965,18 @@ export function ChatPanel({
             issue.kind === "repeat_text" || issue.kind === "repeat_archetype",
         );
         if (isNearDuplicate) {
-          const rotated = proactive.buildClarifyingProbeBundle(
-            {
-              bundle,
-              tone: "advice",
-              bannedTopics: banned,
-              candidateTopics,
-              sessionMinutes: mergedOpts.sessionMinutes,
-              windowMinutes: mergedOpts.windowMinutes,
-              companionSilenceMs: mergedOpts.companionSilenceMs,
-              recentUserMessage: mergedOpts.recentUserMessage,
-              urgency: mergedOpts.urgency,
-              recentChatTurns: mergedOpts.recentChatTurns,
-              ragSnippets: ragSnippets.length ? ragSnippets : undefined,
-              adviceCandidate: advicePlan?.selected,
-            },
-            adviceFacts,
-            "duplicate advice rotated",
-          );
-          const rotatedNovelty = rotated
-            ? evaluateAdviceNovelty({
-                text: rotated.practicalHook ?? "",
-                candidateKind: "clarifying_probe",
-                recentEntries: loadAdviceLedger().filter(
-                  (entry) => entry.topicKey === adviceTopicKey,
-                ),
-              })
-            : [];
-          if (
-            rotated &&
-            !rotatedNovelty.some((issue) => issue.kind === "repeat_text")
-          ) {
-            llmBundle = rotated;
-            proactive.setLastProactiveLlmBundle(rotated, adviceFacts);
-          } else {
-            recordInitiativeSuppressed("duplicate advice — defer to smalltalk");
-            return null;
-          }
+          recordInitiativeSuppressed("duplicate advice");
+          return null;
         }
       }
       if (!llmBundle.shouldSend) {
-        if (tone === "advice") {
-          const fallbackBundle = proactive.tryAdviceFallbackChain(
-            {
-              bundle,
-              tone,
-              bannedTopics: banned,
-              candidateTopics,
-              sessionMinutes: mergedOpts.sessionMinutes,
-              windowMinutes: mergedOpts.windowMinutes,
-              companionSilenceMs: mergedOpts.companionSilenceMs,
-              recentUserMessage: mergedOpts.recentUserMessage,
-              urgency: mergedOpts.urgency,
-              recentChatTurns: mergedOpts.recentChatTurns,
-              ragSnippets: ragSnippets.length ? ragSnippets : undefined,
-              adviceCandidate: advicePlan?.selected,
-            },
-            adviceFacts,
-            llmBundle.rejectReason ?? "llm synthesis rejected",
-          );
-          if (fallbackBundle) {
-            llmBundle = fallbackBundle;
-            proactive.setLastProactiveLlmBundle(fallbackBundle, adviceFacts);
-          } else {
-            recordInitiativeSuppressed(
-              llmBundle.rejectReason ?? "llm bundle rejected",
-            );
-            return null;
-          }
-        } else {
-          recordInitiativeSuppressed(
-            llmBundle.rejectReason ?? "llm bundle rejected",
-          );
-          return null;
+        if (llmBundle.rejectReason === "llm synthesis failed") {
+          registerProactiveFailure(llmBundle.rejectReason);
         }
+        recordInitiativeSuppressed(
+          llmBundle.rejectReason ?? "llm bundle rejected",
+        );
+        return null;
       }
       packageOptions = {
         ...packageOptions,
@@ -2140,13 +2093,6 @@ export function ChatPanel({
     const interruptibility = resolveInterruptibilityTier();
     const initiativeKind =
       forcedKind ?? classifyInitiativeKind(eventDescription);
-    const backoff = getProactiveFailureBackoff();
-    if (backoff) {
-      return suppress(
-        `proactive backoff ${Math.ceil((backoff.until - Date.now()) / 60_000)}m`,
-      );
-    }
-
     const now = Date.now();
     const isAdviceTone = options.proactiveReplyTone === "advice";
     if (isAdviceTone && !canEmitAdviceNow(settings, now)) {
@@ -2169,7 +2115,7 @@ export function ChatPanel({
 
     if (
       gateBusyRef.current ||
-      isLoadingRef.current ||
+        isLoadingRef.current ||
       isQuietHours(settings) ||
       isQuietModeActive(settings, activeWindow) ||
       blocksInitiative(lifecycle)
@@ -2212,10 +2158,10 @@ export function ChatPanel({
           options.proactiveLinkNarrative ||
           options.gateContext,
       ));
-    const localDecision = scoreInitiativeLocally({
+        const localDecision = scoreInitiativeLocally({
       description: eventDescription,
-      scene,
-      chatClosedAgoMs: Date.now() - lastChatClosedAtRef.current,
+          scene,
+          chatClosedAgoMs: Date.now() - lastChatClosedAtRef.current,
       userActivityAgoMs: Math.max(
         Date.now() - lastUserActivityRef.current,
         userIdleSeconds * 1000,
@@ -2248,8 +2194,8 @@ export function ChatPanel({
       value: localDecision.value,
       annoyanceRisk: localDecision.annoyanceRisk,
       interruptibility: describeInterruptibility(interruptibility),
-    });
-    if (!localDecision.allowed) {
+        });
+        if (!localDecision.allowed) {
       return suppress(localDecision.reason);
     }
     gateBusyRef.current = true;
@@ -2292,10 +2238,10 @@ export function ChatPanel({
         interruptibility: describeInterruptibility(interruptibility),
       });
       if (settings.proactiveOpenChat && allowsProactiveChat(interruptibility)) {
-        onProactiveMessage();
+    onProactiveMessage();
       }
       const sent = await generateReply(historyRef.current, {
-        proactive: true,
+      proactive: true,
         eventDescription: topic,
         initiativeAnchor: options.initiativeAnchor,
         softInitiativeAnchor: options.softInitiativeAnchor,
@@ -2389,9 +2335,9 @@ export function ChatPanel({
             reminderText: dueLoop.notes ?? dueLoop.title,
             reminderDueAt: dueLoop.dueAt,
           });
-          if (sent) {
+        if (sent) {
             markTaskReminded(dueLoop.id);
-          } else {
+        } else {
             snoozeTask(dueLoop.id, 30 * 60 * 1000);
           }
           return;
@@ -2643,7 +2589,7 @@ export function ChatPanel({
       return;
     }
 
-    const observed = observedWindowRef.current;
+      const observed = observedWindowRef.current;
     const sameWindow =
       observed &&
       observed.value.processName === activeWindow.processName &&
@@ -2962,7 +2908,7 @@ export function ChatPanel({
         if (settings.clipboardFullCaptureEnabled) {
           recordClipboardSignal({
             clipKind,
-            snippet: redacted.slice(0, 280),
+            snippet: redacted.slice(0, 2_000),
           });
         }
         if (
@@ -2990,6 +2936,7 @@ export function ChatPanel({
   useEffect(() => {
     if (
       pomodoro.phase !== "focus" ||
+      !settings.activityTrackingEnabled ||
       !settings.proactiveEnabled ||
       !settings.pomodoroEnabled
     ) {
@@ -3005,9 +2952,7 @@ export function ChatPanel({
         ? `${active.processName}\0${active.title}`
         : "";
       if (!cachedKey || cachedKey !== lastFocusPollWindowRef.current) {
-        active = await getActiveWindowContext(settings, {
-          bypassPrivacyGate: true,
-        }).catch(() => null);
+        active = await getActiveWindowContext(settings).catch(() => null);
         if (active) {
           lastFocusPollWindowRef.current = `${active.processName}\0${active.title}`;
         }
@@ -3106,6 +3051,7 @@ export function ChatPanel({
     };
   }, [
     pomodoro.phase,
+    settings.activityTrackingEnabled,
     settings.proactiveEnabled,
     settings.pomodoroEnabled,
     settings.codingProcessAllowlist,
@@ -3133,13 +3079,13 @@ export function ChatPanel({
           <strong>Ari</strong>
           <span>
             {ollamaOnline === false
-              ? settings.llmProvider === "gigachat"
-                ? "GigaChat недоступен"
-                : "Ollama недоступна"
-              : ollamaOnline === null
                 ? settings.llmProvider === "gigachat"
-                  ? "проверяю GigaChat…"
-                  : "проверяю Ollama…"
+                  ? "GigaChat недоступен"
+                  : "Ollama недоступна"
+                : ollamaOnline === null
+                  ? settings.llmProvider === "gigachat"
+                    ? "проверяю GigaChat…"
+                    : "проверяю Ollama…"
                 : buildLiveStatusLine({
                     attention,
                     lifecycle,
@@ -3152,6 +3098,27 @@ export function ChatPanel({
         </div>
 
         <div className="chat-header-actions">
+          {settings.onboardingCompleted &&
+            settings.ideAdvisorEnabled &&
+            settings.adviceCodeReadingEnabled && (
+            <button
+              type="button"
+              className={`header-icon-button ide-advisor-button ${ideAdvisor.status.connection}`}
+              onClick={() => void handleIdeAdvisorClick()}
+              aria-label="Статус IDE Advisor"
+              title={
+                ideAdvisor.error
+                  ? `IDE Bridge: ${ideAdvisor.error}`
+                  : ideAdvisor.status.connection === "paired"
+                    ? "IDE Advisor подключён. Нажми, чтобы обновить контекст."
+                    : ideAdvisor.status.connection === "waiting"
+                      ? "IDE Bridge ждёт VS Code. Нажми, чтобы скопировать путь к pairing-файлу."
+                      : "IDE Advisor не подключён."
+              }
+            >
+              IDE
+            </button>
+          )}
           {isBlipVoiceEnabled(settings) && voiceSpeaking && (
             <button
               type="button"
@@ -3377,6 +3344,19 @@ export function ChatPanel({
         </div>
       </header>
 
+      {ideAdvisor.snapshot && (
+        <div className="ide-context-strip" aria-live="polite">
+          <span className="ide-context-title">IDE context</span>
+          {ideEditorLabel(ideAdvisor.snapshot.activeEditor?.uri) && (
+            <span>{ideEditorLabel(ideAdvisor.snapshot.activeEditor?.uri)}</span>
+          )}
+          <span>rev {ideAdvisor.snapshot.revision}</span>
+          {ideAdvisor.snapshot.diagnostics?.length ? (
+            <span>{ideAdvisor.snapshot.diagnostics.length} diagnostics</span>
+          ) : null}
+        </div>
+      )}
+
       {teachMode && !settingsOpen && (
         <div className="teach-mode-banner" role="status">
           Режим Teach: опиши правило поведения Ari — оно сохранится в настройках.
@@ -3385,17 +3365,21 @@ export function ChatPanel({
 
       {settingsOpen ? (
         <Suspense fallback={<div className="settings-loading">Загрузка настроек…</div>}>
-          <SettingsPanel
-            settings={settings}
-            onChange={onSettingsChange}
+        <SettingsPanel
+          settings={settings}
+          onChange={onSettingsChange}
             onClose={() => {
               setSettingsOpen(false);
               setSettingsSubpanel(null);
               settingsButtonRef.current?.focus();
             }}
-            activeWindow={activeWindow}
+          activeWindow={activeWindow}
+          ollamaOnline={ollamaOnline}
+            ideAdvisorStatus={ideAdvisor.status}
+            ideAdvisorSnapshot={ideAdvisor.snapshot}
+            ideAdvisorError={ideAdvisor.error}
             openSubpanel={settingsSubpanel}
-          />
+        />
         </Suspense>
       ) : (
         <>
@@ -3445,14 +3429,14 @@ export function ChatPanel({
           )}
           {pendingCrop && (
             <Suspense fallback={<div className="screen-vision-indicator" role="status">Загрузка…</div>}>
-              <VisionCropper
-                capture={pendingCrop}
-                onConfirm={(selection) => void analyzeCrop(selection)}
-                onCancel={() => {
-                  pendingCrop.imageBase64 = "";
-                  setPendingCrop(null);
-                }}
-              />
+            <VisionCropper
+              capture={pendingCrop}
+              onConfirm={(selection) => void analyzeCrop(selection)}
+              onCancel={() => {
+                pendingCrop.imageBase64 = "";
+                setPendingCrop(null);
+              }}
+            />
             </Suspense>
           )}
           {visionLoading && (
@@ -3480,27 +3464,27 @@ export function ChatPanel({
                     message.role === "assistant" ? " assistant-row" : ""
                   }`}
                 >
-                  <div
-                    className={`message ${message.role}${
-                      isLoading &&
-                      index === history.length - 1 &&
-                      message.role === "assistant"
-                        ? " streaming"
-                        : ""
-                    }`}
-                  >
+                <div
+                  className={`message ${message.role}${
+                    isLoading &&
+                    index === history.length - 1 &&
+                    message.role === "assistant"
+                      ? " streaming"
+                      : ""
+                  }`}
+                >
                     {(streamingAssistantIndex === index &&
                     streamingContent !== null &&
                     streamingContent !== ""
                       ? streamingContent
                       : message.content) ||
-                      (isLoading && message.role === "assistant" ? (
-                        <span className="typing-dots" aria-label="Ari думает">
-                          <i />
-                          <i />
-                          <i />
-                        </span>
-                      ) : null)}
+                    (isLoading && message.role === "assistant" ? (
+                      <span className="typing-dots" aria-label="Ari думает">
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                    ) : null)}
                     {message.reaction && (
                       <span
                         className="message-reaction-badge"
@@ -3509,7 +3493,7 @@ export function ChatPanel({
                         {message.reaction}
                       </span>
                     )}
-                  </div>
+                </div>
                   {message.role === "assistant" &&
                     message.content &&
                     !message.focusRecap && (

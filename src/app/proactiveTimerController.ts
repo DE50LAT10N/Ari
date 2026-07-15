@@ -22,9 +22,28 @@ export function createProactiveTimerController(
 ): ProactiveTimerController {
   let current = initial;
   let intervalId: number | null = null;
+  let taskRunning = false;
 
   const tick = () => {
-    void current.task();
+    if (taskRunning) {
+      return;
+    }
+    taskRunning = true;
+    let result: void | Promise<void>;
+    try {
+      result = current.task();
+    } catch (error) {
+      taskRunning = false;
+      console.warn("Proactive timer task failed", error);
+      return;
+    }
+    void Promise.resolve(result)
+      .catch((error: unknown) => {
+        console.warn("Proactive timer task failed", error);
+      })
+      .finally(() => {
+        taskRunning = false;
+      });
   };
 
   const stop = () => {

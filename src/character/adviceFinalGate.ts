@@ -1,5 +1,4 @@
 import { candidateKindToAdviceMove, type AdviceMoveKind } from "./adviceMoveSelector";
-import { renderAdviceCandidateReply } from "./adviceVisibleRenderer";
 import {
   PASSING_ADVICE_QUALITY,
   VISIBLE_REPLY_QUALITY_CONFIG,
@@ -215,37 +214,6 @@ function validateAdviceFinalReply(input: {
   return scoreAdviceFinalReplyQuality(input).issues;
 }
 
-function trimSentence(
-  text: string,
-  limit = VISIBLE_REPLY_QUALITY_CONFIG.maxVisibleAdviceChars,
-): string {
-  const normalized = normalizeText(text);
-  if (normalized.length <= limit) {
-    return /[.!?]$/u.test(normalized) ? normalized : `${normalized}.`;
-  }
-  const cut = normalized.slice(0, limit).replace(/\s+\S*$/u, "").trim();
-  return /[.!?]$/u.test(cut) ? cut : `${cut}.`;
-}
-
-function buildFallbackText(
-  bundle: ProactiveLlmBundle,
-  facts: ProactiveSignalFact[],
-): { text: string; source: AdviceFinalGateResult["source"]; candidateKind?: string } | null {
-  const candidate = bundle.selectedAdviceCandidate;
-  if (!candidate) {
-    return null;
-  }
-  const rendered = renderAdviceCandidateReply({ candidate, bundle, facts });
-  if (!rendered) {
-    return null;
-  }
-  return {
-    text: trimSentence(rendered),
-    source: "renderer",
-    candidateKind: candidate.kind,
-  };
-}
-
 export function runAdviceFinalGate(input: {
   text: string;
   bundle: ProactiveLlmBundle;
@@ -265,42 +233,14 @@ export function runAdviceFinalGate(input: {
     return result;
   }
 
-  const fallback = buildFallbackText(input.bundle, input.facts);
-  if (!fallback) {
-    const result: AdviceFinalGateResult = {
-      status: "rejected",
-      text: input.text,
-      issues: originalIssues,
-      reason: `rejected: ${originalIssues.join(", ")}`,
-      source: "original",
-      candidateKind: input.bundle.selectedAdviceCandidate?.kind,
-    };
-    saveLastGateResult(result);
-    return result;
-  }
-
-  const fallbackIssues = validateAdviceFinalReply({
-    ...input,
-    text: fallback.text,
-  });
-  const result: AdviceFinalGateResult =
-    fallbackIssues.length === 0
-      ? {
-          status: "repaired",
-          text: fallback.text,
-          issues: originalIssues,
-          reason: `repaired: source=${fallback.source}; candidate=${fallback.candidateKind ?? "none"}; issues=${originalIssues.join(", ")}`,
-          source: fallback.source,
-          candidateKind: fallback.candidateKind,
-        }
-      : {
-          status: "rejected",
-          text: input.text,
-          issues: originalIssues,
-          reason: `rejected: ${originalIssues.join(", ")}; renderer issues=${fallbackIssues.join(", ")}`,
-          source: fallback.source,
-          candidateKind: fallback.candidateKind,
-        };
+  const result: AdviceFinalGateResult = {
+    status: "rejected",
+    text: input.text,
+    issues: originalIssues,
+    reason: `rejected: ${originalIssues.join(", ")}`,
+    source: "original",
+    candidateKind: input.bundle.selectedAdviceCandidate?.kind,
+  };
   saveLastGateResult(result);
   return result;
 }

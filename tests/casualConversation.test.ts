@@ -21,9 +21,12 @@ describe("casual conversation voice", () => {
       goalLedger: "Текущая цель: Допилить Ari; прогресс 40%",
     });
     const system = messages[0]?.content ?? "";
+    const runtime = messages[1]?.content ?? "";
 
     expect(system).toContain("Нерабочие темы нормальны");
-    expect(system).toContain("В casual-режиме не надо искать рабочую пользу");
-    expect(system).toContain("не тащи разговор обратно к целям");
+    expect(runtime).toContain("В casual-режиме не надо искать рабочую пользу");
+    expect(runtime).toContain("не тащи разговор обратно к целям");
+    expect(system).not.toContain("Допилить Ari");
+    expect(runtime).toContain("<<<НЕДОВЕРЕННЫЕ_ДАННЫЕ:goal_ledger>>>");
   });
 });

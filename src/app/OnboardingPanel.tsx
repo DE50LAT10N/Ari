@@ -73,7 +73,7 @@ export function OnboardingPanel({
       <section className="onboarding-panel">
         <strong>Привет. Я Ari.</strong>
         <p>
-          Я Ari — девушка на твоём рабочем столе. Могу говорить через Ollama
+          Я Ari — AI-персонаж на твоём рабочем столе. Могу говорить через Ollama
           или GigaChat. Память, зрение и инициатива — только с твоего согласия.
         </p>
         <label className="settings-field">
@@ -162,6 +162,36 @@ export function OnboardingPanel({
             <span>Контекст окна</span>
           </label>
           <small className="settings-note">Ari видит, в каком приложении ты работаешь — для уместных комментариев, не для слежки.</small>
+          <label className="settings-toggle-field" role="switch" aria-checked={settings.clipboardFullCaptureEnabled}>
+            <input
+              type="checkbox"
+              checked={settings.clipboardFullCaptureEnabled}
+              onChange={(event) =>
+                onChange({
+                  ...settings,
+                  clipboardFullCaptureEnabled: event.currentTarget.checked,
+                })
+              }
+            />
+            <span>Контекст буфера обмена</span>
+          </label>
+          <small className="settings-note">
+            По явному согласию Ari может локально замечать отладочные фрагменты.
+            Секреты редактируются; proactive-first профиль включает этот сигнал для более уместных инициатив.
+          </small>
+          <label className="settings-toggle-field" role="switch" aria-checked={settings.ideAdvisorEnabled}>
+            <input
+              type="checkbox"
+              checked={settings.ideAdvisorEnabled}
+              onChange={(event) =>
+                onChange({ ...settings, ideAdvisorEnabled: event.currentTarget.checked })
+              }
+            />
+            <span>IDE Advisor (VS Code)</span>
+          </label>
+          <small className="settings-note">
+            Запускает локальный IDE Bridge только после этого согласия. Файлы, diagnostics, Git, tests и unsaved-буферы включаются отдельно в VS Code.
+          </small>
           <label className="settings-toggle-field" role="switch" aria-checked={settings.remindersEnabled}>
             <input type="checkbox" checked={settings.remindersEnabled} onChange={(event) => onChange({ ...settings, remindersEnabled: event.currentTarget.checked })} />
             <span>Напоминания</span>
@@ -184,7 +214,10 @@ export function OnboardingPanel({
               remindersEnabled: true,
               activityTrackingEnabled: true,
               eventReactionsEnabled: true,
-              initiativeLevel: "normal",
+              initiativeLevel: "active",
+              proactiveSmalltalkIntervalMinutes: 3,
+              proactiveAdviceIntervalMinutes: 5,
+              proactiveIntervalMinutes: 5,
             })
           }
         >

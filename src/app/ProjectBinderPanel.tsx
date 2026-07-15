@@ -6,13 +6,18 @@ import {
   listRecentProjectFiles,
   normalizeProjectRelativePath,
   pinProjectFile,
+  readProjectFile,
   removeProjectBinder,
   setActiveProjectBinder,
   unpinProjectFile,
   upsertProjectBinder,
   type ProjectBinder,
 } from "../character/projectBinder";
-import type { BinderFileEntry } from "../platform/projectCompanion";
+import {
+  DEFAULT_BINDER_EXTENSIONS,
+  listBinderFiles,
+  type BinderFileEntry,
+} from "../platform/projectCompanion";
 
 type ProjectBinderPanelProps = {
   onBack: () => void;
@@ -26,6 +31,7 @@ export function ProjectBinderPanel({ onBack }: ProjectBinderPanelProps) {
   const [rootPath, setRootPath] = useState("");
   const [filePath, setFilePath] = useState("");
   const [error, setError] = useState("");
+  const [editingId, setEditingId] = useState<string | undefined>();
 
   const refresh = () => {
     const loaded = loadProjectBinders();
@@ -33,7 +39,16 @@ export function ProjectBinderPanel({ onBack }: ProjectBinderPanelProps) {
     setProjects(loaded);
     setActive(current);
     if (current) {
-      void listRecentProjectFiles(current, 50).then(setFiles).catch(() => setFiles([]));
+      void listRecentProjectFiles(current, 50)
+        .then(setFiles)
+        .catch((refreshError: unknown) => {
+          setFiles([]);
+          setError(
+            refreshError instanceof Error
+              ? refreshError.message
+              : "Не удалось прочитать папку проекта.",
+          );
+        });
     } else {
       setFiles([]);
     }
@@ -54,19 +69,27 @@ export function ProjectBinderPanel({ onBack }: ProjectBinderPanelProps) {
       return;
     }
     try {
-      upsertProjectBinder({
+      await listBinderFiles(rootPath.trim(), {
+        allowedExtensions: DEFAULT_BINDER_EXTENSIONS,
+        maxDepth: 1,
+        limit: 1,
+      });
+      const project = upsertProjectBinder({
+        id: editingId,
         name: name.trim() || "Проект",
         rootPath: rootPath.trim(),
       });
+      setActiveProjectBinder(project.id);
       setName("");
       setRootPath("");
+      setEditingId(undefined);
       refresh();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : String(saveError));
     }
   }
 
-  function handlePinFile(event: React.FormEvent) {
+  async function handlePinFile(event: React.FormEvent) {
     event.preventDefault();
     if (!active) return;
     setError("");
@@ -75,9 +98,18 @@ export function ProjectBinderPanel({ onBack }: ProjectBinderPanelProps) {
       setError("Укажи путь к файлу относительно корня проекта.");
       return;
     }
-    pinProjectFile(active.id, normalized);
-    setFilePath("");
-    refresh();
+    try {
+      await readProjectFile(normalized, active);
+      pinProjectFile(active.id, normalized);
+      setFilePath("");
+      refresh();
+    } catch (pinError) {
+      setError(
+        pinError instanceof Error
+          ? pinError.message
+          : "Не удалось прочитать выбранный файл.",
+      );
+    }
   }
 
   return (
@@ -109,7 +141,9 @@ export function ProjectBinderPanel({ onBack }: ProjectBinderPanelProps) {
           />
         </label>
         {error && <p className="settings-error">{error}</p>}
-        <button type="submit">Добавить / обновить проект</button>
+        <button type="submit">
+          {editingId ? "Сохранить проект" : "Добавить проект"}
+        </button>
       </form>
 
       <section className="memory-list">
@@ -127,7 +161,25 @@ export function ProjectBinderPanel({ onBack }: ProjectBinderPanelProps) {
               >
                 {active?.id === project.id ? "Активен" : "Сделать активным"}
               </button>
-              <button type="button" onClick={() => removeProjectBinder(project.id)}>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingId(project.id);
+                  setName(project.name);
+                  setRootPath(project.rootPath);
+                  setError("");
+                }}
+              >
+                Изменить
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`Удалить проект «${project.name}»?`)) {
+                    removeProjectBinder(project.id);
+                  }
+                }}
+              >
                 Удалить
               </button>
             </div>
@@ -139,9 +191,10 @@ export function ProjectBinderPanel({ onBack }: ProjectBinderPanelProps) {
         <>
           <strong>Закреплённые файлы — {active.name}</strong>
           <p className="settings-hint">
-            Закреплённые файлы Ari читает в первую очередь и упоминает в контексте.
+            Имена закреплённых файлов входят в общий контекст. Содержимое читается
+            только когда советчику нужен конкретный файл или его передала IDE.
           </p>
-          <form className="settings-form" onSubmit={handlePinFile}>
+          <form className="settings-form" onSubmit={(event) => void handlePinFile(event)}>
             <label className="settings-field">
               <span>Путь к файлу в проекте</span>
               <input

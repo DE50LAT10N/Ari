@@ -4,16 +4,85 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  frontend-and-ide:
+    name: Frontend and IDE (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ide-extensions/vscode/package-lock.json
+
       - run: npm ci
-      - run: npm run smoke
-      - run: npm run qa:acceptance
+      - run: npm ci --prefix ide-extensions/vscode
+
+      - name: TypeScript and production build
+        run: npm run build
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Retrieval evaluation
+        run: npm run test:retrieval
+      - name: VS Code extension typecheck
+        run: npm run ide:check
+      - name: VS Code extension compile
+        run: npm run ide:compile
+      - name: Smoke checks
+        run: npm run smoke
+      - name: Acceptance checks
+        run: npm run qa:acceptance
+
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - name: Rust check (default features)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets
+      - name: Rust check (all features)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --all-features
+      - name: Rust tests (all features)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets --all-features
+      - name: Rust Clippy (all features)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets --all-features -- -D warnings

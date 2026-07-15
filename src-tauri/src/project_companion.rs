@@ -211,7 +211,7 @@ pub fn binder_list_files(request: BinderListRequest) -> Result<Vec<BinderFileEnt
         .min(HARD_BINDER_FILE_LIMIT);
     let mut entries = Vec::new();
     walk_files(&root, &root, 0, max_depth, &allowed, &mut entries, limit);
-    entries.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.modified_at));
     entries.truncate(limit);
     Ok(entries)
 }
@@ -271,7 +271,8 @@ pub fn git_status_summary(root_path: String) -> Result<GitStatusSummary, String>
             staged: Vec::new(),
         });
     }
-    let branch = run_git(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "—".into());
+    let branch =
+        run_git(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "—".into());
     let status = run_git(&root, &["status", "--porcelain=v1"])?;
     let mut changed = Vec::new();
     let mut untracked = Vec::new();
@@ -316,11 +317,7 @@ pub fn git_recent_commits(
         .min(HARD_RECENT_COMMIT_LIMIT);
     let output = run_git(
         &root,
-        &[
-            "log",
-            &format!("-{count}"),
-            "--pretty=format:%h\t%s",
-        ],
+        &["log", &format!("-{count}"), "--pretty=format:%h\t%s"],
     )?;
     Ok(output
         .lines()

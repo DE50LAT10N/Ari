@@ -15,7 +15,8 @@ import { startOllamaProcess } from "../platform/ollamaProcess";
 import { restartOllama } from "../platform/ollamaEnvironment";
 import { logError } from "../platform/logger";
 import type { AppSettings } from "../settings/appSettings";
-import { indexDocument, invalidateRagSearchIndex } from "../rag/ragClient";
+import { indexDocument, invalidateRagSearchIndex, searchRag, getLastRagSearchDiagnostics } from "../rag/ragClient";
+import { buildRagSearchPlan } from "../rag/ragQueryBuilder";
 import {
   clearRagChunks,
   getRagStats,
@@ -122,12 +123,18 @@ import {
   type SettingsCategoryId,
 } from "./settingsCategoryIds";
 import { delay } from "../platform/asyncTimeout";
+import type { IdeWorkspaceSnapshot } from "../ide/protocol";
+import type { IdeBridgeNativeStatus } from "../platform/ideBridgeNative";
 
 type SettingsPanelProps = {
   settings: AppSettings;
   onChange: (settings: AppSettings) => void;
   onClose: () => void;
   activeWindow: ActiveWindowInfo | null;
+  ollamaOnline: boolean | null;
+  ideAdvisorStatus: IdeBridgeNativeStatus;
+  ideAdvisorSnapshot: IdeWorkspaceSnapshot | null;
+  ideAdvisorError: string | null;
   openSubpanel?: "diagnostics" | null;
 };
 
@@ -198,6 +205,10 @@ export function SettingsPanel({
   onChange,
   onClose,
   activeWindow,
+  ollamaOnline,
+  ideAdvisorStatus,
+  ideAdvisorSnapshot,
+  ideAdvisorError,
   openSubpanel = null,
 }: SettingsPanelProps) {
   const [status, setStatus] = useState<OllamaStatus | null>(null);
@@ -226,6 +237,10 @@ export function SettingsPanel({
   const [proactiveStatus, setProactiveStatus] = useState("");
   const [ragStats, setRagStats] = useState({ chunks: 0, sources: 0 });
   const [ragBusy, setRagBusy] = useState(false);
+  const [ragTestBusy, setRagTestBusy] = useState(false);
+  const [ragTestQuery, setRagTestQuery] = useState(
+    "Какой вопрос в документе Вопросы ПП под номером 4",
+  );
   const [ragMessage, setRagMessage] = useState<string | null>(null);
   const [actionLog, setActionLog] = useState<SafeActionLogEntry[]>(
     loadSafeActionLog,
@@ -284,6 +299,36 @@ export function SettingsPanel({
 
   async function refreshRagStats() {
     setRagStats(await getRagStats());
+  }
+
+  async function testRagSearch() {
+    if (!settings.ragEnabled || ragStats.chunks === 0) {
+      setRagMessage("Сначала включи RAG и проиндексируй документы.");
+      return;
+    }
+    setRagTestBusy(true);
+    setRagMessage(null);
+    try {
+      const query = ragTestQuery.trim() || "тестовый поиск по документам Ari";
+      const result = await searchRag(query, settings, {
+        plan: buildRagSearchPlan(query),
+      });
+      if (result.error) {
+        setRagMessage(`Ошибка RAG: ${result.error}`);
+        return;
+      }
+      setRagMessage(
+        result.matches.length > 0
+          ? `Поиск OK: ${result.matches.length} фрагм. (модель ${result.embeddingModel ?? "—"}, режим ${result.searchMode}${result.lexicalHits ? `, lexical ${result.lexicalHits}` : ""}${result.bm25Hits ? `, bm25 ${result.bm25Hits}` : ""}).`
+          : `Поиск завершён без совпадений выше порога (${settings.ragScoreThreshold}). В индексе ${result.chunkCount} фрагм.`,
+      );
+    } catch (error) {
+      setRagMessage(
+        error instanceof Error ? error.message : "Не удалось проверить RAG.",
+      );
+    } finally {
+      setRagTestBusy(false);
+    }
   }
 
   async function importKnowledge(files: FileList | null) {
@@ -1763,7 +1808,10 @@ export function SettingsPanel({
                 eventReactionsEnabled: true,
                 advisorEnabled: true,
                 clipboardFullCaptureEnabled: true,
-                initiativeLevel: "normal",
+                initiativeLevel: "active",
+                proactiveSmalltalkIntervalMinutes: 3,
+                proactiveAdviceIntervalMinutes: 5,
+                proactiveIntervalMinutes: 5,
               })
             }
           >
@@ -2190,7 +2238,24 @@ export function SettingsPanel({
             </button>
           </label>
           <label className="settings-toggle-row">
-            <span>Чтение кода для советов (ProjectBinder)</span>
+            <span>IDE Advisor Bridge (VS Code)</span>
+            <button
+              className={`toggle-switch${settings.ideAdvisorEnabled ? " enabled" : ""}`}
+              type="button"
+              role="switch"
+              aria-checked={settings.ideAdvisorEnabled}
+              onClick={() =>
+                onChange({
+                  ...settings,
+                  ideAdvisorEnabled: !settings.ideAdvisorEnabled,
+                })
+              }
+            >
+              <span />
+            </button>
+          </label>
+          <label className="settings-toggle-row">
+            <span>Чтение кода для советов (Project Binder)</span>
             <button
               className={`toggle-switch${
                 settings.adviceCodeReadingEnabled ? " enabled" : ""
@@ -2249,7 +2314,31 @@ export function SettingsPanel({
           >
             Очистить
           </button>
+          <button
+            className="settings-action-button"
+            type="button"
+            onClick={() => void testRagSearch()}
+            disabled={
+              ragBusy ||
+              ragTestBusy ||
+              !settings.ragEnabled ||
+              ragStats.chunks === 0 ||
+              !ragEmbeddingReady
+            }
+          >
+            {ragTestBusy ? "Проверка…" : "Проверить поиск"}
+          </button>
         </div>
+        <label className="settings-field">
+          <span>Тестовый запрос RAG</span>
+          <input
+            className="settings-input"
+            type="text"
+            value={ragTestQuery}
+            onChange={(event) => setRagTestQuery(event.target.value)}
+            placeholder="Какой вопрос в документе Вопросы ПП под номером 4"
+          />
+        </label>
         <input
           ref={fileInputRef}
           className="hidden-file-input"
@@ -2259,6 +2348,21 @@ export function SettingsPanel({
           onChange={(event) => void importKnowledge(event.currentTarget.files)}
         />
         {ragMessage && <span className="settings-note">{ragMessage}</span>}
+        {(() => {
+          const ragDiag = getLastRagSearchDiagnostics();
+          if (!ragDiag) {
+            return null;
+          }
+          return (
+            <span className="settings-note">
+              Последний RAG: {ragDiag.matches} совпад.
+              {ragDiag.embeddingModel ? ` · ${ragDiag.embeddingModel}` : ""}
+              {ragDiag.lexicalHits ? ` · lexical ${ragDiag.lexicalHits}` : ""}
+              {ragDiag.bm25Hits ? ` · bm25 ${ragDiag.bm25Hits}` : ""}
+              {ragDiag.error ? ` · ошибка: ${ragDiag.error}` : ""}
+            </span>
+          );
+        })()}
         {settings.ragEnabled &&
           ragStats.chunks > 0 &&
           !ragEmbeddingReady && (
@@ -2671,7 +2775,12 @@ export function SettingsPanel({
         </div>
         {diagnosticsExpanded && (
           <Suspense fallback={<div className="settings-loading">Загрузка диагностики…</div>}>
-            <AriDiagnosticsSection />
+            <AriDiagnosticsSection
+              ollamaOnline={ollamaOnline}
+              ideAdvisorStatus={ideAdvisorStatus}
+              ideAdvisorSnapshot={ideAdvisorSnapshot}
+              ideAdvisorError={ideAdvisorError}
+            />
           </Suspense>
         )}
       </div>

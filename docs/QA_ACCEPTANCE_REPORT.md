@@ -1,6 +1,6 @@
 # Ari QA acceptance report
 
-Generated: 2026-07-08T09:41:40.400Z
+Generated: 2026-07-14T08:37:25.236Z
 
 ## Automated results
 
@@ -9,6 +9,8 @@ Generated: 2026-07-08T09:41:40.400Z
 | auto-gates | pass | npm run smoke exit 0 |
 | env-setup | pass | advisor default on |
 | env-setup | pass | clipboard full capture default on |
+| env-setup | pass | live web tools default on |
+| env-setup | pass | IDE Advisor default off |
 | env-setup | pass | activity tracking default on |
 | env-setup | pass | proactive default on |
 | signals-qa | pass | ChatPanel: clipboard capture wired |

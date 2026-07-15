@@ -87,7 +87,7 @@ export function buildWeeklyReview(date = new Date()): WeeklyReview {
   const staleItems = [
     ...loadTasks({ status: "proposed" }).map((task) => task.title),
     ...loadTasks({ status: "open" })
-      .filter((task) => task.dueAt && task.dueAt > Date.now())
+      .filter((task) => task.dueAt && task.dueAt < Date.now())
       .map((task) => task.title),
   ].slice(0, 10);
 

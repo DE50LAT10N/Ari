@@ -95,6 +95,7 @@ function baseSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     intentClassifierEnabled: false,
     adaptiveInitiativeEnabled: false,
     moodEngineEnabled: true,
+    ideAdvisorEnabled: false,
     adviceCodeReadingEnabled: true,
     recallLexicalWeight: 0.4,
     recallSemanticWeight: 0.6,

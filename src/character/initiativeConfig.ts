@@ -9,11 +9,15 @@ export function allowsGenericCompanionInitiative(
   activityAgoMs: number,
   plannedSilenceMs: number,
   options: {
+    activeLevel?: boolean;
     immersedCompanion?: boolean;
     companionSilenceMs?: number;
     companionSilenceMinMs?: number;
   } = {},
 ): boolean {
+  if (options.activeLevel) {
+    return true;
+  }
   if (
     options.immersedCompanion &&
     options.companionSilenceMs !== undefined &&
@@ -73,7 +77,7 @@ export function idleLineProbability(settings: AppSettings): number {
 
 const UNLIMITED_DAILY = 9999;
 
-/** Telemetry-only; no practical daily limit on initiatives. */
+/** Cooldowns control pacing; the user prefers no hard daily shutdown. */
 export function dailyInitiativeCap(_settings: AppSettings): number {
   return UNLIMITED_DAILY;
 }

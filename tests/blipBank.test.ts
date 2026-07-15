@@ -66,9 +66,7 @@ describe("blipBank", () => {
     const promise = playBlip({ token: "a", pitch: 1, volume: 0.2 }).then(() => {
       resolved = true;
     });
-    await Promise.resolve();
-
-    expect(sources).toHaveLength(1);
+    await vi.waitFor(() => expect(sources).toHaveLength(1));
     expect(sources[0]?.start).toHaveBeenCalledTimes(1);
     expect(resolved).toBe(false);
 
@@ -83,12 +81,12 @@ describe("blipBank", () => {
     const { playBlip } = await import("../src/character/blipBank");
 
     const first = playBlip({ token: "a", pitch: 1, volume: 0.2 });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(sources).toHaveLength(1));
     sources[0]?.onended?.();
     await first;
 
     const second = playBlip({ token: "e", pitch: 1, volume: 0.2 });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(sources).toHaveLength(2));
     sources[1]?.onended?.();
     await second;
 

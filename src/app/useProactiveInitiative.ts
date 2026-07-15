@@ -21,23 +21,31 @@ import {
   scoreAdviceUrgency,
   setLastAdviceUrgency,
 } from "../character/adviceUrgency";
-import type { AdviceDecision } from "../character/adviceEngine";
+import {
+  isAdviceGenerationFailure,
+  type AdviceDecision,
+} from "../character/adviceEngine";
 import { ADVICE_IGNORED_EVENT } from "../character/adviceOutcome";
 import {
   drainProactiveRequests,
   subscribeProactiveRequests,
 } from "../character/proactiveBridge";
 import {
-  armProactiveGracePeriod,
   canEmitAdviceNow,
   canEmitSmalltalkNow,
   ensureProactiveClockStarted,
   getLastAdviceAttemptAt,
   getLastSmalltalkAttemptAt,
   getProactiveFailureBackoff,
+  markAdviceAttemptAt,
+  recordAdviceDecision,
+  registerProactiveFailure,
   shouldSuppressOpenChatAdvice,
 } from "../character/proactiveState";
-import { planProactiveEngineTick } from "../character/proactiveEngine";
+import {
+  isProactiveActivityGateOpen,
+  planProactiveEngineTick,
+} from "../character/proactiveEngine";
 import {
   ACTIVE_OPEN_CHAT_SMALLTALK_IDLE_MS,
   idleLineProbability,
@@ -193,15 +201,15 @@ export function useProactiveInitiative(input: {
   const checkInitiativeRef = useStableCallbackRef(async () => {
       const now = clockRef.current.now();
       if (isQuietModeActive(settings, activeWindowRef.current)) {
+        recordAdviceDecision("tick -> blocked: quiet mode");
         return;
       }
       if (isQuietHours(settings)) {
+        recordAdviceDecision("tick -> blocked: quiet hours");
         return;
       }
       if (blocksInitiative(lifecycleRef.current)) {
-        return;
-      }
-      if (getProactiveFailureBackoff(now)) {
+        recordAdviceDecision("tick -> blocked: lifecycle");
         return;
       }
       const activityAgoMs = Math.max(
@@ -225,10 +233,18 @@ export function useProactiveInitiative(input: {
         activeLevel && isOpen
           ? ACTIVE_OPEN_CHAT_SMALLTALK_IDLE_MS
           : adviceIdleMs;
-      const canEvaluateAdvice =
-        immersedCompanion || activityAgoMs >= adviceIdleMs;
-      const canEvaluateSmalltalk =
-        immersedCompanion || activityAgoMs >= smalltalkIdleMs;
+      const canEvaluateAdvice = isProactiveActivityGateOpen({
+        activeLevel,
+        immersedCompanion,
+        activityAgoMs,
+        requiredIdleMs: adviceIdleMs,
+      });
+      const canEvaluateSmalltalk = isProactiveActivityGateOpen({
+        activeLevel,
+        immersedCompanion,
+        activityAgoMs,
+        requiredIdleMs: smalltalkIdleMs,
+      });
       const plannedSilenceMs = adviceIdleMs;
       const smalltalkPlannedSilenceMs =
         activeLevel && isOpen
@@ -239,15 +255,22 @@ export function useProactiveInitiative(input: {
         isLoadingRef.current ||
         (!canEvaluateSmalltalk && !canEvaluateAdvice)
       ) {
+        recordAdviceDecision(
+          isLoadingRef.current
+            ? "tick -> blocked: generation busy"
+            : "tick -> blocked: activity gate",
+        );
         return;
       }
 
+      const basePackageOptions = proactiveBundleOptionsRef.current();
       const signalBundle = buildInitiativeSignalBundle(settings, {
         sessionMinutes: proactiveTiming.sessionMinutes,
         windowMinutes: proactiveTiming.windowMinutes,
         processName: activeWindowRef.current?.processName,
         windowTitle: activeWindowRef.current?.title,
         visionObservation: lastVisionObservationRef.current,
+        ideEditorFile: basePackageOptions.ideEditorFile,
       });
       const urgency = scoreAdviceUrgency(signalBundle, settings, {
         sessionMinutes: proactiveTiming.sessionMinutes,
@@ -285,6 +308,7 @@ export function useProactiveInitiative(input: {
       const tickAction = engineDecision.action;
 
       if (tickAction === "silent") {
+        recordAdviceDecision(`tick -> silent: ${engineDecision.reason}`);
         return;
       }
 
@@ -292,6 +316,7 @@ export function useProactiveInitiative(input: {
 
       if (tickAction === "try_advice") {
         if (!adviceChannelReady) {
+          recordAdviceDecision("tick -> advice blocked: cross-channel gap");
           return;
         }
         const adviceUrgency = engineDecision.adviceUrgency;
@@ -303,6 +328,11 @@ export function useProactiveInitiative(input: {
             settings,
           })
         ) {
+          recordAdviceDecision("tick -> advice blocked: open-chat activity gate");
+          return;
+        }
+        if (getProactiveFailureBackoff(now)) {
+          recordAdviceDecision("tick -> advice blocked: generation backoff");
           return;
         }
         const { runAdviceCycle } = await loadProactiveRuntime();
@@ -310,9 +340,10 @@ export function useProactiveInitiative(input: {
           settings,
           bundle: signalBundle,
           urgency: adviceUrgency,
-          packageOptions: proactiveBundleOptionsRef.current({
+          packageOptions: {
+            ...basePackageOptions,
             urgency: adviceUrgency,
-          }),
+          },
           llmOnline,
           advisorEnabled: settings.advisorEnabled,
           sinceAdviceAttemptMs: sinceAdviceAttempt,
@@ -329,6 +360,26 @@ export function useProactiveInitiative(input: {
             plannedSilenceMs,
             adviceUrgency,
           );
+        } else {
+          recordAdviceDecision(
+            `engine -> ${decision.strategy}: ${decision.reason}`,
+          );
+          const generationFailed = isAdviceGenerationFailure(decision);
+          if (
+            generationFailed ||
+            (decision.strategy !== "SILENT" &&
+              decision.strategy !== "DEFER_SMALLTALK")
+          ) {
+            // A completed generation attempt must count even when no text was
+            // emitted, otherwise a fresh signal bypasses cadence every tick.
+            markAdviceAttemptAt(now);
+          }
+          if (generationFailed) {
+            registerProactiveFailure(
+              decision.bundle?.rejectReason ?? decision.reason,
+              now,
+            );
+          }
         }
         return;
       }
@@ -444,13 +495,9 @@ export function useProactiveInitiative(input: {
     const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
     const now = clockRef.current.now();
     ensureProactiveClockStarted(adviceIntervalMs, smalltalkIntervalMs, now);
-    if (!proactiveWasEnabledRef.current) {
-      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs, now);
-      proactiveWasEnabledRef.current = true;
-    }
+    proactiveWasEnabledRef.current = true;
     const intervalKey = `${settings.proactiveAdviceIntervalMinutes}:${settings.proactiveSmalltalkIntervalMinutes}`;
     if (lastProactiveIntervalRef.current !== intervalKey) {
-      armProactiveGracePeriod(adviceIntervalMs, smalltalkIntervalMs, now);
       lastProactiveIntervalRef.current = intervalKey;
     }
 
@@ -465,6 +512,7 @@ export function useProactiveInitiative(input: {
       task: () => checkInitiativeRef.current(),
     });
     proactiveTimerRef.current.start();
+    void checkInitiativeRef.current();
     return () => proactiveTimerRef.current?.stop();
   }, [
     settings.proactiveEnabled,

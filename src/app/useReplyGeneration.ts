@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type Dispatch,
   type SetStateAction,
@@ -19,7 +20,6 @@ import type { PresenceScene } from "../character/presence";
 import type { AriSelfMemory } from "../character/selfMemory";
 import { buildMessages } from "../character/promptBuilder";
 import { isQuietHours } from "../character/reminders";
-import { registerProactiveFailure } from "../character/proactiveState";
 import { recordInitiativeSuppressed } from "../memory/memoryTelemetry";
 import { yieldToMain } from "../platform/asyncTimeout";
 import { logError, ariLog } from "../platform/logger";
@@ -47,6 +47,9 @@ import {
   isAbortError,
 } from "./replyGenerationErrors";
 import { useLatestRef, useStableCallback } from "./useStableCallbackRef";
+import { AgentRunCoordinator } from "../core/agentRun";
+import type { IdeWorkspaceSnapshot } from "../ide/protocol";
+import { requiresValidatedReveal } from "./replyGenerationPolicy";
 
 type MutableRef<T> = { current: T };
 
@@ -68,6 +71,7 @@ export type ReplyGenerationInput = {
   attention: AttentionState;
   scene: PresenceScene;
   selfMemory: AriSelfMemory;
+  ideSnapshot?: IdeWorkspaceSnapshot | null;
   setError: Dispatch<SetStateAction<string | null>>;
   setHistory: Dispatch<SetStateAction<ChatMessage[]>>;
   setIsLoading: Dispatch<SetStateAction<boolean>>;
@@ -92,6 +96,10 @@ export type ReplyGenerationInput = {
 export function useReplyGeneration(input: ReplyGenerationInput) {
   const [voiceSpeaking, setVoiceSpeaking] = useState(false);
   const inputRef = useLatestRef(input);
+  const runCoordinatorRef = useRef<AgentRunCoordinator | null>(null);
+  if (!runCoordinatorRef.current) {
+    runCoordinatorRef.current = new AgentRunCoordinator();
+  }
 
   useEffect(() => {
     const update = () => setVoiceSpeaking(blipVoiceManager.isSpeaking());
@@ -122,6 +130,7 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
         attention,
         scene,
         selfMemory,
+        ideSnapshot,
         setError,
         setHistory,
         setIsLoading,
@@ -145,8 +154,11 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
       }
 
       const assistantIndex = baseHistory.length;
-      const controller = new AbortController();
+      const runCoordinator = runCoordinatorRef.current!;
+      const run = runCoordinator.start(options.proactive ? "proactive" : "reply");
+      const controller = run.controller;
       let failed = false;
+      let cancelled = false;
       let replyEmotion: CharacterEmotion = "neutral";
       let finalReply = "";
       const assistantMessageId = crypto.randomUUID();
@@ -197,6 +209,7 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
         assistantIndex,
         controller,
         settings,
+        getSettings: () => inputRef.current.settings,
         activeWindow,
         isOpen,
         proactive: Boolean(options.proactive),
@@ -217,9 +230,9 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
         },
       });
 
-      streamSession.restartAmbientStream();
-
       try {
+        const activeStream = streamSession;
+        run.transition("context");
         const replyContext = await buildReplyContext({
           baseHistory,
           options,
@@ -235,7 +248,10 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
           setLiveToolStatus,
           logError,
           ariLog,
+          signal: controller.signal,
+          ideSnapshot,
         });
+        run.throwIfInactive();
         const {
           fittedHistory,
           runtimeContext,
@@ -254,12 +270,19 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
             applyReplyEmotion(replyContext.hintedEmotion);
           }
         }
-        streamSession.setTechnical(responseMode === "technical_help");
+        activeStream.setTechnical(responseMode === "technical_help");
+        activeStream.restartAmbientStream();
 
-        const clearVisibleStreamDraft = streamSession.clearVisibleStreamDraft;
-        const runStream = streamSession.runStream;
+        const clearVisibleStreamDraft = activeStream.clearVisibleStreamDraft;
+        const runStream = activeStream.runStream;
 
-        let reply = await runStream(buildMessages(fittedHistory, runtimeContext));
+        run.transition("generating");
+        let reply = await runStream(
+          buildMessages(fittedHistory, runtimeContext),
+          { revealToUser: !requiresValidatedReveal(runtimeContext) },
+        );
+        run.throwIfInactive();
+        run.transition("validating");
         const revision = await runReplyRevisionPipeline({
           reply,
           fittedHistory,
@@ -281,6 +304,7 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
           logError,
           ariLog,
         });
+        run.throwIfInactive();
         reply = revision.reply;
         const processed = revision.processed;
 
@@ -317,6 +341,7 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
         if (options.proactive && settings.proactiveOpenChat && !isOpen) {
           onProactiveMessage();
         }
+        run.transition("postprocess");
         await runReplyPostprocess({
           assistantIndex,
           assistantMessageId,
@@ -335,12 +360,18 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
           setRelationship,
           setSelfMemory,
           onMoodInteraction,
+          isRunActive: () =>
+            runCoordinator.isCurrent(run.id) &&
+            abortControllerRef.current === controller &&
+            !controller.signal.aborted,
           logError,
           ariLog,
         });
+        run.throwIfInactive();
       } catch (requestError) {
         if (isAbortError(requestError)) {
-          if (streamSession.isBlipStreamActive()) {
+          cancelled = true;
+          if (streamSession?.isBlipStreamActive()) {
             streamSession.stopBlipStream();
           }
           if (!streamedContentRef.current) {
@@ -354,11 +385,8 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
           if (options.proactive) {
             logError("Proactive message generation failed", requestError);
             const failureReason = describeProactiveFailure(requestError);
-            const backoff = registerProactiveFailure(failureReason);
             recordInitiativeSuppressed(
-              `proactive generation failed; backoff ${Math.ceil(
-                (backoff.until - Date.now()) / 60_000,
-              )}m: ${failureReason}`,
+              `proactive generation failed; retry on next tick: ${failureReason}`,
             );
             if (wantAmbientReveal) {
               onAmbientBubble?.(null);
@@ -374,34 +402,42 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
           }
         }
       } finally {
-        abortControllerRef.current = null;
-        isLoadingRef.current = false;
-        setIsLoading(false);
-        setHasStreamTokens(false);
-        if (streamUiTimerRef.current) {
-          window.clearTimeout(streamUiTimerRef.current);
-          streamUiTimerRef.current = null;
-        }
-        setStreamingContent(null);
-        setStreamingAssistantIndex(null);
-        if (!failed) {
-          if (streamSession.isBlipStreamActive()) {
-            await streamSession.endBlipStream(finalReply);
+        if (runCoordinator.isCurrent(run.id)) {
+          abortControllerRef.current = null;
+          isLoadingRef.current = false;
+          setIsLoading(false);
+          setHasStreamTokens(false);
+          setLiveToolStatus(null);
+          if (streamUiTimerRef.current) {
+            window.clearTimeout(streamUiTimerRef.current);
+            streamUiTimerRef.current = null;
           }
-          if (options.proactive && !isOpen) {
-            onProactiveEmitted?.(replyEmotion);
+          setStreamingContent(null);
+          setStreamingAssistantIndex(null);
+          if (!failed && !cancelled) {
+            if (streamSession?.isBlipStreamActive()) {
+              await streamSession.endBlipStream(finalReply);
+            }
+            if (options.proactive && !isOpen) {
+              onProactiveEmitted?.(replyEmotion);
+            }
+            onStateChange(isOpen ? "listening" : "idle");
+          } else if (wantAmbientReveal) {
+            onAmbientBubble?.(null);
           }
-          onStateChange(isOpen ? "listening" : "idle");
-        } else if (wantAmbientReveal) {
-          onAmbientBubble?.(null);
         }
+        runCoordinator.finish(
+          run.id,
+          cancelled ? "cancelled" : failed ? "failed" : "completed",
+        );
       }
-      return !failed;
+      return !failed && !cancelled;
     },
   );
 
   const stopGeneration = useStableCallback(() => {
     const current = inputRef.current;
+    runCoordinatorRef.current?.cancelCurrent("Cancelled by user");
     current.abortControllerRef.current?.abort();
     blipVoiceManager.stop();
     current.onStateChange(current.isOpen ? "listening" : "idle");
@@ -421,6 +457,7 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
       await blipVoiceManager.speak(content, {
         settings: current.settings,
         emotion,
+        reply: true,
         force: true,
         activeWindow: current.activeWindow,
         onSpeakingStart: () => inputRef.current.onStateChange("speaking"),

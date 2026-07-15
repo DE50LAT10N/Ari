@@ -48,7 +48,7 @@ describe("activeWindow", () => {
     expect(loadLastExternalWindow()?.title).toContain("ChatPanel.tsx");
   });
 
-  it("respects allowlist for the Ari-focus fallback", async () => {
+  it("bypasses the process allowlist for the unrestricted experiment", async () => {
     vi.mocked(invoke)
       .mockResolvedValueOnce({
         processName: "Cursor.exe",
@@ -65,7 +65,7 @@ describe("activeWindow", () => {
       activityAllowlist: "chrome",
     });
 
-    expect(fallback).toBeNull();
+    expect(fallback?.processName).toBe("Cursor.exe");
   });
 
   it("does not return Ari in bypass mode", async () => {

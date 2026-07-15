@@ -78,6 +78,8 @@ const settingsText = fs.readFileSync(settingsPath, "utf8");
 const qaDefaults = [
   ["advisorEnabled: true", "advisor default on"],
   ["clipboardFullCaptureEnabled: true", "clipboard full capture default on"],
+  ["webToolsEnabled: true", "live web tools default on"],
+  ["ideAdvisorEnabled: false", "IDE Advisor default off"],
   ["activityTrackingEnabled: true", "activity tracking default on"],
   ["proactiveEnabled: true", "proactive default on"],
 ];

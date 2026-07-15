@@ -95,22 +95,23 @@ Thresholds: candidate ≥ **0.48**; merge ≥ **0.82**; ask_user ≥ **0.55**.
 | ignored | -0.7 |
 | intent | +0.25 |
 
-### Daily caps by initiative level
+### Daily initiative pacing
 
-Telemetry reference only — `dailyInitiativeCap()` returns **9999** (no hard block in runtime).
+`dailyInitiativeCap()` returns `9999`: initiative uses cooldowns and policy scoring instead of a hard daily shutdown.
 
-| Level | Telemetry reference/day |
+| Level | Hard cap/day |
 |-------|-------------------------|
-| silent | 2 |
-| rare | 3 |
-| normal | 4 |
-| active | 7 |
+| silent | none |
+| rare | none |
+| normal | none |
+| active | none |
 
 ### Proactive tone balance (Diagnostics)
 
 `memoryTelemetry.getProactiveToneSnapshot()` — counts `advice` vs `smalltalk` initiatives emitted today via `recordProactiveToneEmitted`.
 
-Per-kind caps scale from base in `initiativeConfig.ts` (e.g. `memory_callback`: 1 at normal).
+Per-kind hard caps are also disabled (`9999`); cooldowns, quiet mode, scoring,
+and ignored-message feedback provide pacing without silencing Ari for the day.
 
 ## Retrieval constants
 

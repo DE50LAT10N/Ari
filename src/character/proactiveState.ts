@@ -498,6 +498,12 @@ export function shouldSuppressOpenChatAdvice(input: {
   urgencyLevel: "none" | "low" | "medium" | "high";
   settings?: ProactiveGapSettings;
 }): boolean {
+  // Active initiative explicitly allows live advice while the user works.
+  // Otherwise every keystroke resets activityAgoMs and this gate can remain
+  // closed forever even though the advice cadence and LLM gates are ready.
+  if (input.settings?.initiativeLevel === "active") {
+    return false;
+  }
   const silenceMs = openChatAdviceSilenceMs(input.settings);
   return (
     input.chatOpen &&

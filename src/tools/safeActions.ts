@@ -21,6 +21,7 @@ import {
   readProjectFile,
 } from "../character/projectBinder";
 import { parseEditorContext } from "../platform/windowContext";
+import { hasDocumentLookupIntent } from "../rag/ragQueryBuilder";
 
 export function actionText(action: SafeActionProposal): string | undefined {
   const text = (action.content ?? action.target)?.trim();
@@ -193,6 +194,9 @@ function activeEditorFilePath(
 }
 
 function textRequestsOpen(text: string): boolean {
+  if (hasDocumentLookupIntent(text)) {
+    return false;
+  }
   return /(?:открой|открыть|покажи|показать|взглян|посмотр|прочитай|прочесть|open|show|read)/i.test(
     text,
   );
@@ -213,6 +217,9 @@ export function extractDeterministicSafeAction(
   assistantReply = "",
   context?: SafeActionExtractionContext,
 ): SafeActionProposal | null {
+  if (hasDocumentLookupIntent(userMessage)) {
+    return null;
+  }
   const combined = `${userMessage}\n${assistantReply}`;
   const url = combined.match(URL_PATTERN)?.[0];
   if (url && textRequestsOpen(combined)) {
@@ -326,6 +333,9 @@ export async function extractSafeAction(
   context?: SafeActionExtractionContext,
 ): Promise<SafeActionProposal | null> {
   if (!settings.safeActionsEnabled) return null;
+  if (hasDocumentLookupIntent(userMessage)) {
+    return null;
+  }
 
   const intent = settings.intentClassifierEnabled
     ? classifyUserIntent(userMessage)

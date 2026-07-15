@@ -403,7 +403,7 @@ describe("moodEngine", () => {
     expect(miss.nextMood.irritation).toBeGreaterThan(base.irritation);
   });
 
-  it("reaches annoyed after one ignored initiative via mood engine", () => {
+  it("does not reach irritated after one ignored initiative via mood engine", () => {
     const now = 1_000_000;
     const result = updateMoodFromEvents({
       settings: defaultSettings,
@@ -412,14 +412,14 @@ describe("moodEngine", () => {
       options: { applyDecay: false },
     });
 
-    expect(result.classification.emotion).toBe("annoyed");
-    expect(result.nextMood.irritation ?? 0).toBeGreaterThan(0.38);
+    expect(result.nextMood.irritation ?? 0).toBeGreaterThan(0.12);
+    expect(result.nextMood.irritation ?? 0).toBeLessThan(0.58);
     expect(deriveMoodArchetype({
       warmth: result.nextMood.warmth ?? 0,
       energy: result.nextMood.energy ?? 0,
       irritation: result.nextMood.irritation ?? 0,
       updatedAt: Date.now(),
-    })).toBe("irritated");
+    })).not.toBe("irritated");
   });
 
   it("caps advice ignored mood events at four repeats", () => {

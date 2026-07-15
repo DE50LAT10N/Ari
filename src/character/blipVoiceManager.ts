@@ -27,6 +27,8 @@ import { TextRevealEngine } from "./textRevealEngine";
 
 export type BlipSpeakOptions = {
   settings: AppSettings;
+  /** When set, overrides the static settings snapshot on each blip/reveal tick. */
+  getSettings?: () => AppSettings;
   emotion?: CharacterEmotion;
   initiative?: boolean;
   reply?: boolean;
@@ -75,13 +77,19 @@ function dispatchVoiceChanged(): void {
   window.dispatchEvent(new Event(VOICE_CHANGED_EVENT));
 }
 
+function resolveSettings(options: BlipSpeakOptions): AppSettings {
+  return options.getSettings?.() ?? options.settings;
+}
+
 function shouldGateSpeech(options: BlipSpeakOptions): boolean {
-  const { settings } = options;
-  if (!isBlipVoiceEnabled(settings) && !options.force && !options.test) {
+  const settings = resolveSettings(options);
+  const toggleBypass = options.force || options.test;
+  // Manual speech (force) should still produce audio even if the voice toggle is off,
+  // otherwise the "speak" button appears broken.
+  if (!isBlipVoiceEnabled(settings) && !toggleBypass && !options.test) {
     return false;
   }
   if (
-    !options.force &&
     !options.test &&
     settings.blipMuteInQuietMode &&
     isQuietModeActive(settings, options.activeWindow)
@@ -89,7 +97,6 @@ function shouldGateSpeech(options: BlipSpeakOptions): boolean {
     return false;
   }
   if (
-    !options.force &&
     !options.test &&
     settings.blipMuteDuringFocus &&
     isFocusSessionActive()
@@ -97,33 +104,42 @@ function shouldGateSpeech(options: BlipSpeakOptions): boolean {
     return false;
   }
   if (
-    !options.force &&
     !options.test &&
     settings.blipMuteAtNight &&
     isQuietHours(settings)
   ) {
     return false;
   }
-  if (options.initiative && !settings.blipSpeakInitiative && !options.force) {
+  if (options.initiative && !settings.blipSpeakInitiative && !toggleBypass) {
     if (!options.ambientWithSound) {
       return false;
     }
   }
-  if (options.reply && !settings.blipSpeakReplies && !options.force) {
+  if (options.reply && !settings.blipSpeakReplies && !toggleBypass) {
     return false;
   }
-  if (options.pomodoro && !settings.blipSpeakPomodoro && !options.force) {
+  if (options.pomodoro && !settings.blipSpeakPomodoro && !toggleBypass) {
     return false;
   }
   return true;
 }
 
+function resolveSessionPitch(options: BlipSpeakOptions): number {
+  const settings = resolveSettings(options);
+  const profile = getEmotionVoiceProfile(options.emotion);
+  return (
+    settings.blipPitch *
+    moodVoiceScale() *
+    (settings.blipEmotionPitch || options.test ? samplePitch(profile) : 1)
+  );
+}
+
 export function shouldBlipReveal(options: BlipSpeakOptions): boolean {
-  return isBlipVoiceEnabled(options.settings) && shouldGateSpeech(options);
+  return isBlipVoiceEnabled(resolveSettings(options)) && shouldGateSpeech(options);
 }
 
 export function shouldAmbientTextReveal(options: BlipSpeakOptions): boolean {
-  if (!isBlipVoiceEnabled(options.settings) && !options.revealOnly) {
+  if (!isBlipVoiceEnabled(resolveSettings(options)) && !options.revealOnly) {
     return false;
   }
   if (options.revealOnly) {
@@ -181,14 +197,6 @@ class BlipVoiceManager {
     const audioEnabled = shouldGateSpeech(options);
     this.active = false;
 
-    const profile = getEmotionVoiceProfile(options.emotion);
-    const sessionPitch =
-      options.settings.blipPitch *
-      moodVoiceScale() *
-      (options.settings.blipEmotionPitch || options.test
-        ? samplePitch(profile)
-        : 1);
-
     const reveal = new TextRevealEngine();
     const session: StreamSession = {
       token,
@@ -198,14 +206,14 @@ class BlipVoiceManager {
       speakingStarted: false,
       murmurPlayed: false,
       audioEnabled,
-      sessionPitch,
+      sessionPitch: resolveSessionPitch(options),
       blipChain: Promise.resolve(),
       revealDone: false,
       streamEnded: false,
     };
     this.streamSession = session;
 
-    const charsPerSecond = 28 * options.settings.blipSpeed;
+    const charsPerSecond = 28 * resolveSettings(options).blipSpeed;
     reveal.start({
       charsPerSecond,
       onReveal: (displayText, delta) => {
@@ -213,22 +221,22 @@ class BlipVoiceManager {
           return;
         }
         options.onDisplayUpdate?.(displayText);
-        if (displayText.length > 0 && session.audioEnabled) {
-          if (!this.active) {
-            this.active = true;
-            dispatchVoiceChanged();
-          }
-          this.ensureSpeakingStarted(session);
-          if (
-            session.audioEnabled &&
-            session.mode === "murmur" &&
-            !session.murmurPlayed
-          ) {
-            session.murmurPlayed = true;
-            this.enqueueBlips(session, buildMurmurChirp(2));
-          }
+        if (
+          displayText.length > 0 &&
+          session.audioEnabled &&
+          !session.streamEnded &&
+          session.mode === "murmur" &&
+          !session.murmurPlayed
+        ) {
+          session.murmurPlayed = true;
+          this.enqueueBlips(session, buildMurmurChirp(2));
         }
-        if (delta && session.audioEnabled && session.mode !== "murmur") {
+        if (
+          delta &&
+          session.audioEnabled &&
+          !session.streamEnded &&
+          session.mode !== "murmur"
+        ) {
           void this.handleRevealDelta(session, delta);
         }
       },
@@ -261,11 +269,14 @@ class BlipVoiceManager {
     const scope = resolveBlipScope(text, {
       technical: session.options.technical,
       murmurForced:
-        session.options.settings.blipShortRepliesOnly &&
-        isTooLongForAutoBlip(text, session.options.settings),
+        resolveSettings(session.options).blipShortRepliesOnly &&
+        isTooLongForAutoBlip(text, resolveSettings(session.options)),
     });
     session.mode = scope.mode;
+    session.sessionPitch = resolveSessionPitch(session.options);
 
+    const settings = resolveSettings(session.options);
+    session.reveal.setCharsPerSecond(28 * settings.blipSpeed);
     session.reveal.setTarget(text);
   }
 
@@ -275,14 +286,15 @@ class BlipVoiceManager {
       return;
     }
 
-    session.streamEnded = true;
     this.feedStream(finalText, session.options.emotion);
+    session.streamEnded = true;
     session.reveal.markStreamEnded();
-
     if (session.reveal.isCaughtUp()) {
       session.revealDone = true;
       void this.tryFinishSession(session);
+      return;
     }
+    session.reveal.flush();
   }
 
   endStreamAsync(finalText: string): Promise<void> {
@@ -294,9 +306,6 @@ class BlipVoiceManager {
     return new Promise((resolve) => {
       session.onIdle = resolve;
       this.endStream(finalText);
-      if (!this.active) {
-        resolve();
-      }
     });
   }
 
@@ -392,19 +401,13 @@ class BlipVoiceManager {
     dispatchVoiceChanged();
     options.onSpeakingStart?.();
 
-    const profile = getEmotionVoiceProfile(options.emotion);
-    const sessionPitch =
-      options.settings.blipPitch *
-      moodVoiceScale() *
-      (options.settings.blipEmotionPitch || options.test
-        ? samplePitch(profile)
-        : 1);
+    const sessionPitch = resolveSessionPitch(options);
 
     const scope = resolveBlipScope(cleaned, {
       technical: options.technical,
       murmurForced:
-        options.settings.blipShortRepliesOnly &&
-        isTooLongForAutoBlip(cleaned, options.settings),
+        resolveSettings(options).blipShortRepliesOnly &&
+        isTooLongForAutoBlip(cleaned, resolveSettings(options)),
     });
     const events =
       scope.mode === "murmur"
@@ -462,17 +465,23 @@ class BlipVoiceManager {
     session: StreamSession,
   ): Promise<void> {
     const token = this.sessionToken;
+    if (!this.active) {
+      this.active = true;
+      dispatchVoiceChanged();
+    }
+    this.ensureSpeakingStarted(session);
     const options = session.options;
+    const settings = resolveSettings(options);
     const profile = getEmotionVoiceProfile(options.emotion);
     const pitchJitter = 1 + (Math.random() * 2 - 1) * 0.04;
-    const pitch = session.sessionPitch * pitchJitter;
+    const pitch = resolveSessionPitch(options) * pitchJitter;
     const volume =
-      options.settings.blipVolume *
+      settings.blipVolume *
       profile.volumeScale *
-      (options.settings.soundsEnabled ? 1 : 0.6);
+      (settings.soundsEnabled ? 1 : 0.6);
 
     if (event.pauseMs > 0) {
-      await this.delay(event.pauseMs / options.settings.blipSpeed);
+      await this.delay(event.pauseMs / settings.blipSpeed);
       if (token !== this.sessionToken) {
         return;
       }
@@ -485,7 +494,7 @@ class BlipVoiceManager {
       durationScale: profile.blipDurationScale,
     });
 
-    const interval = sampleInterval(profile) / options.settings.blipSpeed;
+    const interval = sampleInterval(profile) / settings.blipSpeed;
     await this.delay(interval);
   }
 
@@ -506,6 +515,7 @@ class BlipVoiceManager {
     const wasActive = this.active;
     const speakingStarted = session?.speakingStarted ?? wasActive;
     const onIdle = session?.onIdle;
+    session?.reveal.stop();
     this.streamSession = null;
     this.active = false;
     if (wasActive) {

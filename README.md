@@ -2,7 +2,7 @@
 
 **Version: 1.2.0**
 
-Ari is a local desktop companion built with **Tauri 2**, **React**, and **TypeScript**. She lives in a transparent always-on-top window, opens chat on click, and talks through either **local Ollama** or the **GigaChat API** (user choice).
+Ari is a local AI-character companion built with **Tauri 2**, **React**, and **TypeScript**. She lives in a transparent always-on-top window, opens chat on click, and talks through either **local Ollama** or the **GigaChat API** (user choice).
 
 This README is the entry point. Full reference lives in [`docs/`](docs/).
 
@@ -48,6 +48,23 @@ npm run tauri build -- --bundles nsis
 ```
 
 Output: `src-tauri/target/release/bundle/nsis`
+
+### VS Code Engineering Mentor
+
+1. Install extension dependencies and compile it:
+
+```powershell
+npm ci --prefix ide-extensions/vscode
+npm run ide:compile
+```
+
+2. Open `ide-extensions/vscode` in VS Code and press `F5` with **Run Ari IDE Advisor**.
+3. Enable **IDE Advisor** in Ari. Click the `IDE` badge to copy the pairing-file path.
+4. In the Extension Development Host run **Ari: Pair IDE Advisor from Connection File** and enable only the IDE sources you want to share.
+
+The advisor is read-only by default: it explains architecture, reviews, diagnoses,
+and teaches without editing files or running commands. See
+[`docs/IDE_BRIDGE.md`](docs/IDE_BRIDGE.md).
 
 ---
 
@@ -165,6 +182,7 @@ Restart Ollama after changing origins (fixes HTTP 403 from Tauri).
 | [docs/MODULES.md](docs/MODULES.md) | Function-level reference for `src/**` |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every settings field and model routing |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Scripts, tests, release, assets |
+| [docs/IDE_BRIDGE.md](docs/IDE_BRIDGE.md) | VS Code pairing, privacy controls, protocol, mentor context |
 | [docs/MANUAL_QA_CHECKLIST.md](docs/MANUAL_QA_CHECKLIST.md) | Manual test scenarios for desktop, UI, vision, providers |
 | [PRIVACY.md](PRIVACY.md) | Cloud vs local data |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |

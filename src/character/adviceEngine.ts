@@ -1,10 +1,6 @@
 import type { AppSettings } from "../settings/appSettings";
 import { searchRag } from "../rag/ragClient";
-import {
-  describeClipboardSemantics,
-  isClipboardSemanticallyRich,
-} from "../platform/clipboardSemantics";
-import { planAdvice, type AdviceCandidate } from "./advicePlanner";
+import { planAdvice } from "./advicePlanner";
 import { evaluateAdviceNovelty, adviceEntryText } from "./adviceNovelty";
 import {
   buildAdviceTopicKey,
@@ -17,17 +13,11 @@ import {
   reconcilePendingAdviceOutcomes,
 } from "./adviceOutcome";
 import {
-  formatAdviceMoveReputationsForDiagnostics,
-  formatAdviceMoveForDiagnostics,
-  selectAdviceMove,
-  type AdviceMoveSelection,
-} from "./adviceMoveSelector";
-import {
   computeCadencePressure,
   planSignalDrivenAdvice,
   type AdviceUrgency,
 } from "./adviceUrgency";
-import { pickPlannedInitiativeAnchor } from "./advisorEngine";
+import { hasActionableAdvisorSignals, pickPlannedInitiativeAnchor } from "./advisorEngine";
 import {
   buildProactiveInitiativePackage,
   collectBannedProactiveTopics,
@@ -36,16 +26,10 @@ import {
   type ProactivePackageOptions,
 } from "./initiativeContext";
 import {
-  buildAdviceFallbackBundle,
-  buildClarifyingProbeBundle,
   buildGateContextFromBundle,
   collectProactiveSignalFacts,
-  isGenericAdviceText,
   isThinAdviceContext,
-  isThinContextGenericAdvice,
-  setLastProactiveLlmBundle,
   synthesizeProactiveBundle,
-  tryAdviceFallbackChain,
   type ProactiveLlmBundle,
   type ProactiveSignalFact,
 } from "./proactiveLlmEngine";
@@ -58,7 +42,7 @@ import {
   buildProactiveWebSearchQuery,
   hasProactiveDebugSignals,
 } from "./proactiveTone";
-import { getProactiveFailureBackoff } from "./proactiveState";
+import { loadCurrentCodeExcerpt } from "./codeContext";
 
 export type AdviceStrategy =
   | "FRESH_ADVICE"
@@ -107,10 +91,6 @@ export type AdviceDecision = {
 };
 
 const TRACE_KEY = "desktop-character.advice-trace.v1";
-const SUBSTANTIVE_URGENCY_REASON =
-  /буфер|clipboard|ошиб|error|exception|stack|trace|diagnost|фрагмент кода|застр|input friction|пауза|возврат|исправлен|поиск|query|задач|task|блокер|видна проблема|кратковременной памяти|scope|переключ/i;
-const THIN_IDE_ONLY_REASON =
-  /live IDE context|активный режим|рабочий контекст|устойчивая работа|долгая работа с видимым контекстом|работа в [\w.а-яё-]+$/i;
 
 let lastTraceSnapshot: AdviceDecision | null = null;
 
@@ -164,50 +144,6 @@ function persistAdviceTrace(decision: AdviceDecision): void {
   }
 }
 
-function hasSubstantiveUrgencyReason(urgency?: AdviceUrgency): boolean {
-  if (!urgency || urgency.level === "none") {
-    return false;
-  }
-  return urgency.reasons.some(
-    (reason) =>
-      SUBSTANTIVE_URGENCY_REASON.test(reason) &&
-      !THIN_IDE_ONLY_REASON.test(reason),
-  );
-}
-
-export function hasSubstantiveAdviceSignals(
-  bundle: InitiativeSignalBundle,
-  urgency?: AdviceUrgency,
-): boolean {
-  const advisor = bundle.advisor;
-  if (bundle.clipboardSnippets.length > 0) {
-    return true;
-  }
-  if (
-    advisor.repeatedErrorSignature ||
-    advisor.activitySummary.repeatedErrorCount >= 2 ||
-    advisor.activitySummary.substantiveClipboardCount > 0 ||
-    advisor.stuckScore >= 0.45 ||
-    advisor.activitySummary.inputFrictionScore >= 1
-  ) {
-    return true;
-  }
-  if (
-    advisor.topQueryThemes.length > 0 ||
-    Boolean(bundle.taskActivityLink) ||
-    Boolean(bundle.nextTaskTitle) ||
-    Boolean(bundle.focusStep) ||
-    bundle.focusBlockers.length > 0 ||
-    bundle.dailyStuck.length > 0
-  ) {
-    return true;
-  }
-  if (advisor.contextThrash || advisor.scopeCreep || advisor.breakDue) {
-    return true;
-  }
-  return hasSubstantiveUrgencyReason(urgency);
-}
-
 export function gatherAdviceContext(input: {
   settings: AppSettings;
   bundle: InitiativeSignalBundle;
@@ -242,6 +178,7 @@ export function gatherAdviceContext(input: {
     recentUserMessage: input.packageOptions.recentUserMessage,
     urgency: input.urgency,
     recentChatTurns: input.packageOptions.recentChatTurns,
+    codeExcerpts: input.packageOptions.proactiveIdeExcerpts,
   });
   const graph = buildFactLinkGraph(facts, input.bundle);
   const topicChains = inferTopicChains(graph, facts, 2);
@@ -269,10 +206,10 @@ export function gatherAdviceContext(input: {
     banned,
     candidateTopics,
     preliminaryAnchor,
-    hasActionableSignals: hasSubstantiveAdviceSignals(
-      input.bundle,
-      input.urgency,
-    ),
+    hasActionableSignals:
+      input.bundle.hasActionableSignals ||
+      hasActionableAdvisorSignals(input.bundle.advisor) ||
+      input.urgency.level !== "none",
     cadencePressure,
   };
 }
@@ -334,9 +271,7 @@ function cadencePressureFromRepeat(ctx: AdviceContext): boolean {
   );
 }
 
-function recentClarifyingEntries(
-  now = Date.now(),
-): ReturnType<typeof loadAdviceLedger> {
+function recentClarifyingEntries(now = Date.now()): ReturnType<typeof loadAdviceLedger> {
   return loadAdviceLedger(now).filter(
     (entry) =>
       entry.tone === "advice" &&
@@ -366,28 +301,7 @@ function hasRecentClarifyingOnFile(
   });
 }
 
-function isClarifyingCandidate(candidate?: { kind?: string } | null): boolean {
-  return (
-    candidate?.kind === "clarifying_probe" ||
-    candidate?.kind === "uncertainty_probe"
-  );
-}
-
-function hasRepeatedFileClarifyingContext(ctx: AdviceContext): boolean {
-  const thinContext = isThinAdviceContext(ctx.facts);
-  const fileOnlyContext =
-    !ctx.facts.some((fact) =>
-      ["clipboard", "query", "task", "reference", "hypothesis"].includes(
-        fact.kind,
-      ),
-    ) && ctx.facts.some((fact) => fact.kind === "file");
-  const fileFact = ctx.facts.find((fact) => fact.kind === "file");
-  return (
-    (thinContext || fileOnlyContext) &&
-    hasRecentClarifyingOnFile(fileFact?.detail, ctx.now)
-  );
-}
-
+/* Legacy deterministic fallback builders intentionally disabled.
 function shouldAvoidClarifyingFallback(ctx: AdviceContext): boolean {
   return (
     hasRepeatedFileClarifyingContext(ctx) ||
@@ -395,17 +309,19 @@ function shouldAvoidClarifyingFallback(ctx: AdviceContext): boolean {
     hasSubstantiveClipboardFacts(ctx.facts)
   );
 }
+*/
 
 function hasSubstantiveClipboardFacts(facts: ProactiveSignalFact[]): boolean {
   return facts.some(
     (fact) =>
       fact.kind === "clipboard" &&
-      (isClipboardSemanticallyRich(fact.detail) ||
-        /error|exception|failed|cannot|denied|not found|traceback|panic|function|const|class|import|def |https?:\/\/|www\.|ошиб/i.test(
-          fact.detail,
-        )),
+      /error|exception|failed|cannot|denied|not found|traceback|panic|function|const|class|import|def |https?:\/\/|www\.|ошиб/i.test(
+        fact.detail,
+      ),
   );
 }
+
+/*
 
 function buildConcreteStepCandidate(
   ctx: AdviceContext,
@@ -420,10 +336,6 @@ function buildConcreteStepCandidate(
   if (!anchor) {
     return null;
   }
-  const semantics = clip ? describeClipboardSemantics(clip.detail) : "";
-  const semanticInstruction = semantics
-    ? ` Опирайся на элементы: ${semantics}.`
-    : "";
   const evidenceIds = [clip?.id, file?.id, screen?.id, urgency?.id].filter(
     Boolean,
   ) as string[];
@@ -432,7 +344,7 @@ function buildConcreteStepCandidate(
     kind: "debug_next_step",
     evidenceIds,
     actionText: clip
-      ? `По буферу «${anchor.slice(0, 180)}»: выдели ключевой символ или связь.${semanticInstruction} Свяжи это с ближайшим файлом или последним изменением и проверь одну конкретную гипотезу, не общий файл целиком.`
+      ? `По буферу «${anchor.slice(0, 180)}»: выдели ключевую ошибку/символ, свяжи с ближайшим файлом или последним изменением и проверь одну конкретную гипотезу.`
       : `По ${anchor}: выбери ближайший измененный блок, проверь его входные данные и один видимый выход, затем запусти самый короткий сценарий, который подтвердит именно этот блок.`,
     expectedUtility: 0.68,
     interruptionCost: 0.24,
@@ -468,6 +380,7 @@ function buildNonClarifyingAdviceFallback(input: {
     selectedAdviceCandidate: candidate ?? fallback.selectedAdviceCandidate,
   };
 }
+*/
 
 export function decideAdviceStrategy(ctx: AdviceContext): {
   strategy: AdviceStrategy;
@@ -476,10 +389,6 @@ export function decideAdviceStrategy(ctx: AdviceContext): {
 } {
   const trace: AdviceTraceStep[] = [];
 
-  if (getProactiveFailureBackoff()) {
-    pushTrace(trace, "safety", "proactive backoff active");
-    return { strategy: "SILENT", trace };
-  }
   if (!ctx.advisorEnabled) {
     pushTrace(trace, "safety", "советник выкл");
     return { strategy: "SILENT", trace };
@@ -515,7 +424,7 @@ export function decideAdviceStrategy(ctx: AdviceContext): {
   const thinContext = isThinAdviceContext(ctx.facts);
   const fileOnlyContext =
     !ctx.facts.some((fact) =>
-      ["clipboard", "query", "task", "reference", "hypothesis"].includes(
+      ["clipboard", "code", "query", "task", "reference", "hypothesis"].includes(
         fact.kind,
       ),
     ) && ctx.facts.some((fact) => fact.kind === "file");
@@ -530,21 +439,27 @@ export function decideAdviceStrategy(ctx: AdviceContext): {
     pushTrace(
       trace,
       "context",
-      "clarifying по файлу уже был — concrete step",
+      "clarifying по файлу уже был — defer smalltalk",
     );
-    pushTrace(trace, "context", "repeated clarifying -> concrete step");
-    const rotatedTopics = rotateConversationTopics(ctx);
-    return { strategy: "ROTATE_TOPIC", trace, rotatedTopics };
+    return { strategy: "DEFER_SMALLTALK", trace };
   }
 
   if (
     (thinContext || fileOnlyContext) &&
-    ctx.cadencePressure.level === "medium" &&
-    !repeatCadence &&
-    !substantiveClipboard
+    !substantiveClipboard &&
+    (!ctx.llmOnline ||
+      repeatCadence ||
+      ctx.cadencePressure.level === "medium" ||
+      ctx.cadencePressure.level === "high")
   ) {
-    pushTrace(trace, "context", "тонкий контекст + cadence — clarifying");
-    return { strategy: "CLARIFY", trace };
+    pushTrace(
+      trace,
+      "signals",
+      !ctx.llmOnline
+        ? "тонкий контекст без LLM — defer smalltalk"
+        : "тонкий контекст + cadence — defer smalltalk",
+    );
+    return { strategy: "DEFER_SMALLTALK", trace };
   }
 
   if (
@@ -565,12 +480,17 @@ function synthesisInput(
   candidateTopics: string[],
   adviceCandidate?: ReturnType<typeof planAdvice>["selected"],
   ragSnippets?: string[],
-  adviceMoveGuidance?: string,
+  codeExcerpts?: Array<{ file: string; text: string }>,
 ) {
+  const mergedCodeExcerpts = [
+    ...(codeExcerpts ?? []),
+    ...(ctx.packageOptions.proactiveIdeExcerpts ?? []),
+  ].slice(0, 6);
   return {
     bundle: ctx.bundle,
     tone: "advice" as const,
-    bannedTopics: ctx.banned,
+    // Recent topics guide rotation, but must not veto a new concrete observation.
+    bannedTopics: [],
     candidateTopics,
     sessionMinutes: ctx.packageOptions.sessionMinutes,
     windowMinutes: ctx.packageOptions.windowMinutes,
@@ -580,21 +500,24 @@ function synthesisInput(
     recentChatTurns: ctx.packageOptions.recentChatTurns,
     llmOnline: ctx.llmOnline,
     ragSnippets: ragSnippets?.length ? ragSnippets : undefined,
+    codeExcerpts: mergedCodeExcerpts.length ? mergedCodeExcerpts : undefined,
     adviceCandidate,
-    adviceMoveGuidance,
+    requirePracticalHook: true,
   };
 }
 
 function ensureDeliverableBundle(
-  ctx: AdviceContext,
+  _ctx: AdviceContext,
   llmBundle: ProactiveLlmBundle,
-  adviceFacts: ProactiveSignalFact[],
-  advicePlan: ReturnType<typeof planAdvice> | null,
-  candidateTopics: string[],
-  ragSnippets: string[],
-  trace: AdviceTraceStep[],
-  adviceMoveSelection?: AdviceMoveSelection,
+  _adviceFacts: ProactiveSignalFact[],
+  _advicePlan: ReturnType<typeof planAdvice> | null,
+  _candidateTopics: string[],
+  _ragSnippets: string[],
+  _trace: AdviceTraceStep[],
 ): ProactiveLlmBundle {
+  // The user explicitly prefers a missed attempt over deterministic replacement text.
+  return llmBundle;
+  /*
   let bundle = llmBundle;
   const avoidClarifying = shouldAvoidClarifyingFallback(ctx);
 
@@ -614,13 +537,7 @@ function ensureDeliverableBundle(
           reason: "thin context generic synthesis after clarifying",
         })
       : buildClarifyingProbeBundle(
-          synthesisInput(
-            ctx,
-            candidateTopics,
-            advicePlan?.selected,
-            ragSnippets,
-            adviceMoveSelection?.promptGuidance,
-          ),
+          synthesisInput(ctx, candidateTopics, advicePlan?.selected, ragSnippets),
           adviceFacts,
           "thin context generic synthesis",
         );
@@ -670,13 +587,7 @@ function ensureDeliverableBundle(
             reason: "duplicate advice rotated after clarifying",
           })
         : buildClarifyingProbeBundle(
-            synthesisInput(
-              ctx,
-              candidateTopics,
-              advicePlan?.selected,
-              ragSnippets,
-              adviceMoveSelection?.promptGuidance,
-            ),
+            synthesisInput(ctx, candidateTopics, advicePlan?.selected, ragSnippets),
             adviceFacts,
             "duplicate advice rotated",
           );
@@ -705,13 +616,7 @@ function ensureDeliverableBundle(
           reason: bundle.rejectReason ?? "llm synthesis rejected",
         })
       : tryAdviceFallbackChain(
-          synthesisInput(
-            ctx,
-            candidateTopics,
-            advicePlan?.selected,
-            ragSnippets,
-            adviceMoveSelection?.promptGuidance,
-          ),
+          synthesisInput(ctx, candidateTopics, advicePlan?.selected, ragSnippets),
           adviceFacts,
           bundle.rejectReason ?? "llm synthesis rejected",
         );
@@ -733,13 +638,7 @@ function ensureDeliverableBundle(
           reason: bundle.rejectReason ?? "engine concrete-step guarantee",
         })
       : buildClarifyingProbeBundle(
-          synthesisInput(
-            ctx,
-            candidateTopics,
-            advicePlan?.selected,
-            ragSnippets,
-            adviceMoveSelection?.promptGuidance,
-          ),
+          synthesisInput(ctx, candidateTopics, advicePlan?.selected, ragSnippets),
           adviceFacts,
           bundle.rejectReason ?? "engine clarifying guarantee",
         );
@@ -757,6 +656,7 @@ function ensureDeliverableBundle(
   }
 
   return bundle;
+  */
 }
 
 async function buildAdvicePackage(
@@ -787,7 +687,7 @@ async function buildAdvicePackage(
     try {
       const ragQuery = buildProactiveWebSearchQuery(ctx.bundle, preliminaryAnchor);
       const ragHits = await searchRag(ragQuery, ctx.settings);
-      ragSnippets = ragHits
+      ragSnippets = ragHits.matches
         .slice(0, 3)
         .map((hit) => hit.text.trim().slice(0, 420))
         .filter(Boolean);
@@ -799,8 +699,23 @@ async function buildAdvicePackage(
     }
   }
 
+  const codeExcerpt = await loadCurrentCodeExcerpt(ctx.settings, ctx.bundle);
+  const codeExcerpts = codeExcerpt
+    ? [{ file: codeExcerpt.file, text: codeExcerpt.text }]
+    : undefined;
+  if (codeExcerpt) {
+    pushTrace(trace, "code", `project excerpt: ${codeExcerpt.relativePath}`);
+  }
+  if (ctx.packageOptions.proactiveIdeExcerpts?.length) {
+    pushTrace(
+      trace,
+      "ide",
+      `snapshot evidence: ${ctx.packageOptions.proactiveIdeExcerpts.length}`,
+    );
+  }
+
   const adviceFacts = collectProactiveSignalFacts({
-    ...synthesisInput(ctx, candidateTopics, undefined, ragSnippets),
+    ...synthesisInput(ctx, candidateTopics, undefined, ragSnippets, codeExcerpts),
     bundle: ctx.bundle,
     tone: "advice",
   });
@@ -822,60 +737,20 @@ async function buildAdvicePackage(
     }),
   });
 
-  const adviceOutcomes = getRecentAdviceOutcomes(adviceTopicKey);
   const advicePlan = planAdvice({
     bundle: ctx.bundle,
     facts: adviceFacts,
     urgency: ctx.urgency,
     feedback: getRecentAdviceFeedback(adviceTopicKey),
     history: loadAdviceLedger(),
-    outcomes: adviceOutcomes,
+    outcomes: getRecentAdviceOutcomes(adviceTopicKey),
     candidateTopics,
     ragSnippets,
   });
-  const adviceMoveSelection = selectAdviceMove({
-    plan: advicePlan,
-    facts: adviceFacts,
-    outcomes: adviceOutcomes,
-  });
-  pushTrace(
-    trace,
-    "move",
-    `${formatAdviceMoveForDiagnostics(adviceMoveSelection)} · ${
-      adviceMoveSelection.disallowedGenericFallbacks.length
-        ? `blocked ${adviceMoveSelection.disallowedGenericFallbacks.join(", ")}`
-        : "generic fallback allowed"
-    }`,
-  );
 
   if (strategy === "CLARIFY") {
-    const clarifying = buildClarifyingProbeBundle(
-      synthesisInput(
-        ctx,
-        candidateTopics,
-        adviceMoveSelection.candidate,
-        ragSnippets,
-        adviceMoveSelection.promptGuidance,
-      ),
-      adviceFacts,
-      "engine clarify strategy",
-    );
-    if (!clarifying) {
-      pushTrace(trace, "build", "clarifying probe unavailable");
-      return { package: null, bundle: null };
-    }
-    setLastProactiveLlmBundle(clarifying, adviceFacts);
-    const pkg = buildProactiveInitiativePackage(ctx.settings, ctx.plan.kind, {
-      ...ctx.packageOptions,
-      advisorAngle: ctx.plan.angle,
-      conversationTopics:
-        clarifying.linkedThemes.length > 0
-          ? clarifying.linkedThemes
-          : candidateTopics,
-      urgency: ctx.urgency,
-      llmBundle: clarifying,
-    });
-    return { package: pkg, bundle: clarifying };
+    pushTrace(trace, "build", "clarifying fallback disabled");
+    return { package: null, bundle: null };
   }
 
   let llmBundle: ProactiveLlmBundle;
@@ -885,59 +760,19 @@ async function buildAdvicePackage(
       synthesisInput(
         ctx,
         candidateTopics,
-        adviceMoveSelection.candidate,
+        advicePlan.selected,
         ragSnippets,
-        adviceMoveSelection.promptGuidance,
+        codeExcerpts,
       ),
     );
-    if (
-      !llmBundle.practicalHook &&
-      !(llmBundle.adviceSteps && llmBundle.adviceSteps.length)
-    ) {
-      const retry = await synthesizeProactiveBundle(ctx.settings, {
-        ...synthesisInput(
-          ctx,
-          candidateTopics,
-          adviceMoveSelection.candidate,
-          ragSnippets,
-          adviceMoveSelection.promptGuidance,
-        ),
-        requirePracticalHook: true,
-      });
-      if (retry.practicalHook || retry.adviceSteps?.length) {
-        llmBundle = retry;
-      }
-    }
     pushTrace(
       trace,
       "synthesis",
       `score ${llmBundle.usefulnessScore.toFixed(2)} · shouldSend ${llmBundle.shouldSend ? "да" : "нет"}`,
     );
   } else {
-    pushTrace(trace, "synthesis", "llm offline — deterministic clarifying");
-    const offline = buildClarifyingProbeBundle(
-      synthesisInput(
-        ctx,
-        candidateTopics,
-        adviceMoveSelection.candidate,
-        ragSnippets,
-        adviceMoveSelection.promptGuidance,
-      ),
-      adviceFacts,
-      "llm offline",
-    );
-    llmBundle =
-      offline ??
-      (await synthesizeProactiveBundle(ctx.settings, {
-        ...synthesisInput(
-          ctx,
-          candidateTopics,
-          adviceMoveSelection.candidate,
-          ragSnippets,
-          adviceMoveSelection.promptGuidance,
-        ),
-        llmOnline: false,
-      }));
+    pushTrace(trace, "synthesis", "llm offline — no fallback");
+    return { package: null, bundle: null };
   }
 
   llmBundle = ensureDeliverableBundle(
@@ -948,7 +783,6 @@ async function buildAdvicePackage(
     candidateTopics,
     ragSnippets,
     trace,
-    adviceMoveSelection,
   );
 
   if (!llmBundle.shouldSend) {
@@ -965,6 +799,9 @@ async function buildAdvicePackage(
         : candidateTopics,
     urgency: ctx.urgency,
     llmBundle,
+    proactiveCodeExcerpt: codeExcerpt
+      ? { file: codeExcerpt.file, text: codeExcerpt.text }
+      : undefined,
   });
 
   if (pkg.llmBundle) {
@@ -1061,52 +898,9 @@ export async function runAdviceCycle(input: {
           built.bundle.selectedAdviceCandidate?.kind === "clarifying_probe") &&
         isDuplicateClarifyingDelivery(built.bundle.practicalHook, topicKey)
       ) {
-        const candidateTopics =
-          strategy === "ROTATE_TOPIC" && rotatedTopics?.length
-            ? rotatedTopics
-            : ctx.candidateTopics;
-        const adviceFacts = collectProactiveSignalFacts({
-          ...synthesisInput(ctx, candidateTopics),
-          bundle: ctx.bundle,
-          tone: "advice",
-        });
-        const advicePlan = planAdvice({
-          bundle: ctx.bundle,
-          facts: adviceFacts,
-          urgency: ctx.urgency,
-          feedback: getRecentAdviceFeedback(topicKey),
-          history: loadAdviceLedger(),
-          outcomes: getRecentAdviceOutcomes(topicKey),
-          candidateTopics,
-        });
-        const replacement = buildNonClarifyingAdviceFallback({
-          ctx,
-          adviceFacts,
-          advicePlan,
-          candidateTopics,
-          ragSnippets: [],
-          reason: "duplicate clarifying delivery",
-        });
-        if (replacement?.shouldSend) {
-          const pkg = buildProactiveInitiativePackage(ctx.settings, ctx.plan.kind, {
-            ...ctx.packageOptions,
-            advisorAngle: ctx.plan.angle,
-            conversationTopics:
-              replacement.linkedThemes.length > 0
-                ? replacement.linkedThemes
-                : candidateTopics,
-            urgency: ctx.urgency,
-            llmBundle: replacement,
-          });
-          pushTrace(trace, "novelty", "duplicate clarifying -> concrete step");
-          built = { package: pkg, bundle: replacement };
-          deliver = true;
-          finalStrategy = "ROTATE_TOPIC";
-        } else {
-          pushTrace(trace, "novelty", "повтор clarifying — silent");
-          deliver = false;
-          finalStrategy = "SILENT";
-        }
+        pushTrace(trace, "novelty", "повтор clarifying — silent");
+        deliver = false;
+        finalStrategy = "SILENT";
       }
     }
     const decision: AdviceDecision = {
@@ -1144,6 +938,34 @@ export async function runAdviceCycle(input: {
   }
 }
 
+/** Distinguishes transport/schema failures from legitimate policy silence. */
+export function isAdviceGenerationFailure(decision: AdviceDecision): boolean {
+  if (decision.deliver || decision.strategy === "DEFER_SMALLTALK") {
+    return false;
+  }
+  const evidence = [
+    decision.reason,
+    decision.bundle?.rejectReason,
+    ...decision.trace.map((step) => `${step.stage}: ${step.detail}`),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return /engine exception|synthesis failed|invalid[- ]schema|all live synthesis attempts failed|timed? ?out|timeout|http \d{3}|network|oauth/i.test(
+    evidence,
+  );
+}
+
+export function hasSubstantiveAdviceSignals(
+  bundle: InitiativeSignalBundle,
+  urgency: AdviceUrgency,
+): boolean {
+  return (
+    bundle.hasActionableSignals ||
+    hasActionableAdvisorSignals(bundle.advisor) ||
+    urgency.level !== "none"
+  );
+}
+
 export function shouldAttemptAdviceCycle(input: {
   advisorEnabled: boolean;
   idleGateOpen: boolean;
@@ -1157,9 +979,7 @@ export function shouldAttemptAdviceCycle(input: {
   if (!input.advisorEnabled || !input.idleGateOpen || input.loading) {
     return false;
   }
-  const hasSubstantiveSignal =
-    input.hasActionableSignals || hasSubstantiveUrgencyReason(input.urgency);
-  if (!hasSubstantiveSignal) {
+  if (!input.hasActionableSignals && input.urgency.level === "none") {
     return false;
   }
   if (input.adviceStarved) {
@@ -1182,7 +1002,7 @@ export function shouldAttemptAdviceCycle(input: {
       return false;
     }
   }
-  return hasSubstantiveSignal;
+  return input.urgency.level !== "none" || input.hasActionableSignals;
 }
 
 export function describeAdviceEngineForDiagnostics(): {
@@ -1194,9 +1014,6 @@ export function describeAdviceEngineForDiagnostics(): {
   moveReputation: string[];
 } {
   const last = getLastAdviceDecisionTrace();
-  const moveReputation = formatAdviceMoveReputationsForDiagnostics(
-    getRecentAdviceOutcomes(),
-  );
   if (!last) {
     return {
       strategy: "—",
@@ -1204,7 +1021,7 @@ export function describeAdviceEngineForDiagnostics(): {
       reason: "ещё не было цикла",
       trace: [],
       bundleScore: null,
-      moveReputation,
+      moveReputation: [],
     };
   }
   return {
@@ -1213,6 +1030,6 @@ export function describeAdviceEngineForDiagnostics(): {
     reason: last.reason,
     trace: last.trace.map((step) => `${step.stage}: ${step.detail}`),
     bundleScore: last.bundle?.usefulnessScore ?? null,
-    moveReputation,
+    moveReputation: [],
   };
 }

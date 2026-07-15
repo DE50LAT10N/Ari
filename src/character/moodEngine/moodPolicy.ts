@@ -59,6 +59,16 @@ function promptLinesFor(policy: Omit<MoodPolicy, "promptLines">): string[] {
   if (policy.sarcasm > 0.55) {
     lines.push("Колкость слышна, но без оскорблений и без саботажа полезности.");
   }
+  if (policy.refusalSharpness > 0.52) {
+    lines.push(
+      "На необязательные вопросы отвечай короче и суше; не превращай раздражение в отказ или шаблонную отговорку.",
+    );
+  }
+  if (policy.archetype === "playful" && policy.sarcasm > 0.38) {
+    lines.push(
+      "В игривом настроении можно подколоть или отшутиться, но шутка не должна заменять ответ.",
+    );
+  }
   if (policy.adviceAssertiveness > 0.62) {
     lines.push("В советах выбирай уверенный один следующий шаг и критерий результата.");
   } else if (policy.questionBias > 0.58) {

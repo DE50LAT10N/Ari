@@ -18,7 +18,10 @@ import {
   formatWeeklyReview,
 } from "../memory/reviewAggregator";
 import { getNextTask } from "../tasks/taskStore";
-import { loadSettings } from "../settings/appSettings";
+import {
+  EXPERIMENTAL_UNRESTRICTED_CONTEXT,
+  loadSettings,
+} from "../settings/appSettings";
 import {
   buildAdvisorContext,
   buildAdvisorDiagnostics,
@@ -29,6 +32,7 @@ import {
   getLastAdviceDecision,
   getLastProactiveMessageAt,
   getLastSmalltalkAttemptAt,
+  getProactiveFailureBackoff,
 } from "../character/proactiveState";
 import {
   getLastAdviceUrgency,
@@ -38,7 +42,11 @@ import {
 import { describeAdviceFinalGateForDiagnostics } from "../character/adviceFinalGate";
 import { describeAdviceEngineForDiagnostics } from "../character/adviceEngine";
 import { describeRelevanceRankerForDiagnostics } from "../character/relevanceRanker";
-import { getLastProactiveLlmBundle, getLastProactiveSynthesisReject } from "../character/proactiveLlmEngine";
+import {
+  getLastProactiveLlmBundle,
+  getLastProactiveSynthesisReject,
+  loadProactiveSynthesisDiagnostics,
+} from "../character/proactiveLlmEngine";
 import {
   dailyInitiativeCap,
   proactiveAdviceIntervalMs,
@@ -48,13 +56,17 @@ import { getDailyInitiativeCount } from "../character/initiativeScoring";
 import { getMemoryHealthSnapshot, summarizeInitiativeSuppressions } from "../memory/memoryTelemetry";
 import { isLlmProviderOnline } from "../llm/providerOnline";
 import { getGigaChatAuthKeyPresent } from "../llm/gigaChatStatus";
-import { resolveModel } from "../llm/modelRouter";
+import { getGigaChatRateLimitState } from "../llm/gigaChatRateLimit";
+import { loadGigaChatDiagnostics } from "../llm/gigaChatDiagnostics";
+import { resolveModel, resolveSynthesisModel } from "../llm/modelRouter";
 import {
   formatMoodTimelineForDiagnostics,
   getCurrentMoodLayers,
   moodVectorToPrompt,
 } from "../character/moodEngine";
 import { getInteractionAcknowledgementSummary } from "../character/interactionAcknowledgement";
+import type { IdeWorkspaceSnapshot } from "../ide/protocol";
+import type { IdeBridgeNativeStatus } from "../platform/ideBridgeNative";
 
 type DeskSnapshot = {
   focusSession: FocusSession | null;
@@ -90,6 +102,7 @@ type ProactiveDebug = {
   lastPrimaryChain: string | null;
   lastBundleSource: string | null;
   lastSynthesisReject: string | null;
+  synthesisAttempts: string[];
   adviceToday: number;
   smalltalkToday: number;
   lastAdviceDecision: string | null;
@@ -121,7 +134,7 @@ function buildSnapshot(): DeskSnapshot {
   };
 }
 
-function buildProactiveDebug(): ProactiveDebug {
+function buildProactiveDebug(ollamaOnline: boolean | null): ProactiveDebug {
   const settings = loadSettings();
   const adviceIntervalMs = proactiveAdviceIntervalMs(settings);
   const smalltalkIntervalMs = proactiveSmalltalkIntervalMs(settings);
@@ -135,10 +148,23 @@ function buildProactiveDebug(): ProactiveDebug {
   const health = getMemoryHealthSnapshot();
   const suppressionSummary = summarizeInitiativeSuppressions().slice(0, 4);
   const isGigaChat = settings.llmProvider === "gigachat";
-  const providerOnline = isLlmProviderOnline(settings, null);
+  const providerOnline = isLlmProviderOnline(settings, ollamaOnline);
   const urgency = getLastAdviceUrgency();
   const lastBundle = getLastProactiveLlmBundle();
   const lastReject = getLastProactiveSynthesisReject();
+  const synthesisAttempts = loadProactiveSynthesisDiagnostics()
+    .slice(-8)
+    .reverse()
+    .map((entry) => {
+      const score = entry.usefulnessScore === undefined
+        ? ""
+        : ` score=${entry.usefulnessScore.toFixed(2)}`;
+      const sendState = entry.shouldSend === undefined
+        ? ""
+        : ` send=${entry.shouldSend ? "yes" : "no"}`;
+      const send = ` tone=${entry.tone ?? "legacy"}${sendState}`;
+      return `${new Date(entry.at).toLocaleTimeString("ru-RU")} ${entry.provider}/${entry.model} ${entry.phase} ${entry.outcome}${score}${send} · ${entry.factCount} facts [${entry.factKinds.join(",")}] · ${entry.reason}`;
+    });
   const sinceAdviceAttempt = now - getLastAdviceAttemptAt();
   const adviceReadiness = describeAdviceReadiness(urgency, {
     advisorEnabled: settings.advisorEnabled,
@@ -200,6 +226,7 @@ function buildProactiveDebug(): ProactiveDebug {
     lastSynthesisReject: lastReject
       ? `${lastReject.tone} · score ${lastReject.usefulnessScore.toFixed(2)} · ${lastReject.rejectReason ?? "отклонён"}`
       : null,
+    synthesisAttempts,
     adviceToday: health.proactiveTone.adviceToday,
     smalltalkToday: health.proactiveTone.smalltalkToday,
     lastAdviceDecision: getLastAdviceDecision(),
@@ -228,7 +255,17 @@ function buildProactiveDebug(): ProactiveDebug {
   };
 }
 
-export function AriDiagnosticsSection() {
+export function AriDiagnosticsSection({
+  ollamaOnline,
+  ideAdvisorStatus,
+  ideAdvisorSnapshot,
+  ideAdvisorError,
+}: {
+  ollamaOnline: boolean | null;
+  ideAdvisorStatus: IdeBridgeNativeStatus;
+  ideAdvisorSnapshot: IdeWorkspaceSnapshot | null;
+  ideAdvisorError: string | null;
+}) {
   const [desk, setDesk] = useState<DeskSnapshot | null>(null);
   const [timeline, setTimeline] = useState<string[]>([]);
   const [dailyHighlight, setDailyHighlight] = useState("");
@@ -264,7 +301,7 @@ export function AriDiagnosticsSection() {
       setAdvisorFlags(diagnostics.flags);
       setAdvisorTopics(diagnostics.topics);
       setSignalLines(formatActivitySignalsForDiagnostics(6));
-      setProactiveDebug(buildProactiveDebug());
+      setProactiveDebug(buildProactiveDebug(ollamaOnline));
     };
     refresh();
     const timer = window.setInterval(refresh, 15_000);
@@ -286,7 +323,7 @@ export function AriDiagnosticsSection() {
         window.removeEventListener(name, refresh);
       }
     };
-  }, []);
+  }, [ollamaOnline]);
 
   if (!desk) {
     return <p className="settings-note">Загрузка диагностики…</p>;
@@ -295,10 +332,21 @@ export function AriDiagnosticsSection() {
   const focusActive = Boolean(desk.focusSession && !desk.focusSession.endedAt);
   const settings = loadSettings();
   const gigaKeyPresent = getGigaChatAuthKeyPresent();
+  const gigaRate = getGigaChatRateLimitState();
+  const gigaTrace = loadGigaChatDiagnostics().slice(-5).reverse();
+  const proactiveBackoff = getProactiveFailureBackoff();
 
   return (
     <div className="ari-diagnostics-section">
       <dl className="ari-desk-list">
+        <div>
+          <dt>Context profile</dt>
+          <dd>
+            {EXPERIMENTAL_UNRESTRICTED_CONTEXT
+              ? "experimental unrestricted · privacy gates bypassed"
+              : "consent-controlled"}
+          </dd>
+        </div>
         <div>
           <dt>Фокус</dt>
           <dd>
@@ -341,6 +389,40 @@ export function AriDiagnosticsSection() {
           <dt>Советник: флаги</dt>
           <dd>{advisorFlags}</dd>
         </div>
+        <div>
+          <dt>IDE Bridge</dt>
+          <dd>
+            {ideAdvisorStatus.running ? "running" : "stopped"} ·{" "}
+            {ideAdvisorStatus.connection} · client {ideAdvisorStatus.client ?? "—"}
+            {ideAdvisorStatus.lastMessageAt
+              ? ` · last ${Math.max(0, Math.round((Date.now() - ideAdvisorStatus.lastMessageAt) / 1000))}s ago`
+              : ""}
+          </dd>
+        </div>
+        <div>
+          <dt>IDE snapshot</dt>
+          <dd>
+            {ideAdvisorSnapshot
+              ? `rev ${ideAdvisorSnapshot.revision} · age ${Math.max(0, Math.round((Date.now() - ideAdvisorSnapshot.capturedAt) / 1000))}s · diagnostics ${ideAdvisorSnapshot.diagnostics?.length ?? 0} · editor ${ideAdvisorSnapshot.activeEditor?.uri ?? "—"}`
+              : "нет свежего snapshot"}
+          </dd>
+        </div>
+        <div>
+          <dt>IDE sharing</dt>
+          <dd>
+            {ideAdvisorSnapshot
+              ? Object.entries(ideAdvisorSnapshot.sharing)
+                  .map(([key, enabled]) => `${key}=${enabled ? "on" : "off"}`)
+                  .join(" · ")
+              : "—"}
+          </dd>
+        </div>
+        {ideAdvisorError && (
+          <div>
+            <dt>IDE Bridge error</dt>
+            <dd>{ideAdvisorError}</dd>
+          </div>
+        )}
         {proactiveDebug && (
           <>
             <div>
@@ -373,7 +455,10 @@ export function AriDiagnosticsSection() {
               <>
                 <div>
                   <dt>JSON / инициатива (факт.)</dt>
-                  <dd>{resolveModel("json", settings)}</dd>
+                  <dd>
+                    JSON {resolveModel("json", settings)} · synthesis{" "}
+                    {resolveSynthesisModel(settings)}
+                  </dd>
                 </div>
                 <div>
                   <dt>Vision (факт.)</dt>
@@ -393,6 +478,52 @@ export function AriDiagnosticsSection() {
                   : "см. статус Ollama в чате"}
               </dd>
             </div>
+            {settings.llmProvider === "gigachat" && (
+              <>
+                <div>
+                  <dt>GigaChat transport</dt>
+                  <dd>
+                    {gigaRate.phase}
+                    {gigaRate.activeKind ? ` · ${gigaRate.activeKind}` : ""}
+                    {` · queue ${gigaRate.queuedCount}`}
+                    {gigaRate.queuedInteractive > 0
+                      ? ` (${gigaRate.queuedInteractive} interactive)`
+                      : ""}
+                    {gigaRate.cooldownMs > 0
+                      ? ` · cooldown ${Math.ceil(gigaRate.cooldownMs / 1000)}s`
+                      : ""}
+                    {gigaRate.throttleFailures > 0
+                      ? ` · throttles ${gigaRate.throttleFailures}`
+                      : ""}
+                  </dd>
+                </div>
+                {gigaTrace.length > 0 && (
+                  <div>
+                    <dt>GigaChat trace</dt>
+                    <dd>
+                      {gigaTrace
+                        .map(
+                          (entry) =>
+                            `${new Date(entry.at).toLocaleTimeString("ru-RU")} ${entry.kind}/${entry.model ?? "—"} ${entry.outcome} ${entry.durationMs}ms${entry.status ? ` HTTP ${entry.status}` : ""}${entry.finishReason ? ` finish=${entry.finishReason}` : ""}${entry.eventCount === undefined ? "" : ` events=${entry.eventCount}`}${entry.contentChunks === undefined ? "" : ` chunks=${entry.contentChunks}`}${entry.malformedEvents ? ` malformed=${entry.malformedEvents}` : ""}${entry.detail ? ` · ${entry.detail}` : ""}`,
+                        )
+                        .join(" | ")}
+                    </dd>
+                  </div>
+                )}
+              </>
+            )}
+            {proactiveBackoff && (
+              <div>
+                <dt>Proactive generation backoff</dt>
+                <dd>
+                  {Math.max(
+                    1,
+                    Math.ceil((proactiveBackoff.until - Date.now()) / 1000),
+                  )}s · failure {proactiveBackoff.failures} ·{" "}
+                  {proactiveBackoff.reason}
+                </dd>
+              </div>
+            )}
             <div>
               <dt>След. смолток</dt>
               <dd>
@@ -525,6 +656,12 @@ export function AriDiagnosticsSection() {
               <div>
                 <dt>Последний отказ синтеза</dt>
                 <dd>{proactiveDebug.lastSynthesisReject}</dd>
+              </div>
+            )}
+            {proactiveDebug.synthesisAttempts.length > 0 && (
+              <div>
+                <dt>LLM synthesis trace</dt>
+                <dd>{proactiveDebug.synthesisAttempts.join(" | ")}</dd>
               </div>
             )}
             {proactiveDebug.lastInitiativeMove && (

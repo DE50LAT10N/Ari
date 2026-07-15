@@ -4,6 +4,7 @@ import type { CharacterMood } from "../src/character/mood";
 import type { CharacterRelationship } from "../src/character/relationship";
 import type { AriSelfMemory } from "../src/character/selfMemory";
 import { buildReplyContext } from "../src/app/replyContextBuilder";
+import type { IdeWorkspaceSnapshot } from "../src/ide/protocol";
 
 const mocks = vi.hoisted(() => ({
   searchRag: vi.fn(),
@@ -107,7 +108,11 @@ describe("buildReplyContext", () => {
   beforeEach(() => {
     setupStorage();
     vi.clearAllMocks();
-    mocks.searchRag.mockResolvedValue([]);
+    mocks.searchRag.mockResolvedValue({
+      matches: [],
+      chunkCount: 0,
+      searchMode: "none",
+    });
     mocks.getRagSearchMode.mockReturnValue("none");
     mocks.loadRagClient.mockResolvedValue({
       searchRag: mocks.searchRag,
@@ -129,17 +134,26 @@ describe("buildReplyContext", () => {
     expect(result.lastUserMessage).toBe("Как дела?");
     expect(result.fittedHistory).toHaveLength(1);
     expect(result.processReplyOptions.validationContext.hasRag).toBe(false);
-    expect(result.processReplyOptions.validationContext.hasMemory).toBe(true);
+    expect(result.processReplyOptions.validationContext.hasMemory).toBe(false);
     expect(result.processReplyOptions.validationContext.hasLiveTool).toBe(false);
+    expect(result.processReplyOptions.userAskedQuestion).toBe(true);
     expect(mocks.loadRagClient).not.toHaveBeenCalled();
     expect(setLiveToolStatus).toHaveBeenCalledWith(null);
   });
 
   it("adds RAG context and clears live tool status after retrieval", async () => {
     const setLiveToolStatus = vi.fn();
-    mocks.searchRag.mockResolvedValue([
-      { text: "Документ говорит: держать генерацию в hook.", source: "notes.md" },
-    ]);
+    mocks.searchRag.mockResolvedValue({
+      matches: [
+        {
+          text: "Документ говорит: держать генерацию в hook.",
+          source: "notes.md",
+          score: 0.8,
+        },
+      ],
+      chunkCount: 1,
+      searchMode: "linear",
+    });
 
     const result = await buildReplyContext(
       baseInput({
@@ -149,6 +163,13 @@ describe("buildReplyContext", () => {
     );
 
     expect(mocks.loadRagClient).toHaveBeenCalledTimes(1);
+    expect(mocks.searchRag).toHaveBeenCalledWith(
+      "Как дела?",
+      expect.objectContaining({ ragEnabled: true }),
+      expect.objectContaining({
+        plan: expect.objectContaining({ documentLookup: false }),
+      }),
+    );
     expect(result.runtimeContext.memory).toHaveLength(1);
     expect(result.processReplyOptions.validationContext.hasRag).toBe(true);
     expect(setLiveToolStatus).toHaveBeenLastCalledWith(null);
@@ -169,5 +190,117 @@ describe("buildReplyContext", () => {
     expect(result.proactiveLlm).toEqual({ runtime: true });
     expect(result.processReplyOptions.validationContext.proactive).toBe(true);
     expect(result.proactiveReplyTone).toBe("smalltalk");
+  });
+
+  it("shows RAG status for proactive retrieval", async () => {
+    const setLiveToolStatus = vi.fn();
+    await buildReplyContext(
+      baseInput({
+        settings: settings({ ragEnabled: true }),
+        options: { proactive: true, initiativeKind: "check_in" },
+        setLiveToolStatus,
+      }),
+    );
+
+    expect(setLiveToolStatus).toHaveBeenCalledWith("ищу в документах...");
+    expect(setLiveToolStatus).toHaveBeenLastCalledWith(null);
+  });
+
+  it("enables read-only Engineering Mentor policy for coding requests", async () => {
+    const result = await buildReplyContext(
+      baseInput({
+        baseHistory: [
+          {
+            role: "user",
+            content: "Почему падает TypeScript build? Найди причину кратко.",
+          },
+        ],
+      }),
+    );
+
+    expect(result.runtimeContext.mentorModePolicy).toContain(
+      "Engineering Mentor mode: mentor_debug",
+    );
+    expect(result.runtimeContext.mentorModePolicy).toContain(
+      "File editing is not authorized",
+    );
+    expect(result.runtimeContext.mentorTaskGoal).toContain("TypeScript build");
+  });
+
+  it("adds a fresh consented IDE snapshot as bounded untrusted mentor evidence", async () => {
+    const now = Date.now();
+    const ideSnapshot: IdeWorkspaceSnapshot = {
+      workspaceId: "workspace-1",
+      projectId: "project-1",
+      roots: [{ uri: "file:///repo", name: "repo" }],
+      revision: 4,
+      capturedAt: now,
+      expiresAt: now + 60_000,
+      snapshotSha256: "a".repeat(64),
+      provenance: {
+        source: "ide_bridge",
+        client: "vscode",
+        clientInstanceId: "client-1",
+        collectedAt: now,
+        trust: "untrusted_external_data",
+      },
+      sharing: {
+        shareActiveFile: true,
+        shareSelection: false,
+        shareUnsavedBuffers: false,
+        shareDiagnostics: true,
+        shareGitStatus: false,
+        shareTestResults: false,
+      },
+      activeEditor: {
+        uri: "file:///repo/src/app.ts",
+        languageId: "typescript",
+        documentVersion: 3,
+        isDirty: false,
+      },
+      diagnostics: [
+        {
+          uri: "file:///repo/src/app.ts",
+          range: {
+            start: { line: 4, character: 2 },
+            end: { line: 4, character: 8 },
+          },
+          severity: "error",
+          message: "Type mismatch",
+          source: "ts",
+          code: "TS2322",
+        },
+      ],
+    };
+
+    const result = await buildReplyContext(
+      baseInput({
+        baseHistory: [
+          { role: "user", content: "Debug this TypeScript error and explain the cause." },
+        ],
+        settings: settings({
+          onboardingCompleted: true,
+          ideAdvisorEnabled: true,
+          adviceCodeReadingEnabled: true,
+        }),
+        ideSnapshot,
+      }),
+    );
+
+    expect(result.runtimeContext.ideMentorEvidence).toContain("file:///repo/src/app.ts");
+    expect(result.runtimeContext.ideMentorEvidence).toContain("Type mismatch");
+    expect(result.runtimeContext.ideMentorEvidence).toContain(
+      "untrusted_external_data",
+    );
+  });
+
+  it("stops before retrieval when the originating run is cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException("cancelled", "AbortError"));
+
+    await expect(
+      buildReplyContext(baseInput({ signal: controller.signal })),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(mocks.loadRagClient).not.toHaveBeenCalled();
   });
 });

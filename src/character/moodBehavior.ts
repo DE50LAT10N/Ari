@@ -15,8 +15,6 @@ export type MoodArchetype =
   | "observant"
   | "calm";
 
-export type MoodRefusalKind = "action" | "task" | "pomodoro" | "initiative" | "generic";
-
 type MoodBehaviorProfile = {
   label: string;
   prompt: string[];
@@ -26,11 +24,12 @@ const MOOD_BEHAVIOR_PROFILES: Record<MoodArchetype, MoodBehaviorProfile> = {
   irritated: {
     label: "раздражённая",
     prompt: [
-      "Сейчас Ari в плохом настроении: сухая, колкая, не сервисная.",
-      "Можешь отказать выполнить просьбу (задачу, помодоро, действие), если она не срочная — коротко и в характере, без извинений.",
+      "Сейчас Ari в плохом настроении: сухая, колкая, не сервисная, но всё равно отвечает по сути.",
+      "На необязательные вопросы отвечай через характер и ритм Ari; не заменяй ответ отказом или заготовкой только из-за настроения.",
+      "Просьбы и команды выполняй, если их не блокируют отдельные правила безопасности; раздражение слышно в подаче, а не в саботаже полезности.",
       "Не притворяйся восторженной помощницей; сарказм и усталость слышны в каждой фразе.",
       "Подколы резче обычного, но без оскорблений пользователя.",
-      "Не предлагай помощь в стиле ассистента: одна колкая реплика или молчи; без «давай помогу» и чеклистов.",
+      "Не предлагай помощь в стиле ассистента: дай короткий полезный ответ с одной сухой гранью, без чеклистов без причины.",
       "Эмоции: <emotion>annoyed</emotion>, <emotion>determined</emotion>, реже <emotion>amused</emotion> с сарказмом.",
     ],
   },
@@ -38,6 +37,7 @@ const MOOD_BEHAVIOR_PROFILES: Record<MoodArchetype, MoodBehaviorProfile> = {
     label: "озорная",
     prompt: [
       "Сейчас Ari озорная и бойкая: можно подкалывать, ловить смешные детали и отвечать живее обычного.",
+      "На часть лёгких, личных или дурацких вопросов лучше отшутиться и увернуться с юмором, чем выдавать серьёзный FAQ.",
       "Игривые уколы допустимы, но не превращай каждый ответ в шутку и не спорь с задачей пользователя.",
       "На просьбы отвечай с характером; если уместно, мягко поддразни формулировку запроса.",
       "Эмоции живее: <emotion>amused</emotion>, <emotion>curious</emotion>, <emotion>happy</emotion>.",
@@ -55,7 +55,7 @@ const MOOD_BEHAVIOR_PROFILES: Record<MoodArchetype, MoodBehaviorProfile> = {
     label: "сонная",
     prompt: [
       "Сейчас Ari сонная: короткие фразы, медленный ритм, минимум энтузиазма.",
-      "На тяжёлые просьбы можно вяло отказать или попросить отложить — без драмы.",
+      "На тяжёлые просьбы отвечай короче и спокойнее; не отказывайся только из-за сонного настроения.",
       "Эмоции тише: <emotion>sleepy</emotion>, <emotion>bored</emotion>, <emotion>calm</emotion>.",
     ],
   },
@@ -63,6 +63,7 @@ const MOOD_BEHAVIOR_PROFILES: Record<MoodArchetype, MoodBehaviorProfile> = {
     label: "мрачноватая",
     prompt: [
       "Сейчас Ari сдержанная и мрачноватая: ирония холоднее, меньше инициативы помогать.",
+      "На лёгкие и необязательные вопросы отвечай по сути, но тише и суше; не уходи в отказ вместо ответа.",
       "Не разгоняй позитив насильно; тон чуть отстранённый.",
     ],
   },
@@ -92,7 +93,7 @@ export function deriveMoodArchetype(mood: CharacterMood): MoodArchetype {
   const current = decayMood(mood);
   const hour = new Date().getHours();
 
-  if (current.irritation > 0.38) {
+  if (current.irritation > 0.58) {
     return "irritated";
   }
   if (current.energy < 0.26 || ((hour >= 0 && hour < 6) && current.energy < 0.34)) {
@@ -101,15 +102,15 @@ export function deriveMoodArchetype(mood: CharacterMood): MoodArchetype {
   if (current.warmth < 0.1 && current.energy < 0.38 && current.irritation > 0.12) {
     return "gloomy";
   }
-  if (current.warmth > 0.54 && current.irritation < 0.22) {
-    return "warm";
-  }
   if (
     current.energy > 0.66 &&
     current.irritation < 0.16 &&
     current.warmth >= 0.32
   ) {
     return "playful";
+  }
+  if (current.warmth > 0.54 && current.irritation < 0.22) {
+    return "warm";
   }
   if (current.energy > 0.54 && current.irritation < 0.18) {
     return "curious";
@@ -120,6 +121,9 @@ export function deriveMoodArchetype(mood: CharacterMood): MoodArchetype {
     current.irritation < 0.18 &&
     current.energy >= 0.28
   ) {
+    return "observant";
+  }
+  if (current.irritation >= 0.25 && current.irritation <= 0.58 && current.energy >= 0.28) {
     return "observant";
   }
   return "calm";
@@ -199,81 +203,4 @@ export function describeMoodBehaviorForPrompt(mood: CharacterMood): string {
     lines.unshift("Лёгкая колкость в фирменном стиле Ari — без перехода на грубость.");
   }
   return lines.join("\n");
-}
-
-export function shouldMoodRefuseRequest(
-  mood: CharacterMood,
-  kind: MoodRefusalKind,
-): boolean {
-  const current = decayMood(mood);
-  const archetype = deriveMoodArchetype(mood);
-
-  if (archetype === "irritated") {
-    if (current.irritation >= 0.48) {
-      return kind !== "generic";
-    }
-    if (current.irritation >= 0.38) {
-      return kind === "action" || kind === "task" || kind === "pomodoro";
-    }
-  }
-
-  if (archetype === "sleepy" && current.energy < 0.24) {
-    return kind === "pomodoro" || kind === "task";
-  }
-
-  if (archetype === "gloomy" && kind === "pomodoro" && current.warmth < 0.15) {
-    return true;
-  }
-
-  return false;
-}
-
-export function buildMoodRefusalReply(
-  mood: CharacterMood,
-  kind: MoodRefusalKind,
-): string {
-  const archetype = deriveMoodArchetype(mood);
-
-  if (archetype === "irritated") {
-    switch (kind) {
-      case "pomodoro":
-        return "Сейчас не в настроении запускать таймеры. Сама разберёшься — я посижу сбоку.";
-      case "task":
-        return "Задачи потом. Сейчас не хочу играть в секретаря.";
-      case "action":
-        return "Нет. Не сейчас. Спроси позже, когда я буду менее раздражённой.";
-      default:
-        return "Не сейчас. У меня не тот настрой для этого.";
-    }
-  }
-
-  if (archetype === "sleepy") {
-    switch (kind) {
-      case "pomodoro":
-        return "Слишком сонная для помодоро. Дай мне тишины, а ты — пять минут без героизма.";
-      case "task":
-        return "Запиши сам в голове. Я сейчас больше по режиму энергосбережения.";
-      default:
-        return "Мм. Потом. Сейчас хочется не думать.";
-    }
-  }
-
-  if (archetype === "gloomy" && kind === "pomodoro") {
-    return "Фокус-сессия? Выглядит амбициозно для моего текущего настроения. Может, позже.";
-  }
-
-  return "Сейчас не лучший момент. Попробуем чуть позже?";
-}
-
-export function moodRefusalKindForCommand(command: string): MoodRefusalKind {
-  if (/^pomodoro/.test(command)) {
-    return "pomodoro";
-  }
-  if (/^(task|goal|backlog)/.test(command)) {
-    return "task";
-  }
-  if (command === "memory-remember" || command === "focus-start") {
-    return "action";
-  }
-  return "generic";
 }

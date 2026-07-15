@@ -29,12 +29,6 @@ import type { CharacterMood } from "../character/mood";
 import { wrapCommandReply } from "./commandCharacterWrap";
 import { addUserMemoryFacts } from "../memory/userMemory";
 import { tryHandleProductivityChatCommand } from "./productivityChat";
-import {
-  buildMoodRefusalReply,
-  deriveMoodArchetype,
-  moodRefusalKindForCommand,
-  shouldMoodRefuseRequest,
-} from "../character/moodBehavior";
 import { parseCommandTail } from "./commandTailParser";
 import { isLlmProviderOnline } from "../llm/providerOnline";
 
@@ -125,40 +119,12 @@ function findOpenTaskByTitle(fragment: string): Task | null {
   );
 }
 
-function moodCommandBlock(
-  command: string,
-  mood?: CharacterMood,
-): TaskCommandOutcome | null {
-  if (!mood) {
-    return null;
-  }
-  const kind = moodRefusalKindForCommand(command);
-  if (!shouldMoodRefuseRequest(mood, kind)) {
-    return null;
-  }
-  const archetype = deriveMoodArchetype(mood);
-  const wrapped = wrapCommandReply(
-    "mood-refusal",
-    buildMoodRefusalReply(mood, kind),
-  );
-  return {
-    handled: true,
-    command: "mood-refusal",
-    reply: wrapped.reply,
-    emotion: archetype === "irritated" ? "annoyed" : "sleepy",
-  };
-}
-
 function addTaskFromParsed(
   title: string,
   dueAt: number | undefined,
   sourceMessage: string,
-  mood?: CharacterMood,
+  _mood?: CharacterMood,
 ): TaskCommandOutcome {
-  const blocked = moodCommandBlock("task-add", mood);
-  if (blocked) {
-    return blocked;
-  }
   if (!title.trim()) {
     return handled("task-add", "Напиши, что добавить: «добавь задачу …».");
   }
@@ -211,10 +177,6 @@ export function tryHandleTaskChatCommand(
     const title = progressMatch ? raw.slice(0, progressMatch.index).trim() : raw;
     if (!title) {
       return handled("goal-add", "Напиши цель после команды.");
-    }
-    const blocked = moodCommandBlock("goal-add", mood);
-    if (blocked) {
-      return blocked;
     }
     const goal = addGoal({
       title,
@@ -313,10 +275,6 @@ export function tryHandleTaskChatCommand(
 
   const tomorrowAdd = input.match(/^запиши\s+на\s+завтра\s+(.+)$/i);
   if (tomorrowAdd?.[1]) {
-    const blocked = moodCommandBlock("task-add", mood);
-    if (blocked) {
-      return blocked;
-    }
     const { title, dueAt } = parseTaskTitleAndDue(
       `завтра 9:00 ${tomorrowAdd[1]}`,
     );
@@ -493,10 +451,6 @@ export async function tryHandleTaskChatCommandAsync(
   if (rememberMatch?.[1]) {
     const fact = rememberMatch[1].trim();
     if (fact.length >= 4) {
-      const blocked = moodCommandBlock("memory-remember", mood);
-      if (blocked) {
-        return blocked;
-      }
       const result = await addUserMemoryFacts([fact], "manual");
       const body = result.changed
         ? `Запомнила: «${fact.slice(0, 160)}». Это в памяти о тебе.`
@@ -528,10 +482,6 @@ export async function tryHandleTaskChatCommandAsync(
       const title = progressMatch ? raw.slice(0, progressMatch.index).trim() : raw;
       if (!title) {
         return handled("goal-add", "Напиши цель после команды.");
-      }
-      const blocked = moodCommandBlock("goal-add", mood);
-      if (blocked) {
-        return blocked;
       }
       const goal = addGoal({
         title,

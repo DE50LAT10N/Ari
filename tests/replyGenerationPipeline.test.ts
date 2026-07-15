@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { defaultSettings } from "../src/settings/appSettings";
-import { runReplyRevisionPipeline } from "../src/app/replyRevisionPipeline";
+import {
+  runReplyRevisionPipeline,
+  shouldSuppressProactiveReply,
+} from "../src/app/replyRevisionPipeline";
 import type { ProcessReplyOptions } from "../src/character/replyPipeline";
 
 const processReplyOptions: ProcessReplyOptions = {
@@ -21,6 +24,13 @@ const processReplyOptions: ProcessReplyOptions = {
 };
 
 describe("runReplyRevisionPipeline", () => {
+  it("keeps a live corrected proactive reply despite a remaining quality warning", () => {
+    expect(shouldSuppressProactiveReply(["proactive quality"])).toBe(false);
+    expect(shouldSuppressProactiveReply(["assistant tone", "advice novelty"])).toBe(false);
+    expect(shouldSuppressProactiveReply(["empty reply"])).toBe(true);
+    expect(shouldSuppressProactiveReply(["prompt disclosure"])).toBe(true);
+  });
+
   it("retries a reply that misses the required emotion tag", async () => {
     const runStream = vi
       .fn()

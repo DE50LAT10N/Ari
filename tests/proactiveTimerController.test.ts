@@ -50,4 +50,63 @@ describe("proactive timer controller", () => {
     expect(clearInterval).toHaveBeenCalledWith(1);
     expect(timer.isRunning()).toBe(true);
   });
+
+  it("does not overlap async timer tasks", async () => {
+    const callbacks: Array<() => void> = [];
+    let release: () => void = () => undefined;
+    const task = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const timer = createProactiveTimerController(
+      { intervalMs: 15_000, task },
+      {
+        setInterval: (callback) => {
+          callbacks.push(callback);
+          return callbacks.length;
+        },
+        clearInterval: vi.fn(),
+      },
+    );
+
+    timer.start();
+    callbacks[0]();
+    callbacks[0]();
+    await Promise.resolve();
+    expect(task).toHaveBeenCalledTimes(1);
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    callbacks[0]();
+    await Promise.resolve();
+    expect(task).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases the single-flight guard after a task failure", async () => {
+    const callbacks: Array<() => void> = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const task = vi.fn().mockRejectedValueOnce(new Error("boom"));
+    const timer = createProactiveTimerController(
+      { intervalMs: 15_000, task },
+      {
+        setInterval: (callback) => {
+          callbacks.push(callback);
+          return callbacks.length;
+        },
+        clearInterval: vi.fn(),
+      },
+    );
+
+    timer.start();
+    callbacks[0]();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    callbacks[0]();
+    await Promise.resolve();
+
+    expect(task).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
 });

@@ -13,6 +13,33 @@ export type ProactiveBridgeRequest = {
 
 let queue: ProactiveBridgeRequest[] = [];
 const listeners = new Set<() => void>();
+const MAX_QUEUE_SIZE = 32;
+let lastRequestId = 0;
+
+function nextRequestId(): number {
+  lastRequestId = Math.max(Date.now(), lastRequestId + 1);
+  return lastRequestId;
+}
+
+function isDuplicateRequest(
+  request: ProactiveBridgeRequest,
+  input: {
+    kind: InitiativeKind;
+    eventHint: string;
+    options?: ProactivePackageOptions;
+    scenario?: Scenario;
+    lab?: boolean;
+  },
+): boolean {
+  return (
+    request.kind === input.kind &&
+    request.eventHint.trim() === input.eventHint.trim() &&
+    request.scenario === input.scenario &&
+    JSON.stringify(request.options ?? null) ===
+      JSON.stringify(input.options ?? null) &&
+    Boolean(request.lab) === Boolean(input.lab)
+  );
+}
 
 export function enqueueProactiveRequest(input: {
   kind: InitiativeKind;
@@ -21,7 +48,12 @@ export function enqueueProactiveRequest(input: {
   scenario?: Scenario;
   lab?: boolean;
 }): number {
-  const id = Date.now();
+  const duplicate = queue.find((request) => isDuplicateRequest(request, input));
+  if (duplicate) {
+    return duplicate.id;
+  }
+
+  const id = nextRequestId();
   queue.push({
     id,
     kind: input.kind,
@@ -30,8 +62,15 @@ export function enqueueProactiveRequest(input: {
     scenario: input.scenario,
     lab: input.lab,
   });
+  if (queue.length > MAX_QUEUE_SIZE) {
+    queue.splice(0, queue.length - MAX_QUEUE_SIZE);
+  }
   for (const listener of listeners) {
-    listener();
+    try {
+      listener();
+    } catch (error) {
+      console.warn("Proactive bridge listener failed", error);
+    }
   }
   return id;
 }
@@ -52,4 +91,5 @@ export function subscribeProactiveRequests(handler: () => void): () => void {
 export function resetProactiveBridgeForTests(): void {
   queue = [];
   listeners.clear();
+  lastRequestId = 0;
 }

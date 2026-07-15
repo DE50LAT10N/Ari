@@ -6,7 +6,7 @@ import {
   resolveGigaChatAuxModel,
   syncGigaChatModelSelection,
 } from "../src/llm/gigaChatModels";
-import { resolveModel } from "../src/llm/modelRouter";
+import { resolveModel, resolveSynthesisModel } from "../src/llm/modelRouter";
 import { defaultSettings } from "../src/settings/appSettings";
 
 describe("gigaChatModels", () => {
@@ -74,5 +74,16 @@ describe("gigaChatModels", () => {
     };
     expect(resolveModel("json", settings)).toBe("GigaChat-2-Pro");
     expect(resolveModel("initiativeSynthesis", settings)).toBe("GigaChat-2-Pro");
+  });
+
+  it("keeps structured initiative synthesis on the selected live tier", () => {
+    const settings = {
+      ...defaultSettings,
+      llmProvider: "gigachat" as const,
+      gigaChatModel: "GigaChat-2",
+      fastJsonModel: "GigaChat-2",
+    };
+    expect(resolveModel("chat", settings)).toBe("GigaChat-2");
+    expect(resolveSynthesisModel(settings)).toBe("GigaChat-2");
   });
 });

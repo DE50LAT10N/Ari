@@ -11,12 +11,14 @@ describe("proactive prompt", () => {
         "Плановая проверка инициативы после периода тишины.\nВозможные темы для живой реплики (выбери одну): что нашёл по Tauri active window permissions.",
     });
 
+    const prompt = messages.map((message) => message.content).join("\n");
     const system = messages[0]?.content ?? "";
     const finalUser = messages[messages.length - 1]?.content ?? "";
 
-    expect(system).toContain("Обязательный якорь реплики");
-    expect(system).toContain("Tauri active window permissions");
-    expect(system).toContain("Не задавай общий вопрос");
+    expect(prompt).toContain("Обязательный якорь реплики");
+    expect(prompt).toContain("Tauri active window permissions");
+    expect(prompt).toContain("Не задавай общий вопрос");
+    expect(system).not.toContain("Tauri active window permissions");
     expect(finalUser).toContain("Tauri active window permissions");
   });
 
@@ -29,11 +31,11 @@ describe("proactive prompt", () => {
         "Плановая проверка инициативы после периода тишины.\nСвежих тем нет — дай короткую нейтральную реплику.",
     });
 
-    const system = messages[0]?.content ?? "";
-    expect(system).toContain(PROACTIVE_SMALLTALK_RULE.slice(0, 40));
-    expect(system).toContain("боковую тему");
-    expect(system).toContain("Не заканчивай вопросом");
-    expect(system).not.toContain("Обязательный якорь реплики");
+    const prompt = messages.map((message) => message.content).join("\n");
+    expect(prompt).toContain(PROACTIVE_SMALLTALK_RULE.slice(0, 40));
+    expect(prompt).toContain("боковую тему");
+    expect(prompt).toContain("Не заканчивай вопросом");
+    expect(prompt).not.toContain("Обязательный якорь реплики");
   });
 
   it("includes code excerpt guidance for proactive advice when available", () => {
@@ -48,9 +50,9 @@ describe("proactive prompt", () => {
       eventDescription: "Совет по коду",
     });
 
-    const system = messages[0]?.content ?? "";
-    expect(system).toContain("Если передан реальный код из файла");
-    expect(system).toContain("Код из файла ChatPanel.tsx");
-    expect(system).toContain("export const x = 1");
+    const prompt = messages.map((message) => message.content).join("\n");
+    expect(prompt).toContain("Если передан реальный код из файла");
+    expect(prompt).toContain("Код из файла ChatPanel.tsx");
+    expect(prompt).toContain("export const x = 1");
   });
 });

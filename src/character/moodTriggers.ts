@@ -27,8 +27,8 @@ export type MoodTrigger = {
 type MoodShift = Pick<CharacterMood, "warmth" | "energy" | "irritation">;
 
 export const MOOD_SHIFT_BY_TRIGGER: Record<MoodTriggerKind, MoodShift> = {
-  rude: { warmth: -0.45, energy: 0.22, irritation: 0.68 },
-  pushy: { warmth: -0.28, energy: 0.2, irritation: 0.45 },
+  rude: { warmth: -0.28, energy: 0.18, irritation: 0.38 },
+  pushy: { warmth: -0.14, energy: 0.14, irritation: 0.22 },
   playful: { warmth: 0.22, energy: 0.48, irritation: -0.1 },
   praise: { warmth: 0.42, energy: 0.24, irritation: -0.28 },
   thanks: { warmth: 0.3, energy: 0.12, irritation: -0.24 },

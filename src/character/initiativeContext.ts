@@ -58,6 +58,7 @@ export type ProactiveInitiativePackage = {
   proactiveSignalSummary?: string;
   llmBundle?: ProactiveLlmBundle;
   proactiveCodeExcerpt?: { file: string; text: string };
+  proactiveIdeExcerpts?: Array<{ file: string; text: string }>;
 };
 
 export type MemorySnippet = {
@@ -88,6 +89,8 @@ export type ProactivePackageOptions = {
   recentChatTurns?: Array<{ role: "user" | "assistant"; content: string }>;
   llmBundle?: ProactiveLlmBundle;
   proactiveCodeExcerpt?: { file: string; text: string };
+  proactiveIdeExcerpts?: Array<{ file: string; text: string }>;
+  ideEditorFile?: string;
 };
 
 export type ClipboardSnippet = {
@@ -148,7 +151,7 @@ function collectClipboardSnippets(now: number): ClipboardSnippet[] {
     .slice(-4)
     .map((entry) => ({
       kind: entry.clipKind,
-      text: entry.snippet.slice(0, 220),
+      text: entry.snippet.slice(0, 1_200),
       at: entry.at,
     }));
 }
@@ -186,6 +189,7 @@ export function buildInitiativeSignalBundle(
     processName?: string;
     windowTitle?: string;
     visionObservation?: { text: string; timestamp: number } | null;
+    ideEditorFile?: string;
     now?: number;
   } = {},
 ): InitiativeSignalBundle {
@@ -203,7 +207,8 @@ export function buildInitiativeSignalBundle(
   const clipboardSnippets = collectClipboardSnippets(now);
   const visionSummary = collectVisionSummary(settings, options, now);
   const projectContext = describePinnedProjectContext();
-  const editorFile = advisor.dominantFile ?? advisor.editorContext.file;
+  const editorFile =
+    options.ideEditorFile ?? advisor.dominantFile ?? advisor.editorContext.file;
   const editorRepo = advisor.dominantRepo ?? advisor.editorContext.repo;
 
   const hasActionableSignals = Boolean(

@@ -157,7 +157,7 @@ describe("adviceUrgency", () => {
     expect(urgency.reasons.some((reason) => reason.includes("активный режим"))).toBe(true);
   });
 
-  it("offers low urgency for sustained live IDE work with a shorter cap", () => {
+  it("offers medium urgency for sustained live IDE work in proactive-first mode", () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "ChatPanel.tsx - Ari - Cursor",
@@ -168,7 +168,7 @@ describe("adviceUrgency", () => {
       userIntervalMs: 20 * 60_000,
     });
 
-    expect(urgency.level).toBe("low");
+    expect(urgency.level).toBe("medium");
     expect(urgency.effectiveIntervalMs).toBe(MEDIUM_ADVICE_CAP_MS);
     expect(shouldOfferLlmAdvice(urgency)).toBe(true);
   });

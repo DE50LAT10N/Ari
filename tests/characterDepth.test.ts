@@ -82,9 +82,9 @@ describe("character depth", () => {
     );
   });
 
-  it("tracks per-kind daily initiative counts without a practical cap", () => {
+  it("does not hard-stop a proactive kind for the rest of the day", () => {
     const cap = dailyInitiativeKindCap("memory_callback", defaultSettings);
-    expect(cap).toBeGreaterThan(100);
+    expect(cap).toBe(9999);
     markInitiativeSent(undefined, false, "memory_callback");
     expect(getDailyInitiativeKindCount("memory_callback")).toBe(1);
     expect(isDailyKindCapReached("memory_callback", cap)).toBe(false);

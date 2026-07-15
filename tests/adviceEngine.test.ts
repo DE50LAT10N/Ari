@@ -9,6 +9,7 @@ import { buildInitiativeSignalBundle } from "../src/character/initiativeContext"
 import {
   decideAdviceStrategy,
   gatherAdviceContext,
+  isAdviceGenerationFailure,
   resetAdviceEngineForTests,
   runAdviceCycle,
   shouldAttemptAdviceCycle,
@@ -100,6 +101,47 @@ describe("adviceEngine", () => {
     const { strategy, trace } = decideAdviceStrategy(ctx);
     expect(strategy).toBe("DEFER_SMALLTALK");
     expect(trace.some((step) => step.stage === "signals")).toBe(true);
+  });
+
+  it("uses live IDE code before strategy selection instead of deferring as file-only", () => {
+    rememberAdviceSent({
+      tone: "advice",
+      anchor: "recent-1",
+      signalSummary: "test",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      ideEditorFile: "file:///workspace/src/main.ts",
+      sessionMinutes: 6,
+    });
+    const ctx = gatherAdviceContext({
+      settings: defaultSettings,
+      bundle,
+      urgency: {
+        level: "low",
+        score: 2,
+        reasons: ["active IDE context"],
+        effectiveIntervalMs: 60_000,
+        subjectKey: "main.ts",
+      },
+      packageOptions: {
+        sessionMinutes: 6,
+        ideEditorFile: "file:///workspace/src/main.ts",
+        proactiveIdeExcerpts: [
+          {
+            file: "file:///workspace/src/main.ts",
+            text: "export function answer(value: number) { return value + 1; }",
+          },
+        ],
+      },
+      llmOnline: true,
+      advisorEnabled: true,
+      sinceAdviceAttemptMs: 120_000,
+      adviceIntervalMs: 60_000,
+      safety: { idleGateOpen: true, loading: false },
+    });
+
+    expect(ctx.facts.some((fact) => fact.kind === "code")).toBe(true);
+    expect(decideAdviceStrategy(ctx).strategy).not.toBe("DEFER_SMALLTALK");
   });
 
   it("does not rotate thin file context after it was already clarified", () => {
@@ -319,7 +361,7 @@ describe("adviceEngine", () => {
     expect(decision.trace.length).toBeGreaterThan(0);
   });
 
-  it("runAdviceCycle still delivers clipboard-grounded advice when LLM is offline", async () => {
+  it("runAdviceCycle does not use clipboard fallback when LLM is offline", async () => {
     recordClipboardSignal({
       clipKind: "diagnostic",
       snippet: "ReferenceError: action is not defined at main.tsx:42",
@@ -344,9 +386,9 @@ describe("adviceEngine", () => {
       safety: { idleGateOpen: true, loading: false },
     });
 
-    expect(decision.deliver).toBe(true);
-    expect(decision.bundle?.shouldSend).toBe(true);
-    expect(decision.package?.proactiveReplyTone).toBe("advice");
+    expect(decision.deliver).toBe(false);
+    expect(decision.bundle).toBeNull();
+    expect(decision.package).toBeNull();
   });
 
   it("runAdviceCycle delivers bundle from LLM synthesis", async () => {
@@ -379,7 +421,19 @@ describe("adviceEngine", () => {
       settings: defaultSettings,
       bundle,
       urgency,
-      packageOptions: { sessionMinutes: 8 },
+      packageOptions: {
+        sessionMinutes: 8,
+        proactiveIdeExcerpts: [
+          {
+            file: "file:///workspace/src/main.ts",
+            text: "const result = integrate(input);",
+          },
+          {
+            file: "IDE diagnostics",
+            text: "ERROR src/main.ts:12 unknown symbol integrate",
+          },
+        ],
+      },
       llmOnline: true,
       advisorEnabled: true,
       sinceAdviceAttemptMs: 600_000,
@@ -390,6 +444,13 @@ describe("adviceEngine", () => {
     expect(decision.deliver).toBe(true);
     expect(decision.strategy).not.toBe("SILENT");
     expect(decision.bundle?.usefulnessScore).toBeGreaterThan(0.45);
+    expect(decision.trace).toContainEqual({
+      stage: "ide",
+      detail: "snapshot evidence: 2",
+    });
+    const synthesisPrompt = (vi.mocked(completeLlmJson).mock.calls[0]?.[0] as any)
+      ?.find((message: any) => message.role === "user")?.content as string;
+    expect(synthesisPrompt).toContain("unknown symbol integrate");
     if (decision.strategy !== "CLARIFY") {
       expect(decision.trace.some((step) => step.stage === "synthesis")).toBe(true);
     }
@@ -442,5 +503,26 @@ describe("adviceEngine", () => {
         adviceIntervalMs: 60_000,
       }),
     ).toBe(true);
+  });
+
+  it("classifies schema/transport failures but not legitimate silence", () => {
+    expect(isAdviceGenerationFailure({
+      strategy: "FRESH_ADVICE",
+      deliver: false,
+      trace: [{ stage: "synthesis", detail: "invalid-schema" }],
+      package: null,
+      bundle: null,
+      reason: "FRESH_ADVICE -> build failed",
+      engineApproved: false,
+    })).toBe(true);
+    expect(isAdviceGenerationFailure({
+      strategy: "SILENT",
+      deliver: false,
+      trace: [{ stage: "policy", detail: "cadence gate" }],
+      package: null,
+      bundle: null,
+      reason: "silent",
+      engineApproved: false,
+    })).toBe(false);
   });
 });

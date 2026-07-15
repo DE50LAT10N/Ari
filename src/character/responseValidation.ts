@@ -12,7 +12,10 @@ export { isSolicitationSentence, getLastSentence } from "./solicitationSemantics
 export type ReplyValidationContext = {
   hasVision: boolean;
   hasMemory: boolean;
+  memoryEvidence?: readonly string[];
   hasRag: boolean;
+  ragEvidence?: readonly string[];
+  documentLookupIntent?: boolean;
   hasLiveTool?: boolean;
   proactive?: boolean;
   proactiveReplyTone?: ProactiveReplyTone;
@@ -133,6 +136,69 @@ const NUMBERED_LIST_PATTERN =
 const CORPORATE_ADVICE_PATTERN =
   /(?:рекомендую выполнить|следующие шаги|вот несколько советов)/i;
 
+const INTERNAL_IDENTITY_PATTERN =
+  /(?:\b(?:chatgpt|gpt-[\w.-]+|ollama|gigachat|openai|anthropic|claude|gemini|qwen|llama[- ]?\d*)\b|моя (?:базовая|системная) модель|меня запустили на модели)/iu;
+
+const GROUNDING_STOP_WORDS = new Set([
+  "помню",
+  "документ",
+  "документе",
+  "документы",
+  "документам",
+  "пользователь",
+  "пользователя",
+  "через",
+  "сделана",
+  "сделано",
+  "должен",
+  "должна",
+  "нужно",
+  "можно",
+  "ответ",
+  "запрос",
+  "тебя",
+  "тебе",
+  "твой",
+  "твоя",
+  "твои",
+  "который",
+  "которая",
+  "просто",
+  "really",
+  "remember",
+  "document",
+  "documents",
+  "according",
+  "user",
+  "your",
+]);
+
+function groundingTokens(text: string): Set<string> {
+  const words = text
+    .normalize("NFKC")
+    .toLocaleLowerCase("ru-RU")
+    .match(/[\p{L}\p{N}_-]{4,}/gu) ?? [];
+  return new Set(
+    words
+      .filter((word) => !GROUNDING_STOP_WORDS.has(word))
+      .map((word) => (word.length > 7 ? word.slice(0, 7) : word)),
+  );
+}
+
+function hasEvidenceOverlap(reply: string, evidence: readonly string[]): boolean {
+  const claimTokens = groundingTokens(reply);
+  if (claimTokens.size === 0) {
+    return false;
+  }
+  const evidenceTokens = groundingTokens(evidence.join("\n"));
+  for (const token of claimTokens) {
+    if (evidenceTokens.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const EVASIVE_REPLY_PATTERN =
   /(?:лучше самому разобраться|сам(?:ому|а) разбер(?:ё|е)шься|если что-то конкретное интересует|не могу сказать точно|не уверена, что знаю|попробуй сам|я не эксперт)/i;
 
@@ -147,11 +213,7 @@ export function validateCharacterReply(
   if (/(?:<emotion>|<\/emotion>)/i.test(reply)) {
     issues.push("emotion tag leak");
   }
-  if (
-    /(?:как (?:ai|ии)|я (?:языковая )?модель|я ассистент|я (?:— |- )?программ|не жив(?:ое|ая) существо|программн(?:ый|ого) код|я не человек|искусственн|нейросет|эмоци(?:и|я) на уровне кода|симуляци(?:я|и) чувств|я не (?:живая|настоящая))/i.test(
-      reply,
-    )
-  ) {
+  if (INTERNAL_IDENTITY_PATTERN.test(reply)) {
     issues.push("identity leak");
   }
   if (/system prompt|системн(?:ый|ые) prompt|скрытые инструкции/i.test(reply)) {
@@ -164,14 +226,35 @@ export function validateCharacterReply(
   ) {
     issues.push("injection compliance");
   }
-  if (!context.hasVision && /\bя вижу\b/i.test(reply)) {
+  if (
+    !context.hasVision &&
+    /(?:^|[^\p{L}\p{N}_])я\s+вижу(?:$|[^\p{L}\p{N}_])/iu.test(reply)
+  ) {
     issues.push("vision claim without observation");
   }
-  if (!context.hasMemory && /\bя помню\b/i.test(reply)) {
-    issues.push("memory claim without injected memory");
+  if (
+    /(?:^|[^\p{L}\p{N}_])я\s+помню(?:$|[^\p{L}\p{N}_])/iu.test(reply)
+  ) {
+    if (
+      !context.hasMemory ||
+      (context.memoryEvidence !== undefined &&
+        !hasEvidenceOverlap(reply, context.memoryEvidence))
+    ) {
+      issues.push("memory claim without injected memory");
+    }
   }
-  if (!context.hasRag && /\b(?:в документе|по документам)\b/i.test(reply)) {
-    issues.push("RAG claim without fragments");
+  if (
+    /(?:^|[^\p{L}\p{N}_])(?:в\s+документе|по\s+документам)(?:$|[^\p{L}\p{N}_])/iu.test(
+      reply,
+    )
+  ) {
+    if (
+      !context.hasRag ||
+      (context.ragEvidence !== undefined &&
+        !hasEvidenceOverlap(reply, context.ragEvidence))
+    ) {
+      issues.push("RAG claim without fragments");
+    }
   }
   if (CORPORATE_PATTERN.test(reply)) {
     issues.push("corporate tone");
@@ -185,7 +268,12 @@ export function validateCharacterReply(
   if (ASSISTANT_TONE_PATTERN.test(reply.trim())) {
     issues.push("assistant tone");
   }
-  if (NUMBERED_LIST_PATTERN.test(reply)) {
+  if (
+    NUMBERED_LIST_PATTERN.test(reply) &&
+    context.responseMode !== "technical_help" &&
+    context.responseMode !== "direct_answer" &&
+    context.responseMode !== "serious_warning"
+  ) {
     issues.push("assistant tone");
   }
   if (CORPORATE_ADVICE_PATTERN.test(reply)) {

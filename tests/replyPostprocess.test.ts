@@ -189,6 +189,35 @@ describe("runReplyPostprocess", () => {
     expect(mocks.collectProactiveSignalFacts).toHaveBeenCalledTimes(1);
   });
 
+  it("does not commit side effects for a stale generation", async () => {
+    const harness = createHarness();
+
+    await runReplyPostprocess({
+      assistantIndex: 1,
+      assistantMessageId: "assistant-stale",
+      baseHistory: [{ role: "user", content: "Старый запрос" }],
+      options: {},
+      settings: settings({ userMemoryEnabled: true, safeActionsEnabled: true }),
+      activeWindow: null,
+      observedActiveWindow: null,
+      finalReply: "Устаревший ответ",
+      replyEmotion: "calm",
+      responseMode: "direct_answer",
+      validation: { valid: true, issues: [] },
+      lastUserMessage: "Старый запрос",
+      setHistory: harness.setHistory,
+      setRelationship: harness.setRelationship,
+      setSelfMemory: harness.setSelfMemory,
+      isRunActive: () => false,
+      logError: vi.fn(),
+      ariLog: vi.fn(),
+    });
+
+    expect(harness.setHistory).not.toHaveBeenCalled();
+    expect(harness.relationship.exchanges).toBe(0);
+    expect(mocks.extractSafeAction).not.toHaveBeenCalled();
+  });
+
   it("updates final message, relationship, and self memory for normal exchange", async () => {
     const harness = createHarness();
     const onMoodInteraction = vi.fn();

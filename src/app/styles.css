@@ -1005,6 +1005,53 @@ button {
   fill: currentColor;
 }
 
+.ide-advisor-button {
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+
+.ide-advisor-button.waiting {
+  color: #e8c47a;
+}
+
+.ide-advisor-button.paired {
+  background: rgb(91 177 132 / 13%);
+  color: #a8e6bc;
+}
+
+.ide-advisor-button.expired,
+.ide-advisor-button.stopped {
+  color: rgb(255 147 157 / 64%);
+}
+
+.ide-context-strip {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  padding: 5px 16px;
+  border-bottom: 1px solid rgb(255 255 255 / 6%);
+  background: rgb(91 177 132 / 7%);
+  color: rgb(220 244 230 / 62%);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.ide-context-strip span {
+  overflow: hidden;
+  max-width: 150px;
+  text-overflow: ellipsis;
+}
+
+.ide-context-strip .ide-context-title {
+  color: #a8e6bc;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 .header-badge {
   position: absolute;
   top: 2px;

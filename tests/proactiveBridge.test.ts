@@ -39,4 +39,47 @@ describe("proactiveBridge", () => {
     expect(calls).toBe(1);
     unsub();
   });
+
+  it("deduplicates equivalent pending requests", () => {
+    const firstId = enqueueProactiveRequest({
+      kind: "context_comment",
+      eventHint: "same event",
+    });
+    const duplicateId = enqueueProactiveRequest({
+      kind: "context_comment",
+      eventHint: " same event ",
+    });
+
+    expect(duplicateId).toBe(firstId);
+    expect(drainProactiveRequests()).toHaveLength(1);
+  });
+
+  it("keeps requests with distinct context", () => {
+    enqueueProactiveRequest({
+      kind: "context_comment",
+      eventHint: "same event",
+      scenario: "build_failed",
+    });
+    enqueueProactiveRequest({
+      kind: "context_comment",
+      eventHint: "same event",
+      scenario: "build_succeeded",
+    });
+
+    expect(drainProactiveRequests()).toHaveLength(2);
+  });
+
+  it("bounds the pending queue and keeps the newest requests", () => {
+    for (let index = 0; index < 40; index += 1) {
+      enqueueProactiveRequest({
+        kind: "context_comment",
+        eventHint: `event ${index}`,
+      });
+    }
+
+    const drained = drainProactiveRequests();
+    expect(drained).toHaveLength(32);
+    expect(drained[0]?.eventHint).toBe("event 8");
+    expect(drained.at(-1)?.eventHint).toBe("event 39");
+  });
 });

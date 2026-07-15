@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSettings } from "../src/settings/appSettings";
 import { buildInitiativeSignalBundle } from "../src/character/initiativeContext";
-import { planProactiveEngineTick } from "../src/character/proactiveEngine";
+import {
+  isProactiveActivityGateOpen,
+  planProactiveEngineTick,
+} from "../src/character/proactiveEngine";
 import type { AdviceUrgency } from "../src/character/adviceUrgency";
 
 function setupStorage(): void {
@@ -30,6 +33,21 @@ function noneUrgency(): AdviceUrgency {
 describe("proactiveEngine", () => {
   beforeEach(() => {
     setupStorage();
+  });
+
+  it("keeps the activity gate open in active mode while the user is typing", () => {
+    expect(isProactiveActivityGateOpen({
+      activeLevel: true,
+      immersedCompanion: false,
+      activityAgoMs: 500,
+      requiredIdleMs: 120_000,
+    })).toBe(true);
+    expect(isProactiveActivityGateOpen({
+      activeLevel: false,
+      immersedCompanion: false,
+      activityAgoMs: 500,
+      requiredIdleMs: 120_000,
+    })).toBe(false);
   });
 
   it("keeps smalltalk path unchanged when advice is not ready", () => {

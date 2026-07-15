@@ -1,6 +1,5 @@
 export { runAdviceCycle } from "../character/adviceEngine";
 export {
-  buildClarifyingProbeBundle,
   buildGateContextFromBundle,
   collectProactiveSignalFacts,
   getLastProactiveLlmBundle,
@@ -11,6 +10,5 @@ export {
   localReplyQualityCheck,
   setLastProactiveLlmBundle,
   synthesizeProactiveBundle,
-  tryAdviceFallbackChain,
   validateProactiveReplyLlm,
 } from "../character/proactiveLlmEngine";

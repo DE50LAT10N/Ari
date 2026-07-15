@@ -1,3 +1,8 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -5,18 +10,17 @@ use tauri::{
 };
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
-use serde::{Deserialize, Serialize};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use once_cell::sync::Lazy;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 mod gigachat_http;
 mod http_fetch;
+mod ide_bridge;
 mod ollama_env;
 mod project_companion;
-use gigachat_http::{gigachat_http_request, gigachat_upload_file};
+use gigachat_http::{
+    gigachat_cancel_request, gigachat_http_request, gigachat_stream_request, gigachat_upload_file,
+};
 use http_fetch::http_fetch;
+use ide_bridge::{ide_bridge_snapshot, ide_bridge_start, ide_bridge_status, ide_bridge_stop};
 use ollama_env::{apply_ollama_models_path, start_ollama_with_environment, stop_ollama_processes};
 use project_companion::{
     binder_list_files, binder_read_file, git_file_diff, git_recent_commits, git_status_summary,
@@ -47,7 +51,7 @@ const KEYBOARD_ACTIVITY_CONFIG: KeyboardActivityConfig = KeyboardActivityConfig 
     burst_key_down_min: 12,
 };
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct KeyboardActivitySnapshot {
     observed_ms: u64,
@@ -63,26 +67,6 @@ struct KeyboardActivitySnapshot {
     save_count: u32,
     burst_count: u32,
     active: bool,
-}
-
-impl Default for KeyboardActivitySnapshot {
-    fn default() -> Self {
-        Self {
-            observed_ms: 0,
-            printable_key_count: 0,
-            backspace_count: 0,
-            delete_count: 0,
-            escape_count: 0,
-            enter_count: 0,
-            tab_count: 0,
-            navigation_count: 0,
-            modifier_count: 0,
-            undo_count: 0,
-            save_count: 0,
-            burst_count: 0,
-            active: false,
-        }
-    }
 }
 
 #[tauri::command]
@@ -113,7 +97,7 @@ fn restart_ollama(models_dir: Option<String>) -> Result<String, String> {
 fn start_ollama() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        return start_ollama_with_environment();
+        start_ollama_with_environment()
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -210,8 +194,7 @@ fn is_modifier_vk(vk: i32) -> bool {
 #[tauri::command]
 fn get_keyboard_activity_snapshot() -> Result<KeyboardActivitySnapshot, String> {
     use windows_sys::Win32::{
-        System::SystemInformation::GetTickCount64,
-        UI::Input::KeyboardAndMouse::GetAsyncKeyState,
+        System::SystemInformation::GetTickCount64, UI::Input::KeyboardAndMouse::GetAsyncKeyState,
     };
 
     let now = unsafe { GetTickCount64() };
@@ -255,13 +238,12 @@ fn get_keyboard_activity_snapshot() -> Result<KeyboardActivitySnapshot, String> 
         }
     }
 
-    snapshot.burst_count = if observed_ms > 0
-        && key_down_count >= KEYBOARD_ACTIVITY_CONFIG.burst_key_down_min
-    {
-        1
-    } else {
-        0
-    };
+    snapshot.burst_count =
+        if observed_ms > 0 && key_down_count >= KEYBOARD_ACTIVITY_CONFIG.burst_key_down_min {
+            1
+        } else {
+            0
+        };
     snapshot.active = key_down_count > 0;
     state.last_poll_ms = Some(now);
     Ok(snapshot)
@@ -272,7 +254,6 @@ fn get_keyboard_activity_snapshot() -> Result<KeyboardActivitySnapshot, String> 
 fn get_keyboard_activity_snapshot() -> Result<KeyboardActivitySnapshot, String> {
     Ok(KeyboardActivitySnapshot::default())
 }
-
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -295,12 +276,60 @@ fn validate_text(value: Option<String>, max_length: usize) -> Result<String, Str
 }
 
 #[cfg(target_os = "windows")]
+fn bounded_action_metadata(value: &str, max_chars: usize) -> String {
+    let mut metadata = String::with_capacity(value.len().min(max_chars));
+    let mut truncated = false;
+
+    for (index, character) in value.chars().enumerate() {
+        if index >= max_chars {
+            truncated = true;
+            break;
+        }
+        metadata.push(if character.is_control() {
+            ' '
+        } else {
+            character
+        });
+    }
+
+    if truncated {
+        metadata.push_str("...");
+    }
+    metadata
+}
+
+#[cfg(target_os = "windows")]
+fn confirm_safe_action(action_label: &str, metadata: &str) -> Result<(), String> {
+    use std::{iter::once, ptr::null_mut};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONQUESTION, MB_SETFOREGROUND, MB_TASKMODAL,
+        MB_YESNO,
+    };
+
+    let message =
+        format!("Ari requests permission to {action_label}.\n\n{metadata}\n\nAllow this action?");
+    let message: Vec<u16> = message.encode_utf16().chain(once(0)).collect();
+    let caption: Vec<u16> = "Confirm Ari action".encode_utf16().chain(once(0)).collect();
+    let response = unsafe {
+        MessageBoxW(
+            null_mut(),
+            message.as_ptr(),
+            caption.as_ptr(),
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_TASKMODAL | MB_SETFOREGROUND,
+        )
+    };
+
+    if response == IDYES {
+        Ok(())
+    } else {
+        Err("Action denied in the Windows confirmation dialog.".into())
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn shell_open(target: &str) -> Result<(), String> {
     use std::{iter::once, ptr::null};
-    use windows_sys::Win32::UI::{
-        Shell::ShellExecuteW,
-        WindowsAndMessaging::SW_SHOWNORMAL,
-    };
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
 
     let operation: Vec<u16> = "open".encode_utf16().chain(once(0)).collect();
     let target: Vec<u16> = target.encode_utf16().chain(once(0)).collect();
@@ -324,9 +353,7 @@ fn shell_open(target: &str) -> Result<(), String> {
 fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
     use std::{ffi::c_void, iter::once, ptr::copy_nonoverlapping};
     use windows_sys::Win32::System::{
-        DataExchange::{
-            CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-        },
+        DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
         Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
     };
 
@@ -418,6 +445,7 @@ fn read_clipboard_text() -> Result<String, String> {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn safe_note_filename(filename: Option<String>) -> String {
     let raw = filename.unwrap_or_else(|| "Заметка Ari.md".into());
     let cleaned: String = raw
@@ -431,7 +459,11 @@ fn safe_note_filename(filename: Option<String>) -> String {
         .take(100)
         .collect();
     let cleaned = cleaned.trim().trim_matches('.');
-    let base = if cleaned.is_empty() { "Заметка Ari.md" } else { cleaned };
+    let base = if cleaned.is_empty() {
+        "Заметка Ari.md"
+    } else {
+        cleaned
+    };
     let lower = base.to_lowercase();
     if lower.ends_with(".md") || lower.ends_with(".txt") {
         base.to_string()
@@ -455,9 +487,29 @@ fn validate_open_path(target: &str) -> Result<PathBuf, String> {
             .unwrap_or_default()
             .to_lowercase();
         let forbidden = [
-            "exe", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js",
-            "jse", "wsf", "wsh", "msi", "msp", "scr", "reg", "lnk", "hta",
-            "cpl", "jar", "scf", "url", "appref-ms",
+            "exe",
+            "com",
+            "bat",
+            "cmd",
+            "ps1",
+            "psm1",
+            "vbs",
+            "vbe",
+            "js",
+            "jse",
+            "wsf",
+            "wsh",
+            "msi",
+            "msp",
+            "scr",
+            "reg",
+            "lnk",
+            "hta",
+            "cpl",
+            "jar",
+            "scf",
+            "url",
+            "appref-ms",
         ];
         if forbidden.contains(&extension.as_str()) {
             return Err("Запуск исполняемых файлов и сценариев запрещён.".into());
@@ -479,6 +531,8 @@ fn perform_safe_action(app: AppHandle, action: SafeActionInput) -> Result<String
             }
             #[cfg(target_os = "windows")]
             {
+                let metadata = format!("URL: {}", bounded_action_metadata(&target, 400));
+                confirm_safe_action("open this URL", &metadata)?;
                 shell_open(&target)?;
                 Ok("Ссылка открыта в системном браузере.".into())
             }
@@ -490,6 +544,11 @@ fn perform_safe_action(app: AppHandle, action: SafeActionInput) -> Result<String
             let canonical = validate_open_path(&target)?;
             #[cfg(target_os = "windows")]
             {
+                let metadata = format!(
+                    "Path: {}",
+                    bounded_action_metadata(&canonical.to_string_lossy(), 400)
+                );
+                confirm_safe_action("open this local path", &metadata)?;
                 shell_open(&canonical.to_string_lossy())?;
                 Ok(format!("Открыто: {}", canonical.display()))
             }
@@ -500,6 +559,8 @@ fn perform_safe_action(app: AppHandle, action: SafeActionInput) -> Result<String
             let content = validate_text(action.content, 100_000)?;
             #[cfg(target_os = "windows")]
             {
+                let metadata = format!("Text length: {} characters", content.chars().count());
+                confirm_safe_action("copy text to the clipboard", &metadata)?;
                 copy_text_to_clipboard(&content)?;
                 Ok("Текст скопирован в буфер обмена.".into())
             }
@@ -508,47 +569,54 @@ fn perform_safe_action(app: AppHandle, action: SafeActionInput) -> Result<String
         }
         "create_note" => {
             let content = validate_text(action.content, 100_000)?;
-            let notes_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|error| format!("Не удалось определить папку данных: {error}"))?
-                .join("notes");
-            std::fs::create_dir_all(&notes_dir)
-                .map_err(|error| format!("Не удалось создать папку заметок: {error}"))?;
-            let filename = safe_note_filename(action.filename);
-            let requested_path = notes_dir.join(&filename);
-            let path = if requested_path.exists() {
-                let source = Path::new(&filename);
-                let stem = source
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Заметка Ari");
-                let extension = source
-                    .extension()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("md");
-                notes_dir.join(format!(
-                    "{stem}-{}.{}",
-                    chrono_free_timestamp(),
-                    extension
-                ))
-            } else {
-                requested_path
-            };
-            std::fs::write(&path, content)
-                .map_err(|error| format!("Не удалось сохранить заметку: {error}"))?;
             #[cfg(target_os = "windows")]
             {
+                let notes_dir = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|error| format!("Не удалось определить папку данных: {error}"))?
+                    .join("notes");
+                let filename = safe_note_filename(action.filename);
+                let metadata = format!(
+                    "File: {}\nText length: {} characters",
+                    bounded_action_metadata(&filename, 120),
+                    content.chars().count()
+                );
+                confirm_safe_action("create and open this note", &metadata)?;
+
+                std::fs::create_dir_all(&notes_dir)
+                    .map_err(|error| format!("Не удалось создать папку заметок: {error}"))?;
+                let requested_path = notes_dir.join(&filename);
+                let path = if requested_path.exists() {
+                    let source = Path::new(&filename);
+                    let stem = source
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("Заметка Ari");
+                    let extension = source
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("md");
+                    notes_dir.join(format!("{stem}-{}.{}", chrono_free_timestamp(), extension))
+                } else {
+                    requested_path
+                };
+                std::fs::write(&path, content)
+                    .map_err(|error| format!("Не удалось сохранить заметку: {error}"))?;
                 shell_open(&path.to_string_lossy())?;
                 Ok(format!("Заметка сохранена: {}", path.display()))
             }
             #[cfg(not(target_os = "windows"))]
-            Err("Поддерживается только на Windows.".into())
+            {
+                let _ = (app, content, action.filename);
+                Err("Поддерживается только на Windows.".into())
+            }
         }
         _ => Err("Неизвестный или запрещённый тип действия.".into()),
     }
 }
 
+#[cfg(target_os = "windows")]
 fn chrono_free_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -570,12 +638,10 @@ fn gigachat_key_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn protect_for_current_user(value: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::{
         Foundation::LocalFree,
-        Security::Cryptography::{
-            CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-        },
+        Security::Cryptography::{CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB},
     };
 
-    let mut input = CRYPT_INTEGER_BLOB {
+    let input = CRYPT_INTEGER_BLOB {
         cbData: value.len() as u32,
         pbData: value.as_ptr() as *mut u8,
     };
@@ -585,7 +651,7 @@ fn protect_for_current_user(value: &[u8]) -> Result<Vec<u8>, String> {
     };
     let succeeded = unsafe {
         CryptProtectData(
-            &mut input,
+            &input,
             std::ptr::null(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -598,8 +664,7 @@ fn protect_for_current_user(value: &[u8]) -> Result<Vec<u8>, String> {
         return Err("Windows не смогла зашифровать API-ключ.".into());
     }
     let protected =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }
-            .to_vec();
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
     unsafe { LocalFree(output.pbData.cast()) };
     Ok(protected)
 }
@@ -613,7 +678,7 @@ fn unprotect_for_current_user(value: &[u8]) -> Result<Vec<u8>, String> {
         },
     };
 
-    let mut input = CRYPT_INTEGER_BLOB {
+    let input = CRYPT_INTEGER_BLOB {
         cbData: value.len() as u32,
         pbData: value.as_ptr() as *mut u8,
     };
@@ -623,7 +688,7 @@ fn unprotect_for_current_user(value: &[u8]) -> Result<Vec<u8>, String> {
     };
     let succeeded = unsafe {
         CryptUnprotectData(
-            &mut input,
+            &input,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -636,8 +701,7 @@ fn unprotect_for_current_user(value: &[u8]) -> Result<Vec<u8>, String> {
         return Err("Windows не смогла расшифровать API-ключ.".into());
     }
     let plain =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }
-            .to_vec();
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
     unsafe { LocalFree(output.pbData.cast()) };
     Ok(plain)
 }
@@ -702,21 +766,17 @@ struct ScreenCaptureResult {
 
 #[cfg(target_os = "windows")]
 fn capture_foreground_window_png() -> Result<ScreenCaptureResult, String> {
-    use image::{
-        imageops::FilterType, DynamicImage, GenericImageView, ImageFormat,
-        RgbaImage,
-    };
+    use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageFormat, RgbaImage};
     use std::{io::Cursor, mem::zeroed, ptr::null_mut};
     use windows_sys::Win32::{
         Foundation::RECT,
         Graphics::Gdi::{
-            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC,
-            DeleteObject, GetDC, GetDIBits, ReleaseDC, SelectObject,
-            BITMAPINFO, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, SRCCOPY,
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
+            GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS,
+            SRCCOPY,
         },
         UI::WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowRect, GetWindowTextLengthW,
-            GetWindowTextW,
+            GetForegroundWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
         },
     };
 
@@ -738,13 +798,8 @@ fn capture_foreground_window_png() -> Result<ScreenCaptureResult, String> {
 
         let title_length = GetWindowTextLengthW(window);
         let mut title_buffer = vec![0_u16; (title_length.max(0) + 1) as usize];
-        let copied = GetWindowTextW(
-            window,
-            title_buffer.as_mut_ptr(),
-            title_buffer.len() as i32,
-        );
-        let title =
-            String::from_utf16_lossy(&title_buffer[..copied.max(0) as usize]);
+        let copied = GetWindowTextW(window, title_buffer.as_mut_ptr(), title_buffer.len() as i32);
+        let title = String::from_utf16_lossy(&title_buffer[..copied.max(0) as usize]);
 
         let screen_dc = GetDC(null_mut());
         if screen_dc.is_null() {
@@ -777,8 +832,7 @@ fn capture_foreground_window_png() -> Result<ScreenCaptureResult, String> {
         );
 
         let mut info: BITMAPINFO = zeroed();
-        info.bmiHeader.biSize =
-            std::mem::size_of_val(&info.bmiHeader) as u32;
+        info.bmiHeader.biSize = std::mem::size_of_val(&info.bmiHeader) as u32;
         info.bmiHeader.biWidth = width;
         info.bmiHeader.biHeight = -height;
         info.bmiHeader.biPlanes = 1;
@@ -822,7 +876,8 @@ fn capture_foreground_window_png() -> Result<ScreenCaptureResult, String> {
         };
         let (encoded_width, encoded_height) = image.dimensions();
         let mut png = Cursor::new(Vec::new());
-        image.write_to(&mut png, ImageFormat::Png)
+        image
+            .write_to(&mut png, ImageFormat::Png)
             .map_err(|error| format!("Не удалось закодировать PNG: {error}"))?;
 
         Ok(ScreenCaptureResult {
@@ -848,9 +903,8 @@ fn capture_active_window(app: AppHandle) -> Result<ScreenCaptureResult, String> 
         }
     }
 
-    let _restore_window = RestoreWindowGuard(app.get_webview_window("main").map(|window| {
+    let _restore_window = RestoreWindowGuard(app.get_webview_window("main").inspect(|window| {
         let _ = window.hide();
-        window
     }));
     std::thread::sleep(std::time::Duration::from_millis(350));
     capture_foreground_window_png()
@@ -900,11 +954,7 @@ fn get_active_window() -> Option<ActiveWindowInfo> {
 
         let title_length = GetWindowTextLengthW(window);
         let mut title_buffer = vec![0_u16; (title_length.max(0) + 1) as usize];
-        let copied = GetWindowTextW(
-            window,
-            title_buffer.as_mut_ptr(),
-            title_buffer.len() as i32,
-        );
+        let copied = GetWindowTextW(window, title_buffer.as_mut_ptr(), title_buffer.len() as i32);
         let title = String::from_utf16_lossy(&title_buffer[..copied.max(0) as usize]);
 
         let mut process_id = 0_u32;
@@ -915,20 +965,14 @@ fn get_active_window() -> Option<ActiveWindowInfo> {
         } else {
             let mut path_buffer = vec![0_u16; 32_768];
             let mut path_length = path_buffer.len() as u32;
-            let succeeded = QueryFullProcessImageNameW(
-                process,
-                0,
-                path_buffer.as_mut_ptr(),
-                &mut path_length,
-            );
+            let succeeded =
+                QueryFullProcessImageNameW(process, 0, path_buffer.as_mut_ptr(), &mut path_length);
             CloseHandle(process);
 
             if succeeded == 0 {
                 String::new()
             } else {
-                let path = std::ffi::OsString::from_wide(
-                    &path_buffer[..path_length as usize],
-                );
+                let path = std::ffi::OsString::from_wide(&path_buffer[..path_length as usize]);
                 Path::new(&path)
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -1004,15 +1048,9 @@ pub fn run() {
                 "Ari Desktop Character {} starting",
                 app.package_info().version
             );
-            let toggle_item = MenuItem::with_id(
-                app,
-                "toggle",
-                "Показать / скрыть Ari",
-                true,
-                None::<&str>,
-            )?;
-            let quit_item =
-                MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
+            let toggle_item =
+                MenuItem::with_id(app, "toggle", "Показать / скрыть Ari", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&toggle_item, &quit_item])?;
 
             let mut tray_builder = TrayIconBuilder::new()
@@ -1061,8 +1099,14 @@ pub fn run() {
             save_gigachat_auth_key,
             load_gigachat_auth_key,
             delete_gigachat_auth_key,
+            gigachat_cancel_request,
             gigachat_http_request,
+            gigachat_stream_request,
             gigachat_upload_file,
+            ide_bridge_start,
+            ide_bridge_stop,
+            ide_bridge_status,
+            ide_bridge_snapshot,
             binder_list_files,
             binder_read_file,
             git_status_summary,

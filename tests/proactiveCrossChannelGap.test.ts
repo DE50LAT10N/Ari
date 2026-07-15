@@ -93,9 +93,17 @@ describe("open chat advice suppression", () => {
     ).toBe(false);
   });
 
-  it("uses shorter open-chat advice silence on active initiative", () => {
+  it("does not indefinitely suppress open-chat advice on active initiative", () => {
     const active = { initiativeLevel: "active" as const };
     expect(openChatAdviceSilenceMs(active)).toBe(3 * 60_000);
+    expect(
+      shouldSuppressOpenChatAdvice({
+        chatOpen: true,
+        activityAgoMs: 500,
+        urgencyLevel: "low",
+        settings: active,
+      }),
+    ).toBe(false);
     expect(
       shouldSuppressOpenChatAdvice({
         chatOpen: true,

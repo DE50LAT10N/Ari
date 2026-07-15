@@ -43,15 +43,22 @@ function createHarness() {
   const onStateChange = vi.fn();
   const onAmbientBubble = vi.fn();
 
+  const controller = new AbortController();
   const session = createReplyStreamSession({
     assistantIndex: 1,
-    controller: new AbortController(),
+    controller,
     settings: {
       ...defaultSettings,
       voiceStyle: "off",
       blipSpeakReplies: false,
       blipSpeakInitiative: false,
     },
+    getSettings: () => ({
+      ...defaultSettings,
+      voiceStyle: "off",
+      blipSpeakReplies: false,
+      blipSpeakInitiative: false,
+    }),
     activeWindow: null,
     isOpen: true,
     proactive: false,
@@ -74,6 +81,7 @@ function createHarness() {
     get history() {
       return history;
     },
+    controller,
     session,
     streamedContentRef,
     setHasStreamTokens,
@@ -122,6 +130,7 @@ describe("createReplyStreamSession", () => {
     expect(harness.setStreamingAssistantIndex).toHaveBeenCalledWith(1);
     expect(harness.setStreamingContent).toHaveBeenLastCalledWith("visible draft");
     expect(harness.setHasStreamTokens).toHaveBeenCalledWith(true);
+    expect(harness.onStateChange).toHaveBeenCalledWith("speaking");
     expect(harness.history[1]?.emotion).toBe("happy");
   });
 
@@ -147,5 +156,73 @@ describe("createReplyStreamSession", () => {
     expect(harness.history[1]?.emotion).toBe("neutral");
     expect(harness.setStreamingContent).not.toHaveBeenCalled();
     expect(harness.setHasStreamTokens).not.toHaveBeenCalled();
+    expect(harness.onStateChange).not.toHaveBeenCalledWith("speaking");
+  });
+
+  it("forwards cancellation to the provider and ignores late callbacks", async () => {
+    let lateToken: ((value: string) => void) | undefined;
+    let providerSignal: AbortSignal | undefined;
+    mocks.streamLlm.mockImplementation(
+      async (_messages, _settings, onToken, _onEmotion, signal) => {
+        lateToken = onToken;
+        providerSignal = signal;
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        });
+        return "never";
+      },
+    );
+    const harness = createHarness();
+    const pending = harness.session.runStream(
+      [] as ReturnType<typeof buildMessages>,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    harness.controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(providerSignal?.aborted).toBe(true);
+
+    lateToken?.("ghost draft");
+    expect(harness.streamedContentRef.current).toBe("");
+    expect(harness.history[1]?.content).toBe("");
+  });
+
+  it("classifies proactive-while-open as initiative speech", () => {
+    const getSettings = vi.fn(() => ({
+      ...defaultSettings,
+      voiceStyle: "blip" as const,
+      blipSpeakInitiative: true,
+      blipSpeakReplies: false,
+    }));
+    const session = createReplyStreamSession({
+      assistantIndex: 1,
+      controller: new AbortController(),
+      settings: defaultSettings,
+      getSettings,
+      activeWindow: null,
+      isOpen: true,
+      proactive: true,
+      proactiveWhileOpen: true,
+      wantAmbientReveal: false,
+      streamedContentRef: { current: "" },
+      streamUiTimerRef: { current: null },
+      pendingStreamContentRef: { current: "" },
+      setHasStreamTokens: vi.fn(),
+      setHistory: vi.fn(),
+      setStreamingContent: vi.fn(),
+      setStreamingAssistantIndex: vi.fn(),
+      onStateChange: vi.fn(),
+      getReplyEmotion: () => "neutral",
+      setReplyEmotion: vi.fn(),
+    });
+    session.restartAmbientStream();
+
+    const beginArgs = mocks.blipVoiceManager.beginStream.mock.calls.at(-1)?.[0];
+    expect(beginArgs?.initiative).toBe(true);
+    expect(beginArgs?.reply).toBe(false);
+    expect(beginArgs?.getSettings).toBe(getSettings);
   });
 });

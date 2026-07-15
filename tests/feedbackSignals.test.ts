@@ -129,7 +129,7 @@ describe("feedbackSignals", () => {
     expect(buildAvoidPhrases()).toContain("UNIQUE_BAD_ADVICE_PHRASE");
   });
 
-  it("routes assistant ignored feedback into a strong mood event", () => {
+  it("routes assistant ignored feedback into a moderate mood event", () => {
     const result = recordFeedbackSignal({
       kind: "assistant_ignored",
       messageId: "msg-ignored",
@@ -148,12 +148,13 @@ describe("feedbackSignals", () => {
       options: { applyDecay: false },
     }).nextMood;
 
-    expect(mood.irritation ?? 0).toBeGreaterThan(0.38);
+    expect(mood.irritation ?? 0).toBeGreaterThan(0.15);
+    expect(mood.irritation ?? 0).toBeLessThan(0.58);
     expect(deriveMoodArchetype({
       warmth: mood.warmth ?? 0,
       energy: mood.energy ?? 0,
       irritation: mood.irritation ?? 0,
       updatedAt: 10_000,
-    })).toBe("irritated");
+    })).not.toBe("irritated");
   });
 });

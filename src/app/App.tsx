@@ -44,7 +44,7 @@ import {
   type PomodoroState,
 } from "../character/pomodoro";
 import { getActiveWindowContext, type ActiveWindowInfo } from "../platform/activeWindow";
-import { loadSettings, saveSettings } from "../settings/appSettings";
+import { loadSettings, normalizeSettings, saveSettings } from "../settings/appSettings";
 import type { CharacterEmotion, CharacterState } from "../types/character";
 import {
   applyEmotionToMood,
@@ -184,7 +184,11 @@ export function App() {
   }, [chatOpen]);
 
   useEffect(() => {
-    if (!settings.proactiveEnabled || chatPanelMounted) {
+    if (
+      (!settings.proactiveEnabled &&
+        !(settings.onboardingCompleted && settings.ideAdvisorEnabled)) ||
+      chatPanelMounted
+    ) {
       return;
     }
     const mountChatPanel = () => setChatPanelMounted(true);
@@ -194,7 +198,12 @@ export function App() {
     }
     const timeoutId = window.setTimeout(mountChatPanel, 1200);
     return () => clearTimeout(timeoutId);
-  }, [settings.proactiveEnabled, chatPanelMounted]);
+  }, [
+    settings.onboardingCompleted,
+    settings.proactiveEnabled,
+    settings.ideAdvisorEnabled,
+    chatPanelMounted,
+  ]);
 
   const [ambientBubble, setAmbientBubble] = useState<string | null>(null);
   const [ambientBubbleSession, setAmbientBubbleSession] = useState(0);
@@ -728,7 +737,12 @@ export function App() {
   }, [settings.autoUpdateEnabled]);
 
   useEffect(() => {
-    saveSettings(settings);
+    const normalized = normalizeSettings(settings);
+    if (JSON.stringify(normalized) !== JSON.stringify(settings)) {
+      setSettings(normalized);
+      return;
+    }
+    saveSettings(normalized);
   }, [settings]);
 
   useEffect(() => {
@@ -892,7 +906,7 @@ export function App() {
               scenario: "return_after_absence",
               scene: sceneRef.current,
               hour: new Date().getHours(),
-              idleSeconds: userIdleSeconds,
+              idleSeconds: effectiveIdle,
               chatOpen,
               characterState,
               absentMinutes,
@@ -917,7 +931,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [chatOpen, characterState, userIdleSeconds]);
+  }, [chatOpen, characterState]);
 
   useEffect(() => {
     const handleAdviceIgnored = (event: Event) => {

@@ -187,7 +187,7 @@ export function recordClipboardSignal(input: {
   snippet: string;
   at?: number;
 }): void {
-  const snippet = redactAndTruncate(input.snippet.trim(), 520);
+  const snippet = redactAndTruncate(input.snippet.trim(), 2_000);
   if (!snippet) {
     return;
   }

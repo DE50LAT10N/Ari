@@ -8,11 +8,8 @@ import {
   saveMood,
 } from "../src/character/mood";
 import {
-  buildMoodRefusalReply,
-  avatarEmotionFromMood,
   deriveMoodArchetype,
   moodStatusLabel,
-  shouldMoodRefuseRequest,
 } from "../src/character/moodBehavior";
 import { tryHandleTaskChatCommand } from "../src/chat/taskChatParse";
 import { tryHandleProductivityChatCommand } from "../src/chat/productivityChat";
@@ -69,7 +66,10 @@ describe("moodBehavior", () => {
       moodStatusLabel(mood({ warmth: 0.55, energy: 0.65, irritation: 0.05 })),
     ).toBe("тёплая");
     expect(
-      moodStatusLabel(mood({ irritation: 0.5, warmth: 0.1, energy: 0.4 })),
+      moodStatusLabel(mood({ warmth: 0.62, energy: 0.78, irritation: 0.05 })),
+    ).toBe("озорная");
+    expect(
+      moodStatusLabel(mood({ irritation: 0.65, warmth: 0.1, energy: 0.4 })),
     ).toBe("раздражённая");
   });
 
@@ -97,12 +97,9 @@ describe("moodBehavior", () => {
     }
   });
 
-  it("refuses tasks and pomodoro when irritated", () => {
-    const irritated = mood({ irritation: 0.5, warmth: 0.1, energy: 0.4 });
+  it("keeps irritated mood as style rather than command refusal policy", () => {
+    const irritated = mood({ irritation: 0.65, warmth: 0.1, energy: 0.4 });
     expect(deriveMoodArchetype(irritated)).toBe("irritated");
-    expect(shouldMoodRefuseRequest(irritated, "task")).toBe(true);
-    expect(shouldMoodRefuseRequest(irritated, "pomodoro")).toBe(true);
-    expect(buildMoodRefusalReply(irritated, "task")).toContain("секретаря");
   });
 
   it("shows mood in live status line", () => {
@@ -118,19 +115,19 @@ describe("moodBehavior", () => {
     expect(line).toContain("тёплая");
   });
 
-  it("blocks task add from chat when irritated", () => {
-    const irritated = mood({ irritation: 0.5, warmth: 0.1, energy: 0.4 });
+  it("adds tasks from chat even when irritated", () => {
+    const irritated = mood({ irritation: 0.65, warmth: 0.1, energy: 0.4 });
     const result = tryHandleTaskChatCommand(
       "добавь задачу убраться",
       irritated,
     );
     expect(result.handled).toBe(true);
     if (!result.handled) return;
-    expect(result.command).toBe("mood-refusal");
+    expect(result.command).toBe("task-add");
   });
 
-  it("blocks pomodoro start when irritated", () => {
-    const irritated = mood({ irritation: 0.5, warmth: 0.1, energy: 0.4 });
+  it("starts pomodoro even when irritated", () => {
+    const irritated = mood({ irritation: 0.65, warmth: 0.1, energy: 0.4 });
     const result = tryHandleProductivityChatCommand(
       "запусти помодоро 25 мин",
       defaultSettings,
@@ -138,14 +135,13 @@ describe("moodBehavior", () => {
     );
     expect(result.handled).toBe(true);
     if (!result.handled) return;
-    expect(result.command).toBe("mood-refusal");
+    expect(result.command).toBe("pomodoro-start");
   });
 
-  it("reaches irritated archetype after one ignored initiative", () => {
+  it("does not reach irritated archetype after one ignored initiative", () => {
     const base = mood({ warmth: 0.3, energy: 0.4, irritation: 0.1 });
     const afterOnce = applyInteractionToMood(base, "ignored_initiative");
-    expect(deriveMoodArchetype(afterOnce)).toBe("irritated");
-    expect(avatarEmotionFromMood(afterOnce)).toBe("annoyed");
+    expect(deriveMoodArchetype(afterOnce)).not.toBe("irritated");
   });
 
   it("applies stronger irritation shift when initiative is ignored", () => {

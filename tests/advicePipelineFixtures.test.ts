@@ -52,7 +52,7 @@ function bundle(selectedAdviceCandidate: AdviceCandidate): ProactiveLlmBundle {
 }
 
 describe("advice pipeline fixtures", () => {
-  it("turns an IDE stacktrace into a concrete rendered repair", () => {
+  it("rejects an invalid IDE stacktrace reply without rendered repair", () => {
     const selected = candidate("terminal_error_triage", {
       intent: "fix",
       visibleAnchor: "ChatPanel.tsx",
@@ -68,13 +68,11 @@ describe("advice pipeline fixtures", () => {
       ],
     });
 
-    expect(result.status).toBe("repaired");
-    expect(result.text).toContain("ChatPanel");
-    expect(result.text).toContain("stack frame");
-    expect(result.text).not.toContain(selected.actionText);
+    expect(result.status).toBe("rejected");
+    expect(result.text).toBe("Maybe inspect comments?");
   });
 
-  it("keeps docs lookup grounded in the file and query", () => {
+  it("rejects an ungrounded docs reply without replacement", () => {
     const selected = candidate("docs_to_code_bridge", {
       intent: "verify",
       visibleAnchor: "activeWindow.ts",
@@ -90,12 +88,11 @@ describe("advice pipeline fixtures", () => {
       ],
     });
 
-    expect(result.status).toBe("repaired");
-    expect(result.text).toContain("activeWindow");
-    expect(result.text).toContain("Tauri");
+    expect(result.status).toBe("rejected");
+    expect(result.text).toBe("Try searching the internet?");
   });
 
-  it("keeps rest advice only for a rest candidate", () => {
+  it("rejects invalid rest advice without replacement", () => {
     const selected = candidate("rest", {
       intent: "rest",
       suggestedCheck: "отойти на пять минут",
@@ -107,11 +104,11 @@ describe("advice pipeline fixtures", () => {
       facts: [fact("session", "long focus session", "session:1")],
     });
 
-    expect(result.status).toBe("repaired");
-    expect(result.text).toMatch(/пауза|отойти/i);
+    expect(result.status).toBe("rejected");
+    expect(result.text).toBe("Maybe look at comments?");
   });
 
-  it("allows one clarifying question for ambiguous clipboard context", () => {
+  it("rejects an invalid clarifying reply without replacement", () => {
     const selected = candidate("clarifying_probe", {
       intent: "clarify",
       visibleAnchor: "Input{User message} -> Cmd{Chat command}",
@@ -124,7 +121,7 @@ describe("advice pipeline fixtures", () => {
       facts: [fact("clipboard", "Input{User message} -> Cmd{Chat command}", "clip:1")],
     });
 
-    expect(result.status).toBe("repaired");
-    expect(result.text.endsWith("?")).toBe(true);
+    expect(result.status).toBe("rejected");
+    expect(result.text).toBe("Maybe check comments?");
   });
 });

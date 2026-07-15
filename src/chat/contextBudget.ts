@@ -40,15 +40,45 @@ export function computeHistoryBudget(
   overheadTokens: number,
 ): number {
   return Math.max(
-    384,
+    0,
     settings.contextTokens - settings.maxTokens - overheadTokens - 128,
   );
+}
+
+export function truncateTextToTokenBudget(
+  text: string,
+  budgetTokens: number,
+): string {
+  if (!text || budgetTokens <= TOKEN_OVERHEAD) {
+    return "";
+  }
+  if (estimateTextTokens(text) <= budgetTokens) {
+    return text;
+  }
+
+  let low = 0;
+  let high = text.length;
+  let best = "";
+  while (low <= high) {
+    const midpoint = Math.floor((low + high) / 2);
+    const candidate = `${text.slice(0, midpoint).trimEnd()}…`;
+    if (estimateTextTokens(candidate) <= budgetTokens) {
+      best = candidate;
+      low = midpoint + 1;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+  return best;
 }
 
 export function fitHistoryToTokenBudget(
   history: ChatMessage[],
   budgetTokens: number,
 ): ChatMessage[] {
+  if (budgetTokens <= 0) {
+    return [];
+  }
   const selected: ChatMessage[] = [];
   let usedTokens = 0;
 
@@ -56,7 +86,16 @@ export function fitHistoryToTokenBudget(
     const message = history[index];
     const messageTokens = estimateTextTokens(message.content) + 8;
 
-    if (selected.length > 0 && usedTokens + messageTokens > budgetTokens) {
+    if (usedTokens + messageTokens > budgetTokens) {
+      if (selected.length === 0) {
+        const content = truncateTextToTokenBudget(
+          message.content,
+          Math.max(0, budgetTokens - 8),
+        );
+        if (content) {
+          selected.unshift({ ...message, content });
+        }
+      }
       break;
     }
 

@@ -1,10 +1,7 @@
 import type { AppSettings } from "../settings/appSettings";
 import { resolveEmbeddingModel } from "./embeddingConfig";
 import { resolveVisionModel } from "./visionConfig";
-import {
-  isLiteGigaChatModelId,
-  resolveGigaChatAuxModel,
-} from "./gigaChatModels";
+import { isLiteGigaChatModelId, resolveGigaChatAuxModel } from "./gigaChatModels";
 
 export type ModelTask =
   | "chat"
@@ -63,7 +60,7 @@ export function resolveModel(
   }
 }
 
-/** Lite / small models struggle with proactive JSON synthesis and quality gates. */
+/** Lite / small models may need stricter validation and retrying. */
 export function isLiteLlmModel(settings: AppSettings): boolean {
   if (settings.llmProvider === "gigachat") {
     return isLiteGigaChatModelId(resolveModel("json", settings));
@@ -73,6 +70,9 @@ export function isLiteLlmModel(settings: AppSettings): boolean {
 }
 
 export function resolveSynthesisModel(settings: AppSettings): string {
+  // Respect the model tier selected by the user. Silently upgrading a Lite
+  // account to Pro turns a model-specific HTTP 402 into a total loss of
+  // proactive speech, even though the selected live model remains available.
   return resolveModel("initiativeSynthesis", settings);
 }
 

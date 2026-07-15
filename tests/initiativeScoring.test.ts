@@ -200,7 +200,7 @@ describe("initiativeScoring", () => {
     expect(decision.value).toBe("high");
   });
 
-  it("keeps concrete advice blocked after repeated unacknowledged initiatives", () => {
+  it("keeps concrete advice deliverable after repeated unacknowledged initiatives", () => {
     markInitiativeSent();
     markInitiativeSent();
     markInitiativeSent();
@@ -217,7 +217,8 @@ describe("initiativeScoring", () => {
       practicalAdviceReady: true,
     });
 
-    expect(decision.allowed).toBe(false);
+    expect(decision.allowed).toBe(true);
+    expect(decision.value).toBe("high");
   });
 
   it("allows practical advice even when topic strongly overlaps recent initiatives", () => {

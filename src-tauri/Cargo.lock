@@ -907,6 +907,7 @@ name = "desktop-character"
 version = "1.2.0"
 dependencies = [
  "base64 0.22.1",
+ "futures-util",
  "image",
  "log",
  "once_cell",

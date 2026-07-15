@@ -1,6 +1,5 @@
 import type { CharacterEmotion } from "../types/character";
 import type { MicroReactionType, PresenceScene } from "./presence";
-import { pickDeterministic } from "./deterministicSelector";
 
 export type SilentReactionKind =
   | "return"
@@ -22,6 +21,9 @@ export type SilentReaction = {
 };
 
 const lastTriggered = new Map<SilentReactionKind, number>();
+const recentThoughts = new Map<SilentReactionKind, string[]>();
+const usedThoughts = new Map<SilentReactionKind, Set<string>>();
+const reactionCursors = new Map<SilentReactionKind, number>();
 
 const definitions: Record<SilentReactionKind, SilentReaction[]> = {
   return: [
@@ -87,15 +89,84 @@ export function listSilentReactionEmotions(): CharacterEmotion[] {
   return [...seen];
 }
 
+function reactionKey(reaction: SilentReaction): string {
+  return [
+    reaction.thought,
+    reaction.emotion,
+    reaction.overlay,
+  ].filter(Boolean).join(":");
+}
+
+function rememberSilentReaction(
+  kind: SilentReactionKind,
+  reaction: SilentReaction,
+  allOptions: readonly SilentReaction[],
+): void {
+  const key = reactionKey(reaction);
+  const maxRecent = Math.max(1, Math.min(3, allOptions.length - 1));
+  const recent = recentThoughts.get(kind) ?? [];
+  recentThoughts.set(kind, [key, ...recent.filter((item) => item !== key)].slice(0, maxRecent));
+
+  const used = usedThoughts.get(kind) ?? new Set<string>();
+  used.add(key);
+  usedThoughts.set(kind, used);
+}
+
+function pickAntiRepeatReaction(
+  kind: SilentReactionKind,
+  options: readonly SilentReaction[],
+): SilentReaction | null {
+  if (!options.length) {
+    return null;
+  }
+  if (options.length === 1) {
+    return options[0]!;
+  }
+
+  const optionKeys = new Set(options.map(reactionKey));
+  const used = usedThoughts.get(kind) ?? new Set<string>();
+  if ([...optionKeys].every((key) => used.has(key))) {
+    used.clear();
+  }
+
+  const recent = new Set(recentThoughts.get(kind) ?? []);
+  const unused = options.filter((option) => !used.has(reactionKey(option)));
+  const freshUnused = unused.filter((option) => !recent.has(reactionKey(option)));
+  const fresh = options.filter((option) => !recent.has(reactionKey(option)));
+  const candidates = freshUnused.length
+    ? freshUnused
+    : unused.length
+      ? unused
+      : fresh.length
+        ? fresh
+        : options;
+  const previous = reactionCursors.get(kind) ?? -1;
+  const next = (previous + 1) % candidates.length;
+  reactionCursors.set(kind, next);
+  return candidates[next] ?? candidates[0] ?? null;
+}
+
+export function resetSilentReactionStateForTests(): void {
+  lastTriggered.clear();
+  recentThoughts.clear();
+  usedThoughts.clear();
+  reactionCursors.clear();
+}
+
 export function getSilentReaction(
   kind: SilentReactionKind,
   scene?: PresenceScene,
 ): SilentReaction | null {
   const options = definitions[kind];
-  const cooldown = options[0].cooldownMs;
+  const cooldown = kind === "ambient" ? 8 * 60_000 : options[0].cooldownMs;
   const last = lastTriggered.get(kind) ?? 0;
   if (Date.now() - last < cooldown) return null;
   if (kind === "ambient" && (scene === "away" || scene === "night")) return null;
   lastTriggered.set(kind, Date.now());
-  return pickDeterministic(`silent-reaction:${kind}`, options) ?? null;
+  const reaction = pickAntiRepeatReaction(kind, options);
+  if (!reaction) {
+    return null;
+  }
+  rememberSilentReaction(kind, reaction, options);
+  return { ...reaction, cooldownMs: cooldown };
 }

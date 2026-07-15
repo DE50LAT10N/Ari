@@ -72,6 +72,8 @@ export type ReplyPostprocessInput = {
   setRelationship: Dispatch<SetStateAction<CharacterRelationship>>;
   setSelfMemory: Dispatch<SetStateAction<AriSelfMemory>>;
   onMoodInteraction?: (kind: "help_request" | "chat_positive") => void;
+  /** Guards delayed side effects when the originating generation was cancelled/replaced. */
+  isRunActive?: () => boolean;
   logError: LogFn;
   ariLog: AriLogFn;
 };
@@ -97,9 +99,14 @@ export async function runReplyPostprocess(
     setRelationship,
     setSelfMemory,
     onMoodInteraction,
+    isRunActive = () => true,
     logError,
     ariLog,
   } = input;
+
+  if (!isRunActive()) {
+    return;
+  }
 
   const adviceEntry =
     options.proactive &&
@@ -139,6 +146,9 @@ export async function runReplyPostprocess(
         .find((message) => message.role === "user")
         ?.content,
     });
+    if (!isRunActive()) {
+      return;
+    }
     startAdviceOutcomeObservation({
       adviceId: adviceEntry.id,
       topicKey: adviceEntry.topicKey,
@@ -188,7 +198,7 @@ export async function runReplyPostprocess(
           activeWindow,
         })
         .then((action) => {
-          if (!action) return;
+          if (!action || !isRunActive()) return;
           ariLog("reply-meta", "debug", {
             lastActionProposal: action.title,
           });
@@ -261,16 +271,20 @@ export async function runReplyPostprocess(
     shouldPostprocessConversationMemory(lastUserMessage, finalReply)
   ) {
     void loadOpenLoops()
-      .then((loops) =>
-        postprocessConversationMemory(
+      .then((loops) => {
+        if (!isRunActive()) return null;
+        return postprocessConversationMemory(
           lastUserMessage,
           finalReply,
           loops,
           settings,
-        ),
-      )
-      .then(async ({ facts, episode, openLoops, resolvedLoopIds }) => {
+        );
+      })
+      .then(async (result) => {
+        if (!result || !isRunActive()) return;
+        const { facts, episode, openLoops, resolvedLoopIds } = result;
         await applyExtractedFacts(facts, lastUserMessage);
+        if (!isRunActive()) return;
         if (
           countPendingMemoryInboxItems() >= 3 &&
           !isQuietModeActive(settings, activeWindow)
@@ -290,8 +304,10 @@ export async function runReplyPostprocess(
         });
         if (episode) {
           await addEpisodes([episode]);
+          if (!isRunActive()) return;
         }
         for (const loop of openLoops) {
+          if (!isRunActive()) return;
           if (shouldAutoCommitOpenLoop(loop)) {
             await addOpenLoops([loop]);
             continue;
@@ -308,6 +324,7 @@ export async function runReplyPostprocess(
             metadata: loop.dueAt ? { dueAt: String(loop.dueAt) } : undefined,
           });
         }
+        if (!isRunActive()) return;
         await resolveOpenLoops(resolvedLoopIds);
       })
       .catch((postprocessError: unknown) => {

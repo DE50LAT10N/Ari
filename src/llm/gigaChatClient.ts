@@ -1,4 +1,7 @@
-import { gigaChatFetch as fetch } from "../platform/gigaChatHttp";
+import {
+  gigaChatFetch as fetch,
+  gigaChatStream,
+} from "../platform/gigaChatHttp";
 import type { AppSettings } from "../settings/appSettings";
 import type { ChatMessage } from "../types/chat";
 import type { CharacterEmotion } from "../types/character";
@@ -23,11 +26,57 @@ import {
   recordGigaChatThrottle,
 } from "./gigaChatRateLimit";
 import { sanitizeBase64ImagePayload } from "./imagePayloadParser";
+import { TimeoutError } from "../platform/asyncTimeout";
+import {
+  createGigaChatStreamParser,
+  describeEmptyGigaChatStream,
+} from "./gigaChatStreamParser";
+import { recordGigaChatDiagnostic } from "./gigaChatDiagnostics";
 
 const AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
 const API_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1";
 
 let accessToken: { value: string; expiresAt: number } | null = null;
+
+const GIGACHAT_STREAM_IDLE_TIMEOUT_MS = 45_000;
+
+function createStreamWatchdog(signal: AbortSignal): {
+  signal: AbortSignal;
+  start: () => void;
+  touch: () => void;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let waitingForFirstToken = true;
+  const forwardAbort = () => controller.abort(signal.reason);
+  signal.addEventListener("abort", forwardAbort, { once: true });
+
+  const arm = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    const phase = waitingForFirstToken ? "первого токена" : "следующего токена";
+    timer = setTimeout(() => {
+      controller.abort(
+        new TimeoutError(
+          `GigaChat: ожидание ${phase} превысило ${GIGACHAT_STREAM_IDLE_TIMEOUT_MS / 1000} с`,
+        ),
+      );
+    }, GIGACHAT_STREAM_IDLE_TIMEOUT_MS);
+  };
+
+  return {
+    signal: controller.signal,
+    start: arm,
+    touch() {
+      waitingForFirstToken = false;
+      arm();
+    },
+    dispose() {
+      if (timer !== undefined) clearTimeout(timer);
+      signal.removeEventListener("abort", forwardAbort);
+    },
+  };
+}
 
 function normalizeGigaChatAuthKey(raw: string): string {
   let key = raw.trim();
@@ -38,12 +87,18 @@ function normalizeGigaChatAuthKey(raw: string): string {
 }
 
 type ChatResponse = {
-  choices?: Array<{ message?: { content?: unknown } }>;
+  choices?: Array<{
+    message?: { content?: unknown };
+    finish_reason?: unknown;
+  }>;
   error?: { message?: unknown };
   message?: unknown;
 };
 
-async function getAccessToken(settings: AppSettings): Promise<string> {
+async function getAccessToken(
+  settings: AppSettings,
+  signal?: AbortSignal,
+): Promise<string> {
   if (accessToken && accessToken.expiresAt > Date.now() + 60_000) {
     return accessToken.value;
   }
@@ -63,6 +118,7 @@ async function getAccessToken(settings: AppSettings): Promise<string> {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: `scope=${encodeURIComponent(settings.gigaChatScope)}`,
+    signal,
   });
   const raw = await response.text();
   if (!response.ok) throw apiError("GigaChat OAuth", response.status, raw);
@@ -82,9 +138,10 @@ async function getAccessToken(settings: AppSettings): Promise<string> {
 
 async function apiHeaders(
   settings: AppSettings,
+  signal?: AbortSignal,
 ): Promise<Record<string, string>> {
   return {
-    Authorization: `Bearer ${await getAccessToken(settings)}`,
+    Authorization: `Bearer ${await getAccessToken(settings, signal)}`,
     Accept: "application/json",
     "Content-Type": "application/json",
   };
@@ -129,56 +186,89 @@ export async function completeGigaChatJson<T>(
   task: ModelTask = "json",
 ): Promise<T> {
   return enqueueGigaChatRequest(async () => {
-  const model =
-    task === "initiativeSynthesis" || task === "initiativeGate"
-      ? resolveSynthesisModel(settings)
-      : resolveModel(task, settings);
-  const messagesForJson = gigaMessages(messages);
-  const systemMessage = messagesForJson.find(
-    ({ role }) => role === "system",
-  );
-  if (systemMessage) {
-    systemMessage.content +=
-      "\nВерни только валидный JSON без markdown, комментариев и текста вне JSON.";
-  } else {
-    messagesForJson.unshift({
-      role: "system",
-      content:
-        "Верни только валидный JSON без markdown, комментариев и текста вне JSON.",
-    });
-  }
-  const response = await fetch(`${API_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: await apiHeaders(settings),
-    body: JSON.stringify({
-      model,
-      messages: messagesForJson,
-      temperature: 0.1,
-      max_tokens: maxTokens,
-      stream: false,
-    }),
-  });
-  const raw = await response.text();
-  if (!response.ok) {
-    recordGigaChatThrottle(response.status);
-    recordGigaChatFailure();
-    throw apiError("GigaChat", response.status, raw);
-  }
-  try {
-    const body = JSON.parse(raw) as ChatResponse;
-    const text = body.choices?.[0]?.message?.content;
-    if (typeof text !== "string" || !text.trim()) {
-      recordGigaChatThrottle();
-      recordGigaChatFailure();
-      throw new Error("GigaChat вернул пустой структурированный ответ.");
+    const startedAt = Date.now();
+    const model =
+      task === "initiativeSynthesis" || task === "initiativeGate"
+        ? resolveSynthesisModel(settings)
+        : resolveModel(task, settings);
+    const messagesForJson = gigaMessages(messages);
+    const systemMessage = messagesForJson.find(({ role }) => role === "system");
+    if (systemMessage) {
+      systemMessage.content +=
+        "\nВерни только валидный JSON без markdown, комментариев и текста вне JSON.";
+    } else {
+      messagesForJson.unshift({
+        role: "system",
+        content:
+          "Верни только валидный JSON без markdown, комментариев и текста вне JSON.",
+      });
     }
-    recordGigaChatSuccess();
-    return JSON.parse(extractJson(text)) as T;
-  } catch (error) {
-    recordGigaChatFailure();
-    throw error;
-  }
-  });
+    const response = await fetch(`${API_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: await apiHeaders(settings),
+      body: JSON.stringify({
+        model,
+        messages: messagesForJson,
+        temperature: 0.1,
+        max_tokens: maxTokens,
+        stream: false,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      recordGigaChatThrottle(response.status);
+      recordGigaChatDiagnostic({
+        at: Date.now(),
+        kind: "json",
+        model,
+        outcome: "http_error",
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+      });
+      throw apiError("GigaChat", response.status, raw);
+    }
+    try {
+      const body = JSON.parse(raw) as ChatResponse;
+      const choice = body.choices?.[0];
+      const text = choice?.message?.content;
+      if (typeof text !== "string" || !text.trim()) {
+        const finishReason =
+          typeof choice?.finish_reason === "string"
+            ? choice.finish_reason
+            : undefined;
+        recordGigaChatDiagnostic({
+          at: Date.now(),
+          kind: "json",
+          model,
+          outcome: "empty",
+          finishReason,
+          durationMs: Date.now() - startedAt,
+        });
+        throw new Error(
+          `GigaChat вернул пустой структурированный ответ (finish_reason=${finishReason ?? "unknown"}).`,
+        );
+      }
+      const parsed = JSON.parse(extractJson(text)) as T;
+      recordGigaChatSuccess();
+      recordGigaChatDiagnostic({
+        at: Date.now(),
+        kind: "json",
+        model,
+        outcome: "success",
+        finishReason:
+          typeof choice?.finish_reason === "string"
+            ? choice.finish_reason
+            : undefined,
+        durationMs: Date.now() - startedAt,
+      });
+      return parsed;
+    } catch (error) {
+      // JSON/schema/model-tier failures are request-specific. The independent
+      // /models health poll owns provider availability; otherwise a Pro-only
+      // HTTP 402 incorrectly marks a working Lite provider offline.
+      throw error;
+    }
+  }, undefined, { kind: "json", priority: "background" });
 }
 
 export async function streamGigaChat(
@@ -189,76 +279,133 @@ export async function streamGigaChat(
   signal: AbortSignal,
 ): Promise<string> {
   return enqueueGigaChatRequest(async () => {
-  const response = await fetch(`${API_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: await apiHeaders(settings),
-    body: JSON.stringify({
-      model: settings.gigaChatModel,
-      messages: gigaMessages(messages),
-      temperature: settings.temperature,
-      max_tokens: settings.maxTokens,
-      stream: true,
-    }),
-    signal,
-  });
-  if (!response.ok) {
-    recordGigaChatThrottle(response.status);
-    recordGigaChatFailure();
-    throw apiError("GigaChat", response.status, await response.text());
-  }
-  if (!response.body) throw new Error("GigaChat не предоставил поток ответа.");
+    const startedAt = Date.now();
+    const decoder = new TextDecoder();
+    let rawBody = "";
+    let visibleContent = "";
+    let detectedEmotion: CharacterEmotion | null = null;
+    const watchdog = createStreamWatchdog(signal);
+    const parser = createGigaChatStreamParser({
+      onContent(content) {
+        watchdog.touch();
+        const emotion = parseEmotionFromContent(content);
+        if (emotion && emotion !== detectedEmotion) {
+          detectedEmotion = emotion;
+          onEmotion(emotion);
+        }
+        const cleaned = stripEmotionMarkup(content);
+        if (cleaned !== visibleContent) {
+          visibleContent = cleaned;
+          onUpdate(visibleContent);
+        }
+      },
+    });
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let rawContent = "";
-  let visibleContent = "";
-  let detectedEmotion: CharacterEmotion | null = null;
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const blocks = buffer.split("\n\n");
-    buffer = blocks.pop() ?? "";
-    for (const block of blocks) {
-      const data = block
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim())
-        .join("");
-      if (!data || data === "[DONE]") continue;
-      let event: { choices?: Array<{ delta?: { content?: unknown } }> };
-      try {
-        event = JSON.parse(data) as {
-          choices?: Array<{ delta?: { content?: unknown } }>;
-        };
-      } catch {
-        continue;
-      }
-      const delta = event.choices?.[0]?.delta?.content;
-      if (typeof delta !== "string") continue;
-      rawContent += delta;
-      const emotion = parseEmotionFromContent(rawContent);
-      if (emotion && emotion !== detectedEmotion) {
-        detectedEmotion = emotion;
-        onEmotion(emotion);
-      }
-      const cleaned = stripEmotionMarkup(rawContent);
-      if (cleaned !== visibleContent) {
-        visibleContent = cleaned;
-        onUpdate(visibleContent);
-      }
+    let status: number;
+    try {
+      watchdog.start();
+      const headers = await apiHeaders(settings, watchdog.signal);
+      status = await gigaChatStream(
+        `${API_BASE_URL}/chat/completions`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model: settings.gigaChatModel,
+            messages: gigaMessages(messages),
+            temperature: settings.temperature,
+            max_tokens: settings.maxTokens,
+            stream: true,
+          }),
+          signal: watchdog.signal,
+        },
+        (chunk) => {
+          if (watchdog.signal.aborted) return;
+          const decoded = decoder.decode(chunk, { stream: true });
+          rawBody = `${rawBody}${decoded}`.slice(-16_000);
+          parser.push(decoded);
+        },
+      );
+    } catch (error) {
+      const snapshot = parser.snapshot();
+      const isTimeout = error instanceof TimeoutError;
+      const isAborted = !isTimeout && signal.aborted;
+      if (!isAborted) recordGigaChatFailure();
+      recordGigaChatDiagnostic({
+        at: Date.now(),
+        kind: "chat",
+        model: settings.gigaChatModel,
+        outcome: isTimeout ? "timeout" : isAborted ? "aborted" : "transport_error",
+        durationMs: Date.now() - startedAt,
+        finishReason: snapshot.finishReason ?? undefined,
+        eventCount: snapshot.eventCount,
+        contentChunks: snapshot.contentChunks,
+        malformedEvents: snapshot.malformedEvents,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    } finally {
+      watchdog.dispose();
     }
-    if (done) break;
-  }
-  const finalContent = stripEmotionMarkup(rawContent).trim();
-  if (!finalContent) {
-    recordGigaChatThrottle();
-    recordGigaChatFailure();
-    throw new Error("GigaChat вернул пустой ответ.");
-  }
-  recordGigaChatSuccess();
-  return finalContent;
-  });
+    const tail = decoder.decode();
+    rawBody = `${rawBody}${tail}`.slice(-16_000);
+    parser.push(tail);
+    const summary = parser.finish();
+
+    if (status < 200 || status >= 300) {
+      recordGigaChatThrottle(status);
+      recordGigaChatFailure();
+      recordGigaChatDiagnostic({
+        at: Date.now(),
+        kind: "chat",
+        model: settings.gigaChatModel,
+        outcome: "http_error",
+        status,
+        finishReason: summary.finishReason ?? undefined,
+        durationMs: Date.now() - startedAt,
+        eventCount: summary.eventCount,
+        contentChunks: summary.contentChunks,
+        malformedEvents: summary.malformedEvents,
+      });
+      throw apiError("GigaChat", status, rawBody);
+    }
+    if (signal.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("Запрос GigaChat отменён.", "AbortError");
+    }
+    const finalContent = stripEmotionMarkup(summary.content).trim();
+    if (!finalContent) {
+      recordGigaChatFailure();
+      const detail = describeEmptyGigaChatStream(summary);
+      recordGigaChatDiagnostic({
+        at: Date.now(),
+        kind: "chat",
+        model: settings.gigaChatModel,
+        outcome: "empty",
+        finishReason: summary.finishReason ?? undefined,
+        durationMs: Date.now() - startedAt,
+        eventCount: summary.eventCount,
+        contentChunks: summary.contentChunks,
+        malformedEvents: summary.malformedEvents,
+        detail,
+      });
+      throw new Error(detail);
+    }
+    recordGigaChatSuccess();
+    recordGigaChatDiagnostic({
+      at: Date.now(),
+      kind: "chat",
+      model: settings.gigaChatModel,
+      outcome: "success",
+      finishReason: summary.finishReason ?? undefined,
+      durationMs: Date.now() - startedAt,
+      eventCount: summary.eventCount,
+      contentChunks: summary.contentChunks,
+      malformedEvents: summary.malformedEvents,
+    });
+    return finalContent;
+  }, signal, { kind: "chat", priority: "interactive" });
 }
 
 function base64Bytes(base64: string): Uint8Array {
@@ -339,14 +486,13 @@ export async function analyzeGigaChatImages(
     const body = JSON.parse(raw) as ChatResponse;
     const text = body.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
-      recordGigaChatThrottle();
       throw new Error("GigaChat vision вернул пустой ответ.");
     }
     return text.trim();
   } finally {
     await Promise.all(fileIds.map((id) => deleteFile(id, settings)));
   }
-  });
+  }, undefined, { kind: "vision", priority: "background" });
 }
 
 export async function createGigaChatEmbeddings(
@@ -373,7 +519,7 @@ export async function createGigaChatEmbeddings(
   return (body.data ?? [])
     .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
     .map(({ embedding }) => embedding ?? []);
-  });
+  }, undefined, { kind: "embedding", priority: "background" });
 }
 
 export async function checkGigaChatStatus(
@@ -398,7 +544,7 @@ export async function checkGigaChatStatus(
       error: error instanceof Error ? error.message : String(error),
     };
   }
-  });
+  }, undefined, { kind: "status", priority: "background" });
 }
 
 export function clearGigaChatTokenCache(): void {

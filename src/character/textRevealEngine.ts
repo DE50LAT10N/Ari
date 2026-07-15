@@ -30,6 +30,16 @@ export class TextRevealEngine {
     }
   }
 
+  setCharsPerSecond(charsPerSecond: number): void {
+    if (!this.options) {
+      return;
+    }
+    this.options = {
+      ...this.options,
+      charsPerSecond: Math.max(1, charsPerSecond),
+    };
+  }
+
   markStreamEnded(): void {
     this.streamEnded = true;
     if (this.running && this.options) {

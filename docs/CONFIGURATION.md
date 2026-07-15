@@ -12,8 +12,8 @@ All settings persist in `localStorage` key `desktop-character.settings.v1`. Defa
 | `model` | Qwen3-14B Q5_K_M | Main chat model (Ollama) |
 | `fastJsonModel` | — | JSON/gate model (optional) |
 | `memoryModel` | — | Extraction/summary model (optional) |
-| `gigaChatModel` | `GigaChat` | Main chat (GigaChat) |
-| `gigaChatVisionModel` | `GigaChat` | Vision model |
+| `gigaChatModel` | `GigaChat-2-Pro` | Main chat (GigaChat) |
+| `gigaChatVisionModel` | `GigaChat-2-Pro` | Vision model |
 | `gigaChatEmbeddingModel` | `EmbeddingsGigaR` | Embeddings |
 | `gigaChatScope` | `GIGACHAT_API_PERS` | API scope |
 | `temperature` | 0.7 | LLM temperature |
@@ -25,7 +25,7 @@ All settings persist in `localStorage` key `desktop-character.settings.v1`. Defa
 | Field | Default | Effect |
 |-------|---------|--------|
 | `ragEnabled` | false | Enable document RAG |
-| `embeddingSource` | `gigachat` | `gigachat`, `ollama`, or `none` |
+| `embeddingSource` | `ollama` | `gigachat`, `ollama`, or `none`; local by default |
 | `embeddingModel` | `embeddinggemma` | Ollama embedding model name |
 | `ragTopK` | 4 | Chunks injected per reply |
 | `ragScoreThreshold` | 0.2 | Min cosine for RAG match |
@@ -45,19 +45,20 @@ All settings persist in `localStorage` key `desktop-character.settings.v1`. Defa
 | `codingProcessAllowlist` | `""` | Extra coding process patterns |
 | `distractorProcessAllowlist` | `""` | Distraction detection |
 | `clipboardObservationEnabled` | false | Legacy: error/stacktrace notes in working memory |
-| `clipboardFullCaptureEnabled` | true | Classify + redact clipboard changes locally (~8 h) |
+| `clipboardFullCaptureEnabled` | true | Proactive-first classification + secret redaction of clipboard changes locally (~8 h) |
 | `advisorEnabled` | true | Signal-driven programmer advisor (rest, debug, focus) |
+| `ideAdvisorEnabled` | true | Start the local IDE Bridge for proactive coding advice; it can be disabled manually |
 
 ## Initiative and reminders
 
 | Field | Default | Effect |
 |-------|---------|--------|
 | `proactiveEnabled` | true | Master initiative toggle |
-| `proactiveSmalltalkIntervalMinutes` | 10 | Base interval for smalltalk/check-ins (scaled by level) |
-| `proactiveAdviceIntervalMinutes` | 20 | Base interval for practical advice attempts (scaled by level) |
-| `proactiveIntervalMinutes` | 20 | Legacy alias kept for migration; mirrors advice interval |
+| `proactiveSmalltalkIntervalMinutes` | 3 | Base interval for smalltalk/check-ins (scaled by level) |
+| `proactiveAdviceIntervalMinutes` | 5 | Base interval for practical advice attempts (scaled by level) |
+| `proactiveIntervalMinutes` | 5 | Legacy alias kept for migration; mirrors advice interval |
 | `proactiveOpenChat` | true | Open chat on proactive message |
-| `initiativeLevel` | `normal` | `silent` / `rare` / `normal` / `active` — scales frequency; `active` ≠ advice-only |
+| `initiativeLevel` | `active` | `silent` / `rare` / `normal` / `active` — scales frequency; `active` ≠ advice-only |
 | `eventReactionsEnabled` | true | Window/session reactions |
 | `remindersEnabled` | true | Due task reminders |
 | `quietHoursStart` | 23 | Quiet hours start (hour) |
@@ -80,7 +81,7 @@ Tone is still derived from activity signals:
 | Social / memory / return topics | Smalltalk |
 | Low advice urgency + recent advice | Smalltalk wins tick |
 
-`initiativeLevel: active` increases check-in frequency; it does **not** force advice on every tick. Daily initiative cap in telemetry is informational (`9999`), not a hard user limit — see `docs/METRICS.md`.
+`initiativeLevel: active` increases check-in frequency; it does **not** force advice on every tick. Cooldowns control pacing, but there is no hard daily or per-kind shutdown; see `docs/METRICS.md`.
 
 ## Memory
 
@@ -92,7 +93,7 @@ Tone is still derived from activity signals:
 
 | Field | Default | Effect |
 |-------|---------|--------|
-| `visionSource` | `gigachat` | `gigachat` or `ollama` |
+| `visionSource` | `ollama` | `gigachat` or `ollama`; local by default |
 | `visionModel` | `qwen2.5vl:7b` | Ollama vision model |
 | `visualMemoryMinutes` | 10 | How long observation text persists |
 | `autoVisionEnabled` | false | Auto screen glance initiative |
@@ -143,10 +144,11 @@ Tone is still derived from activity signals:
 |-------|---------|--------|
 | `safeActionsEnabled` | true | Safe action proposals |
 | `soundsEnabled` | true | UI sounds |
-| `webToolsEnabled` | true | Live search/fetch tools |
+| `webToolsEnabled` | true | Live search/fetch for current proactive advice; requests leave the device |
 | `avatarLivelinessEnabled` | true | Micro-reactions, motion |
 | `autoUpdateEnabled` | false | In-app updater |
 | `onboardingCompleted` | false | Skip onboarding wizard |
+| `privacyConsentVersion` | 2 | Internal compatibility marker for settings migration |
 
 ## Migrations
 
@@ -154,9 +156,12 @@ Tone is still derived from activity signals:
 
 `migrateLegacyTts` maps old `tts*` fields to `blip*`.
 
-### companion-v2
+### proactive-first-v4
 
-One-time migration (`companion-v2` key): if user had all companion flags off, enables `proactiveEnabled`, `eventReactionsEnabled`, `activityTrackingEnabled`, caps interval at 20 min.
+One-time migration enables proactive messages, event reactions, activity tracking,
+the programmer advisor, clipboard context, and live web tools. It selects the active
+initiative level, caps advice at 5 minutes and smalltalk at 3 minutes for existing
+installations; later manual setting changes are preserved.
 
 ## Model routing
 
@@ -170,4 +175,4 @@ One-time migration (`companion-v2` key): if user had all companion flags off, en
 | `vision` | `resolveVisionModel` |
 | `embedding` | `resolveEmbeddingModel` |
 
-Companion preset (onboarding/settings): enables memory, initiative, reminders, activity, event reactions, `initiativeLevel: normal`. Copy describes advice on errors/stuck and smalltalk in pauses.
+Companion preset (onboarding/settings): enables memory, initiative, reminders, activity, event reactions, `initiativeLevel: active`, with 3/5-minute base clocks. Copy describes advice on errors/stuck and smalltalk in pauses.

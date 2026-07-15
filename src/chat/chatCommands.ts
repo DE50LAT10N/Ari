@@ -10,6 +10,7 @@ import {
   fetchGitFileDiff,
   fetchGitRecentCommits,
   fetchGitStatusSummary,
+  listBinderFiles,
   type GitCommitEntry,
   type GitStatusSummary,
 } from "../platform/projectCompanion";
@@ -107,12 +108,6 @@ import { wrapCommandReply } from "./commandCharacterWrap";
 import { tryHandleTaskChatCommandAsync } from "./taskChatParse";
 import { ensureGoalForFocus, getCurrentGoal, updateGoal } from "../tasks/goalLedger";
 import type { CharacterMood } from "../character/mood";
-import {
-  buildMoodRefusalReply,
-  deriveMoodArchetype,
-  moodRefusalKindForCommand,
-  shouldMoodRefuseRequest,
-} from "../character/moodBehavior";
 
 export type ChatCommandResult = {
   handled: true;
@@ -174,9 +169,6 @@ export async function tryHandleChatCommand(
   }
 
   if (/^запомни это как текущий проект/i.test(input)) {
-    const name =
-      input.replace(/^запомни это как текущий проект/i, "").trim() ||
-      "Текущий проект";
     const pathMatch = input.match(/[A-Za-z]:\\[^\n\r]+|\/[^\n\r]+/);
     if (!pathMatch) {
       return handled(
@@ -184,10 +176,23 @@ export async function tryHandleChatCommand(
         "Укажи абсолютный путь к папке проекта в той же фразе.",
       );
     }
-    const project = upsertProjectBinder({
-      name,
-      rootPath: pathMatch[0].trim(),
-    });
+    const rootPath = pathMatch[0].trim();
+    const name =
+      input
+        .replace(/^запомни это как текущий проект/i, "")
+        .replace(pathMatch[0], "")
+        .trim() || "Текущий проект";
+    try {
+      await listBinderFiles(rootPath, { maxDepth: 1, limit: 1 });
+    } catch (error) {
+      return handled(
+        "set-project",
+        `Не удалось открыть папку проекта: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const project = upsertProjectBinder({ name, rootPath });
     return handled(
       "set-project",
       `Проект «${project.name}» привязан к ${project.rootPath}.`,
@@ -288,22 +293,6 @@ export async function tryHandleChatCommand(
   }
 
   if (/^старт фокуса/i.test(lower) || /^начни фокус/i.test(lower)) {
-    if (
-      mood &&
-      shouldMoodRefuseRequest(mood, moodRefusalKindForCommand("focus-start"))
-    ) {
-      const archetype = deriveMoodArchetype(mood);
-      const wrapped = wrapCommandReply(
-        "mood-refusal",
-        buildMoodRefusalReply(mood, moodRefusalKindForCommand("focus-start")),
-      );
-      return {
-        handled: true,
-        command: "mood-refusal",
-        reply: wrapped.reply,
-        emotion: archetype === "irritated" ? "annoyed" : "sleepy",
-      };
-    }
     const goal = input.replace(/^(старт фокуса|начни фокус)[:\s]*/i, "").trim();
     if (!goal) {
       return handled("focus-start", "Укажи цель фокуса в той же фразе.");

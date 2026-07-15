@@ -51,7 +51,7 @@ Blink, mouse parallax, hover curiosity, optional UI sounds (muted at night).
 - **Self-memory**: preferred tone, stopped behaviours, phrase anti-repeat.
 - **Initiative kinds** (`InitiativeKind`): check-in, break suggestion, unfinished thread, return reaction, context comment, memory callback, process advice, distraction nudge, quiet presence, screen glance.
 - **Scenarios** (separate from kinds): `first_message_today` (daily rituals → spoken as `check_in`), `reminder_due` (due tasks → `unfinished_thread`).
-- **Anti-annoyance**: local score, daily caps, per-kind caps, ignored window.
+- **Pacing**: local score, cooldowns, ignored-window feedback, and quiet modes without a hard daily shutdown.
 - **Honest context**: no false vision/memory/RAG claims in prompts.
 
 ## Task manager
@@ -102,9 +102,13 @@ Foreground process name + window title; optional allowlist. No keystrokes.
 
 ### Clipboard and programmer advisor
 
-- **Full clipboard capture** (default on): classify changes, redact secrets, store locally ~8 h.
+- **Full clipboard capture** (on in the proactive-first profile): classification, secret redaction, and local storage for ~8 h.
 - **Advisor**: aggregates file focus, queries, errors → break/debug/refocus advice and dynamic check-in topics.
 - Legacy **clipboard error notes** toggle still adds stack traces to working memory.
+
+### IDE Advisor (opt-in)
+
+The loopback-only IDE Bridge starts only after separate consent. The VS Code client can share the active file, selection, unsaved buffer, diagnostics, Git state, and test state; every optional source is disabled until enabled in VS Code. Ari validates revision order, freshness, provenance, and content hashes before using the bounded snapshot as untrusted mentor evidence. See [IDE_BRIDGE.md](IDE_BRIDGE.md).
 
 ## Vision
 
@@ -118,7 +122,7 @@ Auto vision glance when enabled and gated.
 
 ## Character and voice
 
-- Ari is a **female VN-style character**: irony, warmth, short lines — not a corporate assistant.
+- Ari is an **AI VN-style character with a feminine presentation**: irony, warmth, short lines — not a corporate assistant or a human identity claim.
 - **Feminine grammar** in prompts and validation (`я готова`, not `я готов`).
 - **Mood** shapes lexicon, proactive bundle, idle lines, and avatar emotion.
 - **Proactive bridge**: App events use `proactiveBridge` → unified package in ChatPanel.

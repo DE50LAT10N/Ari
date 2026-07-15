@@ -176,6 +176,9 @@ describe("proactive loop helpers", () => {
   it("allows generic companion initiative after planned silence", () => {
     expect(allowsGenericCompanionInitiative(90_000, 60_000)).toBe(true);
     expect(allowsGenericCompanionInitiative(30_000, 60_000)).toBe(false);
+    expect(
+      allowsGenericCompanionInitiative(0, 60_000, { activeLevel: true }),
+    ).toBe(true);
   });
 
   it("allows immersed companion check-in via companion silence gate", () => {

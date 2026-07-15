@@ -1,11 +1,6 @@
 import type { AppSettings } from "../settings/appSettings";
 import type { CharacterEmotion } from "../types/character";
 import type { CharacterMood } from "../character/mood";
-import {
-  buildMoodRefusalReply,
-  deriveMoodArchetype,
-  shouldMoodRefuseRequest,
-} from "../character/moodBehavior";
 import { wrapCommandReply } from "./commandCharacterWrap";
 import { ensureGoalForFocus } from "../tasks/goalLedger";
 import { startProductivityFocus } from "../character/productivitySession";
@@ -65,7 +60,7 @@ export function parsePomodoroStartRequest(
 export function tryHandleProductivityChatCommand(
   rawInput: string,
   settings: AppSettings,
-  mood?: CharacterMood,
+  _mood?: CharacterMood,
 ): ProductivityOutcome {
   const input = rawInput.trim();
   const lower = input.toLowerCase().replace(/\s+/g, " ");
@@ -84,19 +79,6 @@ export function tryHandleProductivityChatCommand(
         "pomodoro-start",
         "Помодоро выключено в настройках — включи 🍅, и запущу.",
       );
-    }
-    if (mood && shouldMoodRefuseRequest(mood, "pomodoro")) {
-      const archetype = deriveMoodArchetype(mood);
-      const wrapped = wrapCommandReply(
-        "mood-refusal",
-        buildMoodRefusalReply(mood, "pomodoro"),
-      );
-      return {
-        handled: true,
-        command: "mood-refusal",
-        reply: wrapped.reply,
-        emotion: archetype === "irritated" ? "annoyed" : "sleepy",
-      };
     }
     const { goal, minutes } = parsePomodoroStartRequest(
       input,

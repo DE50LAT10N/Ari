@@ -20,6 +20,7 @@ type ReplyStreamSessionInput = {
   assistantIndex: number;
   controller: AbortController;
   settings: AppSettings;
+  getSettings: () => AppSettings;
   activeWindow: ActiveWindowInfo | null;
   isOpen: boolean;
   proactive: boolean;
@@ -59,14 +60,17 @@ export function createReplyStreamSession(input: ReplyStreamSessionInput) {
   let streamEpoch = 0;
   let blipStreamActive = false;
   const blipOptions = {
-    settings: input.settings,
-    initiative: Boolean(input.proactive) && !input.proactiveWhileOpen,
-    reply: !input.proactive || input.proactiveWhileOpen,
+    get settings() {
+      return input.getSettings();
+    },
+    getSettings: input.getSettings,
+    initiative: Boolean(input.proactive),
+    reply: !input.proactive,
     technical: false,
     activeWindow: input.activeWindow,
     revealOnly: input.wantAmbientReveal,
     ambientWithSound:
-      input.wantAmbientReveal && isBlipVoiceEnabled(input.settings),
+      input.wantAmbientReveal && isBlipVoiceEnabled(input.getSettings()),
     onDisplayUpdate: (displayText: string) => {
       input.streamedContentRef.current = displayText;
       input.setHasStreamTokens(displayText.length > 0);
@@ -131,13 +135,14 @@ export function createReplyStreamSession(input: ReplyStreamSessionInput) {
       restartAmbientStream();
     }
     return withTimeout(
-      streamLlm(
-        messages,
-        input.settings,
-        (streamedContent) => {
-          if (epoch !== streamEpoch) {
-            return;
-          }
+      (streamSignal) =>
+        streamLlm(
+          messages,
+          input.settings,
+          (streamedContent) => {
+            if (streamSignal.aborted || epoch !== streamEpoch) {
+              return;
+            }
           input.streamedContentRef.current = streamedContent;
           if (!revealToUser) {
             return;
@@ -163,26 +168,25 @@ export function createReplyStreamSession(input: ReplyStreamSessionInput) {
           if (streamedContent) {
             input.setHasStreamTokens(true);
             input.onStateChange("speaking");
+            scheduleThrottledStreamUpdate(
+              streamedContent,
+              input.streamUiTimerRef,
+              input.pendingStreamContentRef,
+              (value) => {
+                input.setStreamingContent(value);
+                if (input.wantAmbientReveal && value.trim()) {
+                  input.onAmbientBubble?.(
+                    value.slice(0, REPLY_AMBIENT_BUBBLE_MAX_CHARS),
+                  );
+                }
+              },
+            );
           }
-
-          scheduleThrottledStreamUpdate(
-            streamedContent,
-            input.streamUiTimerRef,
-            input.pendingStreamContentRef,
-            (value) => {
-              input.setStreamingContent(value);
-              if (input.wantAmbientReveal && value.trim()) {
-                input.onAmbientBubble?.(
-                  value.slice(0, REPLY_AMBIENT_BUBBLE_MAX_CHARS),
-                );
-              }
-            },
-          );
-        },
-        (emotion) => {
-          if (epoch !== streamEpoch) {
-            return;
-          }
+          },
+          (emotion) => {
+            if (streamSignal.aborted || epoch !== streamEpoch) {
+              return;
+            }
           if (!revealToUser) {
             return;
           }
@@ -192,11 +196,12 @@ export function createReplyStreamSession(input: ReplyStreamSessionInput) {
               index === input.assistantIndex ? { ...message, emotion } : message,
             ),
           );
-        },
-        input.controller.signal,
-      ),
+          },
+          streamSignal,
+        ),
       REPLY_STREAM_TIMEOUT_MS,
       "Генерация ответа",
+      { signal: input.controller.signal },
     );
   }
 

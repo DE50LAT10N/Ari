@@ -60,10 +60,7 @@ fn broadcast_environment_change() {
         SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
     };
 
-    let wide: Vec<u16> = "Environment"
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
+    let wide: Vec<u16> = "Environment".encode_utf16().chain(Some(0)).collect();
     let mut result = 0usize;
     unsafe {
         SendMessageTimeoutW(
@@ -84,14 +81,13 @@ fn normalize_models_dir(path: &str) -> Result<String, String> {
     if trimmed.is_empty() {
         return Err("Укажи папку для моделей Ollama.".into());
     }
-    if !trimmed.chars().all(|ch| ch.is_ascii()) {
+    if !trimmed.is_ascii() {
         return Err("Путь к моделям должен содержать только латиницу.".into());
     }
 
     let models_path = PathBuf::from(trimmed);
-    std::fs::create_dir_all(&models_path).map_err(|error| {
-        format!("Не удалось создать папку моделей {trimmed}: {error}")
-    })?;
+    std::fs::create_dir_all(&models_path)
+        .map_err(|error| format!("Не удалось создать папку моделей {trimmed}: {error}"))?;
 
     Ok(trimmed.trim_end_matches(['\\', '/']).to_string())
 }

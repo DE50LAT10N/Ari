@@ -24,6 +24,68 @@ describe("characterVoice", () => {
     expect(result.issues).toContain("assistant tone");
   });
 
+  it("allows a transparent AI-character identity", () => {
+    const result = validateCharacterReply(
+      "Я AI-персонаж Ari, не человек — но разбирать код могу вполне честно.",
+      emptyContext,
+    );
+    expect(result.issues).not.toContain("identity leak");
+  });
+
+  it("blocks disclosure of the hidden provider or base model", () => {
+    const result = validateCharacterReply(
+      "На самом деле меня запустили на модели GPT-4.",
+      emptyContext,
+    );
+    expect(result.issues).toContain("identity leak");
+  });
+
+  it("allows useful numbered steps in technical responses", () => {
+    const result = validateCharacterReply(
+      "1. Шаг: воспроизведи ошибку.\n2. Проверка: сравни stack trace.",
+      { ...emptyContext, responseMode: "technical_help" },
+    );
+    expect(result.issues).not.toContain("assistant tone");
+  });
+
+  it("requires explicit memory claims to overlap injected evidence", () => {
+    const grounded = validateCharacterReply("Я помню, ты выбирал Rust.", {
+      ...emptyContext,
+      hasMemory: true,
+      memoryEvidence: ["Пользователь предпочитает Rust для native-модулей"],
+    });
+    const ungrounded = validateCharacterReply("Я помню, ты выбирал Go.", {
+      ...emptyContext,
+      hasMemory: true,
+      memoryEvidence: ["Пользователь предпочитает Rust для native-модулей"],
+    });
+    expect(grounded.issues).not.toContain(
+      "memory claim without injected memory",
+    );
+    expect(ungrounded.issues).toContain("memory claim without injected memory");
+  });
+
+  it("requires document claims to overlap retrieved evidence", () => {
+    const grounded = validateCharacterReply(
+      "По документам, таймаут обрабатывает AbortController.",
+      {
+        ...emptyContext,
+        hasRag: true,
+        ragEvidence: ["Таймаут должен отменять запрос через AbortController"],
+      },
+    );
+    const ungrounded = validateCharacterReply(
+      "По документам, авторизация сделана через OAuth.",
+      {
+        ...emptyContext,
+        hasRag: true,
+        ragEvidence: ["Таймаут должен отменять запрос через AbortController"],
+      },
+    );
+    expect(grounded.issues).not.toContain("RAG claim without fragments");
+    expect(ungrounded.issues).toContain("RAG claim without fragments");
+  });
+
   it("builds correction for masculine self reference", () => {
     const message = buildCorrectionUserMessage(["masculine self reference"]);
     expect(message).toMatch(/женском роде/i);

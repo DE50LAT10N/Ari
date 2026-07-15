@@ -17,6 +17,7 @@ import {
   resetProactiveLlmCacheForTests,
   getLastProactiveLlmBundle,
   getLastProactiveSynthesisReject,
+  loadProactiveSynthesisDiagnostics,
   synthesizeProactiveBundle,
   tryAdviceFallbackChain,
   validateProactiveReplyLlm,
@@ -151,17 +152,22 @@ describe("proactiveLlmEngine", () => {
           file: "ChatPanel.tsx",
           text: "export function foo() { return 1; }",
         },
+        {
+          file: "IDE diagnostics",
+          text: "ERROR ChatPanel.tsx:42 missing symbol",
+        },
       ],
     });
 
     const calls = vi.mocked(completeLlmJson).mock.calls;
     const userContent = (calls[0]?.[0] as any)?.find((m: any) => m.role === "user")
       ?.content as string;
-    expect(userContent).toContain("Реальный код из файла ChatPanel.tsx");
+    expect(userContent).toContain("Свежие IDE evidence и код");
     expect(userContent).toContain("export function foo()");
+    expect(userContent).toContain("ERROR ChatPanel.tsx:42 missing symbol");
   });
 
-  it("falls back to grounded advice when synthesis is low usefulness or overlaps banned", async () => {
+  it("rejects low-usefulness synthesis without grounded fallback", async () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "app.ts - Ari - Cursor",
@@ -186,12 +192,12 @@ describe("proactiveLlmEngine", () => {
       llmOnline: true,
     });
 
-    expect(result.shouldSend).toBe(true);
-    expect(result.usefulnessScore).toBeGreaterThan(0.45);
-    expect(result.practicalHook).toBeTruthy();
+    expect(result.shouldSend).toBe(false);
+    expect(result.source).toBe("rejected");
+    expect(result.rejectReason).toContain("overlaps banned");
   });
 
-  it("uses a single synthesis call for GigaChat advice and falls back on overlapsBanned", async () => {
+  it("regenerates rejected GigaChat advice and preserves diagnostics", async () => {
     const gigaSettings = {
       ...defaultSettings,
       llmProvider: "gigachat" as const,
@@ -226,12 +232,147 @@ describe("proactiveLlmEngine", () => {
       },
     });
 
-    expect(completeLlmJson).toHaveBeenCalledTimes(1);
-    expect(result.shouldSend).toBe(true);
-    expect(result.usefulnessScore).toBeGreaterThan(0.45);
+    expect(completeLlmJson).toHaveBeenCalledTimes(2);
+    expect(result.shouldSend).toBe(false);
+    expect(result.source).toBe("rejected");
+    const diagnostics = loadProactiveSynthesisDiagnostics();
+    expect(diagnostics.some((entry) => entry.provider === "gigachat")).toBe(true);
+    expect(diagnostics.some((entry) => entry.phase === "regeneration")).toBe(true);
+    expect(diagnostics.at(-1)?.reason).toBe("llm synthesis overlaps banned");
   });
 
-  it("returns clarifying probe when synthesis score is zero and fallback chain fails", async () => {
+  it("grounds smalltalk in window, clipboard, vision and IDE evidence", () => {
+    recordClipboardSignal({
+      clipKind: "diagnostic",
+      snippet: "Build failed in worker: timeout while opening the report",
+    });
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "firefox.exe",
+      windowTitle: "CI report - Firefox",
+      visionObservation: {
+        text: "A failed pipeline and a retry button are visible",
+        timestamp: Date.now(),
+      },
+      sessionMinutes: 12,
+    });
+
+    const facts = collectProactiveSignalFacts({
+      bundle,
+      tone: "smalltalk",
+      codeExcerpts: [
+        { file: "IDE diagnostics", text: "worker.ts:42 request timed out" },
+      ],
+      llmOnline: true,
+    });
+
+    expect(facts.map((fact) => fact.kind)).toEqual(
+      expect.arrayContaining(["clipboard", "screen", "code"]),
+    );
+    expect(facts.some((fact) => fact.detail.includes("CI report"))).toBe(true);
+  });
+
+  it("regenerates a model-vetoed smalltalk using live context", async () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "firefox.exe",
+      windowTitle: "Release dashboard - Firefox",
+      sessionMinutes: 9,
+    });
+    vi.mocked(completeLlmJson)
+      .mockResolvedValueOnce({
+        tone: "smalltalk",
+        linkedThemes: [],
+        mergedAnchor: "",
+        narrativeBrief: "",
+        usefulnessScore: 0,
+        shouldSend: false,
+        overlapsBanned: false,
+        rejectReason: "skip",
+      })
+      .mockResolvedValueOnce({
+        tone: "smalltalk",
+        linkedThemes: ["release dashboard"],
+        mergedAnchor: "release dashboard",
+        narrativeBrief: "Живая реплика по открытому dashboard",
+        usefulnessScore: 0.66,
+        shouldSend: true,
+        overlapsBanned: false,
+      });
+
+    const result = await synthesizeProactiveBundle(defaultSettings, {
+      bundle,
+      tone: "smalltalk",
+      llmOnline: true,
+    });
+
+    expect(result.shouldSend).toBe(true);
+    expect(completeLlmJson).toHaveBeenCalledTimes(2);
+    expect(loadProactiveSynthesisDiagnostics().at(-1)?.tone).toBe("smalltalk");
+  });
+
+  it("accepts model-authored smalltalk when only schema metadata is missing", async () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Code.exe",
+      windowTitle: "activitySignals.test.ts - Ari - Visual Studio Code",
+      sessionMinutes: 9,
+    });
+    vi.mocked(completeLlmJson).mockResolvedValue({
+      tone: "smalltalk",
+      practicalHook: "В тестах активности уже видна целая маленькая карта поведения.",
+      usefulnessScore: 0.74,
+      shouldSend: true,
+      overlapsBanned: false,
+    } as any);
+
+    const result = await synthesizeProactiveBundle(defaultSettings, {
+      bundle,
+      tone: "smalltalk",
+      candidateTopics: ["activitySignals.test.ts"],
+      sessionMinutes: 9,
+      llmOnline: true,
+    });
+
+    expect(result.shouldSend).toBe(true);
+    expect(result.narrativeBrief).toContain("карта поведения");
+    expect(result.mergedAnchor).toBe("activitySignals.test.ts");
+    expect(result.linkedThemes).toContain("activitySignals.test.ts");
+    expect(completeLlmJson).toHaveBeenCalledTimes(1);
+    const systemPrompt = vi.mocked(completeLlmJson).mock.calls[0][0][0]?.content;
+    expect(systemPrompt).toContain('"tone":"smalltalk"');
+    expect(systemPrompt).not.toContain('"adviceSteps"');
+  });
+
+  it("caps invalid-schema synthesis at two live requests and names missing fields", async () => {
+    const bundle = buildInitiativeSignalBundle(defaultSettings, {
+      processName: "Cursor.exe",
+      windowTitle: "main.ts - Ari - Cursor",
+      sessionMinutes: 7,
+    });
+    vi.mocked(completeLlmJson).mockResolvedValue({
+      tone: "advice",
+      shouldSend: true,
+    } as any);
+
+    const result = await synthesizeProactiveBundle(defaultSettings, {
+      bundle,
+      tone: "advice",
+      llmOnline: true,
+      requirePracticalHook: true,
+    });
+
+    expect(result.shouldSend).toBe(false);
+    expect(result.rejectReason).toContain("synthesis failed");
+    expect(completeLlmJson).toHaveBeenCalledTimes(2);
+    const diagnostics = loadProactiveSynthesisDiagnostics();
+    expect(
+      diagnostics.some(
+        (entry) =>
+          entry.reason.includes("narrativeBrief|primaryChainSummary|practicalHook") &&
+          entry.reason.includes("practicalHook|adviceSteps"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects zero-score synthesis without a clarifying fallback", async () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "CHANGELOG.md - Ari - Cursor",
@@ -256,9 +397,9 @@ describe("proactiveLlmEngine", () => {
       llmOnline: true,
     });
 
-    expect(result.shouldSend).toBe(true);
-    expect(result.selectedAdviceCandidate?.kind).toBe("clarifying_probe");
-    expect(result.usefulnessScore).toBeGreaterThan(0);
+    expect(result.shouldSend).toBe(false);
+    expect(result.source).toBe("rejected");
+    expect(result.rejectReason).toBe("llm synthesis low usefulness");
   });
 
   it("returns rejected LLM bundle instead of fallback when LLM is offline", async () => {
@@ -284,7 +425,7 @@ describe("proactiveLlmEngine", () => {
     expect(getLastProactiveSynthesisReject()?.rejectReason).toBe("llm offline");
   });
 
-  it("falls back to planner advice when synthesis fails", async () => {
+  it("rejects synthesis failure without planner fallback", async () => {
     const bundle = buildInitiativeSignalBundle(defaultSettings, {
       processName: "Cursor.exe",
       windowTitle: "README.md - desktop-character - Cursor",
@@ -312,9 +453,9 @@ describe("proactiveLlmEngine", () => {
       },
     });
 
-    expect(result.shouldSend).toBe(true);
-    expect(result.practicalHook).toContain("README.md");
-    expect(result.selectedAdviceCandidate?.kind).toBe("docs_to_code_bridge");
+    expect(result.shouldSend).toBe(false);
+    expect(result.source).toBe("rejected");
+    expect(result.rejectReason).toBe("llm synthesis failed");
   });
 
   it("accepts LLM advice bundle without topicLinks by filling graph edges", async () => {

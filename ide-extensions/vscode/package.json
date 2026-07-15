@@ -1,0 +1,124 @@
+{
+  "name": "ari-ide-advisor",
+  "displayName": "Ari IDE Advisor",
+  "description": "Privacy-first IDE context bridge for the Ari engineering mentor.",
+  "version": "0.1.4",
+  "private": true,
+  "publisher": "ari-local",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:ari.ideBridge.pair",
+    "onCommand:ari.ideBridge.pairFromFile",
+    "onCommand:ari.ideBridge.connect",
+    "onCommand:ari.ideBridge.disconnect",
+    "onCommand:ari.ideBridge.sendSnapshot",
+    "onCommand:ari.ideBridge.publishTestResult"
+  ],
+  "main": "./dist/ide-extensions/vscode/src/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./tsconfig.json",
+    "watch": "tsc -w -p ./tsconfig.json",
+    "check": "tsc --noEmit -p ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "1.96.0",
+    "typescript": "~5.8.3"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "ari.ideBridge.pair",
+        "title": "Ari: Pair IDE Advisor Manually"
+      },
+      {
+        "command": "ari.ideBridge.pairFromFile",
+        "title": "Ari: Pair IDE Advisor from Connection File"
+      },
+      {
+        "command": "ari.ideBridge.connect",
+        "title": "Ari: Connect IDE Advisor"
+      },
+      {
+        "command": "ari.ideBridge.disconnect",
+        "title": "Ari: Disconnect IDE Advisor"
+      },
+      {
+        "command": "ari.ideBridge.sendSnapshot",
+        "title": "Ari: Send IDE Snapshot Now"
+      }
+    ],
+    "configuration": {
+      "title": "Ari IDE Advisor",
+      "properties": {
+        "ari.ideBridge.endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:37891/ide/v1/messages",
+          "description": "Loopback endpoint shown by the Ari desktop pairing screen."
+        },
+        "ari.ideBridge.sessionId": {
+          "type": "string",
+          "default": "",
+          "description": "Short-lived pairing session ID. The token is kept in VS Code SecretStorage."
+        },
+        "ari.ideBridge.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reconnect to a previously paired local Ari instance when VS Code starts."
+        },
+        "ari.ideBridge.shareActiveFile": {
+          "type": "boolean",
+          "default": true,
+          "description": "Share active file URI, language and version with Ari."
+        },
+        "ari.ideBridge.shareSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Share the current editor selection with Ari. Requires active-file sharing."
+        },
+        "ari.ideBridge.shareUnsavedBuffers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Share the complete active document buffer with Ari, including saved files. Requires active-file sharing."
+        },
+        "ari.ideBridge.shareDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Share VS Code diagnostics with Ari."
+        },
+        "ari.ideBridge.shareGitStatus": {
+          "type": "boolean",
+          "default": true,
+          "description": "Share branch and changed-file metadata with Ari."
+        },
+        "ari.ideBridge.shareTestResults": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow test adapters to publish test outcomes to Ari."
+        },
+        "ari.ideBridge.debounceMs": {
+          "type": "number",
+          "default": 350,
+          "minimum": 100,
+          "maximum": 5000,
+          "description": "Delay before publishing a snapshot after editor changes."
+        },
+        "ari.ideBridge.maxBufferChars": {
+          "type": "number",
+          "default": 100000,
+          "minimum": 1000,
+          "maximum": 500000,
+          "description": "Maximum selection or unsaved-buffer characters sent in one snapshot."
+        }
+      }
+    }
+  }
+}

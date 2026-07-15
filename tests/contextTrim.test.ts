@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildTrimmedPromptContext } from "../src/chat/contextTrim";
+import { estimateMessagesTokens } from "../src/chat/contextBudget";
+import { buildMessages } from "../src/character/promptBuilder";
 import { defaultSettings } from "../src/settings/appSettings";
 import type { ChatMessage } from "../src/types/chat";
 
 describe("buildTrimmedPromptContext", () => {
-  it("does not hang when a single RAG fragment exceeds the token budget", () => {
+  it("hard-truncates a single huge RAG fragment to the model context budget", () => {
     const history: ChatMessage[] = [
       { role: "user", content: "Что написано в документе про проект?" },
     ];
@@ -22,11 +24,19 @@ describe("buildTrimmedPromptContext", () => {
       },
     );
     expect(performance.now() - started).toBeLessThan(2000);
-    expect(result.runtimeContext.memory).toEqual([]);
+    expect(result.runtimeContext.memory?.length ?? 0).toBeLessThanOrEqual(1);
+    expect(result.runtimeContext.memory?.[0]?.text.length ?? 0).toBeLessThan(
+      hugeRag.length,
+    );
     expect(result.trimNotes.some((note) => note.includes("RAG"))).toBe(true);
+    expect(
+      estimateMessagesTokens(
+        buildMessages(result.fittedHistory, result.runtimeContext),
+      ),
+    ).toBeLessThanOrEqual(2048 - 512 - 96);
   });
 
-  it("preserves proactive eventDescription and signal summary under trim pressure", () => {
+  it("degrades proactive evidence before violating the hard context budget", () => {
     const history: ChatMessage[] = [
       { role: "user", content: "короткий вопрос" },
     ];
@@ -47,7 +57,12 @@ describe("buildTrimmedPromptContext", () => {
         maxTokens: 512,
       },
     );
-    expect(result.runtimeContext.eventDescription).toBe(longEvent);
-    expect(result.runtimeContext.proactiveSignalSummary).toBe(longSummary);
+    expect(result.runtimeContext.compactRuntime).toBe(true);
+    expect(result.trimNotes).toContain("включён компактный proactive prompt");
+    expect(
+      estimateMessagesTokens(
+        buildMessages(result.fittedHistory, result.runtimeContext),
+      ),
+    ).toBeLessThanOrEqual(2048 - 512 - 96);
   });
 });

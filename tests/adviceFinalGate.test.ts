@@ -53,7 +53,7 @@ function bundle(selectedAdviceCandidate: AdviceCandidate): ProactiveLlmBundle {
 }
 
 describe("advice final gate", () => {
-  it("repairs broad comment advice through the visible renderer", () => {
+  it("rejects broad comment advice without a fallback renderer", () => {
     const selected = candidate("terminal_error_triage");
     const result = runAdviceFinalGate({
       text: "Maybe look at comments in the code?",
@@ -65,10 +65,9 @@ describe("advice final gate", () => {
       ],
     });
 
-    expect(result.status).toBe("repaired");
-    expect(result.source).toBe("renderer");
-    expect(result.text).toContain("selectedAdviceCandidate");
-    expect(result.text).not.toContain(selected.actionText);
+    expect(result.status).toBe("rejected");
+    expect(result.source).toBe("original");
+    expect(result.text).toBe("Maybe look at comments in the code?");
     expect(result.issues).toContain("unneeded final question");
   });
 
@@ -86,10 +85,8 @@ describe("advice final gate", () => {
       ],
     });
 
-    expect(result.status).toBe("repaired");
-    expect(result.text).not.toContain("Свяжи");
-    expect(result.text).not.toContain("предложи");
-    expect(result.text).toContain("ChatPanel");
+    expect(result.status).toBe("rejected");
+    expect(result.text).toBe("Maybe check comments?");
   });
 
   it("scores generic work advice as low specificity and novelty", () => {
@@ -105,7 +102,7 @@ describe("advice final gate", () => {
     expect(quality.issues).toContain("generic work advice");
   });
 
-  it("renders debug_next_step without break or comment fallback", () => {
+  it("rejects debug_next_step instead of rendering a fallback", () => {
     const result = runAdviceFinalGate({
       text: "Maybe take a break?",
       bundle: bundle(
@@ -117,9 +114,8 @@ describe("advice final gate", () => {
       facts: [fact("debug_next_step fails in adviceEngine.ts")],
     });
 
-    expect(result.status).toBe("repaired");
-    expect(result.text).toContain("adviceEngine");
-    expect(result.text).not.toMatch(/break|перерыв|comment|коммент/i);
+    expect(result.status).toBe("rejected");
+    expect(result.text).toBe("Maybe take a break?");
   });
 
   it("allows clarifying planner questions", () => {
@@ -144,6 +140,6 @@ describe("advice final gate", () => {
       facts: [fact("debug_next_step fails in adviceEngine.ts")],
     });
 
-    expect(describeAdviceFinalGateForDiagnostics()).toContain("source=renderer");
+    expect(describeAdviceFinalGateForDiagnostics()).toContain("source=original");
   });
 });

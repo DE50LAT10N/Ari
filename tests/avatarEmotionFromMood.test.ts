@@ -27,7 +27,7 @@ describe("avatarEmotionFromMood", () => {
     const irritated: CharacterMood = {
       warmth: 0.2,
       energy: 0.55,
-      irritation: 0.5,
+      irritation: 0.65,
       updatedAt: Date.now(),
     };
     expect(deriveMoodArchetype(irritated)).toBe("irritated");

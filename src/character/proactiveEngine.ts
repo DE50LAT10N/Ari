@@ -53,6 +53,21 @@ export type ProactiveDecisionResult = {
 
 export type ProactiveEngineDecision = ProactiveDecisionResult;
 
+export function isProactiveActivityGateOpen(input: {
+  activeLevel: boolean;
+  immersedCompanion: boolean;
+  activityAgoMs: number;
+  requiredIdleMs: number;
+}): boolean {
+  // "Active" means Ari may react while the user is working. Cadence,
+  // relevance, quiet mode, lifecycle and busy-state gates still apply later.
+  return (
+    input.activeLevel ||
+    input.immersedCompanion ||
+    input.activityAgoMs >= input.requiredIdleMs
+  );
+}
+
 export function planProactiveEngineTick(
   input: ProactiveDecisionInput,
 ): ProactiveDecisionResult {

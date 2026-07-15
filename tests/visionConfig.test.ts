@@ -20,7 +20,7 @@ describe("visionConfig", () => {
     expect(usesLocalOllamaAuxiliary(settings)).toBe(true);
   });
 
-  it("keeps gigachat vision by default in cloud mode", () => {
+  it("keeps selected gigachat vision while privacy-default embeddings stay local", () => {
     const settings = {
       ...defaultSettings,
       llmProvider: "gigachat" as const,
@@ -28,7 +28,8 @@ describe("visionConfig", () => {
     };
     expect(getVisionSource(settings)).toBe("gigachat");
     expect(resolveVisionModel(settings)).toBe(settings.gigaChatVisionModel);
-    expect(usesLocalOllamaAuxiliary(settings)).toBe(false);
+    expect(getEmbeddingSource(settings)).toBe("ollama");
+    expect(usesLocalOllamaAuxiliary(settings)).toBe(true);
   });
 
   it("detects local embeddings auxiliary without local vision", () => {
@@ -39,6 +40,16 @@ describe("visionConfig", () => {
       visionSource: "gigachat" as const,
     };
     expect(getEmbeddingSource(settings)).toBe("ollama");
+    expect(usesLocalOllamaAuxiliary(settings)).toBe(true);
+  });
+
+  it("respects explicit gigachat embeddings in ollama chat mode", () => {
+    const settings = {
+      ...defaultSettings,
+      llmProvider: "ollama" as const,
+      embeddingSource: "gigachat" as const,
+    };
+    expect(getEmbeddingSource(settings)).toBe("gigachat");
     expect(usesLocalOllamaAuxiliary(settings)).toBe(true);
   });
 });

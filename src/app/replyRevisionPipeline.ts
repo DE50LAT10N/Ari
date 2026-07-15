@@ -6,10 +6,9 @@ import { isLlmProviderOnline } from "../llm/providerOnline";
 import { buildMessages, type RuntimeContext } from "../character/promptBuilder";
 import {
   buildCorrectionUserMessage,
-  buildInCharacterFallback,
   processModelReply,
   shouldRetryReply,
-  shouldUseInCharacterFallback,
+  shouldReplaceDocumentClarification,
   trySoftenTrailingQuestionReply,
   type ProcessedReply,
   type ProcessReplyOptions,
@@ -20,14 +19,66 @@ import {
   type ReplyValidationIssue,
 } from "../character/responseValidation";
 import { runAdviceFinalGate } from "../character/adviceFinalGate";
-import {
-  buildVisibleAdviceFallback,
-  buildVisibleClarifyingFallback,
-} from "../character/proactiveAdviceFallback";
 import type {
   ProactiveLlmBundle,
   ProactiveSignalFact,
 } from "../character/proactiveLlmEngine";
+
+function asksForDocumentLocation(text: string): boolean {
+  return /(?:страниц|странице|раздел|секци|где\s+расположен|в\s+каком\s+разделе|номер\s+страниц)/i.test(
+    text,
+  );
+}
+
+function extractNumberedLine(text: string, itemNumber?: number): string | null {
+  if (itemNumber !== undefined) {
+    const specific = text.match(
+      new RegExp(`(?:^|\\n)\\s*${itemNumber}[.)]\\s+([^\\n]+)`, "im"),
+    );
+    if (!specific?.[1]) {
+      return null;
+    }
+    return `${itemNumber}. ${specific[1].trim()}`;
+  }
+  const match = text.match(/(?:^|\n)\s*(\d{1,3})[.)]\s+([^\n]+)/m);
+  if (!match) {
+    return null;
+  }
+  const number = match[1];
+  const rest = match[2]?.trim();
+  if (!number || !rest) {
+    return null;
+  }
+  return `${number}. ${rest}`;
+}
+
+function buildGroundedDocLookupAnswer(input: {
+  memory: Array<{ source: string; text: string }>;
+  itemNumber?: number;
+}): ProcessedReply | null {
+  if (!input.memory.length) {
+    return null;
+  }
+  const numbered =
+    input.memory
+      .map((fragment) => extractNumberedLine(fragment.text, input.itemNumber))
+      .find(Boolean) ?? null;
+  const first = input.memory[0]!;
+  const statement =
+    numbered ??
+    first.text
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 240);
+  if (!statement) {
+    return null;
+  }
+  return {
+    content: `По документам: ${statement}`,
+    emotion: "curious",
+    validation: { valid: true, issues: [] },
+  };
+}
 
 type ProactiveReplyRuntime = {
   getLastProactiveLlmBundle: () => ProactiveLlmBundle | null;
@@ -48,36 +99,18 @@ type ProactiveReplyRuntime = {
 export function shouldSuppressProactiveReply(
   issues: readonly ReplyValidationIssue[],
 ): boolean {
-  return issues.some(
-    (issue) =>
-      issue === "duplicate proactive reply" || issue === "proactive quality",
+  // Quality/novelty warnings already trigger a live model correction pass.
+  // If the corrected model reply is still imperfect, keep that live reply
+  // instead of replacing it with silence. Only empty or unsafe output is a
+  // hard veto; no deterministic fallback is introduced here.
+  return issues.some((issue) =>
+    [
+      "empty reply",
+      "identity leak",
+      "prompt disclosure",
+      "injection compliance",
+    ].includes(issue),
   );
-}
-
-function resolveAdviceVisibleFallback(input: {
-  practicalHook?: string;
-  linkNarrative?: string;
-  signalSummary?: string;
-  activeWindow?: ActiveWindowInfo | null;
-  proactiveLlm?: ProactiveReplyRuntime | null;
-}): string | null {
-  const direct = buildVisibleAdviceFallback(input);
-  if (direct) {
-    return direct;
-  }
-  const bundle = input.proactiveLlm?.getLastProactiveLlmBundle();
-  if (!bundle || bundle.tone !== "advice") {
-    return null;
-  }
-  return buildVisibleAdviceFallback({
-    practicalHook: input.practicalHook ?? bundle.practicalHook,
-    linkNarrative:
-      input.linkNarrative ??
-      bundle.primaryChainSummary ??
-      bundle.narrativeBrief,
-    signalSummary: input.signalSummary,
-    activeWindow: input.activeWindow,
-  });
 }
 
 export type ReplyRevisionPipelineInput = {
@@ -225,23 +258,18 @@ export async function runReplyRevisionPipeline(
           localQuality.issues.includes("thin-context generic") ||
           localQuality.issues.includes("missing clipboard quote"))
       ) {
-        const clarifying = buildVisibleClarifyingFallback(
-          proactiveFacts,
-          proactiveBundle,
-        );
-        if (clarifying) {
-          processed = {
-            content: clarifying,
-            emotion:
-              processed.emotion === "neutral" ? "curious" : processed.emotion,
-            validation: {
-              valid: true,
-              issues: processed.validation.issues.filter(
-                (issue) => issue !== "single-factor generic",
-              ),
-            },
-          };
-        }
+        processed = {
+          ...processed,
+          validation: {
+            valid: false,
+            issues: toReplyValidationIssues([
+              ...new Set([
+                ...processed.validation.issues,
+                "proactive quality",
+              ]),
+            ]),
+          },
+        };
       }
     }
   }
@@ -328,37 +356,21 @@ export async function runReplyRevisionPipeline(
   }
 
   if (
-    shouldRetryReply(processed.validation) &&
-    shouldUseInCharacterFallback(processed.validation)
+    !input.proactive &&
+    input.processReplyOptions.validationContext.hasRag &&
+    input.processReplyOptions.validationContext.documentLookupIntent &&
+    (asksForDocumentLocation(processed.content) ||
+      shouldReplaceDocumentClarification(
+        processed.content,
+        input.processReplyOptions.validationContext,
+      ))
   ) {
-    processed = buildInCharacterFallback();
-  }
-
-  if (
-    input.proactive &&
-    input.proactiveReplyTone === "advice" &&
-    shouldSuppressProactiveReply(processed.validation.issues)
-  ) {
-    const fallback = resolveAdviceVisibleFallback({
-      practicalHook: input.proactivePracticalHook,
-      linkNarrative: input.proactiveLinkNarrative,
-      signalSummary: input.proactiveSignalSummary,
-      activeWindow: input.activeWindow,
-      proactiveLlm: input.proactiveLlm,
+    const grounded = buildGroundedDocLookupAnswer({
+      memory: input.runtimeContext.memory ?? [],
+      itemNumber: input.runtimeContext.documentLookupItemNumber,
     });
-    if (fallback) {
-      processed = {
-        content: fallback,
-        emotion: processed.emotion === "neutral" ? "curious" : processed.emotion,
-        validation: {
-          valid: true,
-          issues: processed.validation.issues.filter(
-            (issue) =>
-              issue !== "proactive quality" &&
-              issue !== "duplicate proactive reply",
-          ),
-        },
-      };
+    if (grounded) {
+      processed = grounded;
     }
   }
 

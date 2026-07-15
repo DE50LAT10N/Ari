@@ -469,7 +469,6 @@ export function scoreInitiativeLocally({
   const dailyCount = getDailyInitiativeCount();
   const ignoredCount = getRecentIgnoredInitiativeCount();
   const recentlyIgnored = ignoredCount > 0;
-  const ignoredTooMuchForAdvice = ignoredCount >= 3;
   const recentTopics = getRecentProactiveTopics();
   const plannedCheckReady =
     /плановая проверка инициативы/.test(normalized) &&
@@ -523,7 +522,7 @@ export function scoreInitiativeLocally({
     : 60_000;
   if (
     (dailyCap < 9999 && dailyCount >= dailyCap) ||
-    recentlyIgnored ||
+    (recentlyIgnored && !adviceBypass) ||
     userActivityAgoMs < minUserSilenceMs
   ) {
     risk = "high";
@@ -589,7 +588,6 @@ export function scoreInitiativeLocally({
     adviceBypass &&
     riskTolerance >= 0 &&
     dailyCount < dailyCap &&
-    !ignoredTooMuchForAdvice &&
     userActivityAgoMs >= minUserSilenceMs
   ) {
     allowed = true;

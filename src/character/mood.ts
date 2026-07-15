@@ -163,7 +163,7 @@ export const EMOTION_MOOD_SHIFTS: Record<
     neutral: { warmth: 0, energy: -0.04, irritation: -0.06 },
     happy: { warmth: 0.22, energy: 0.14, irritation: -0.14 },
     amused: { warmth: 0.13, energy: 0.2, irritation: -0.05 },
-    annoyed: { warmth: -0.12, energy: 0.09, irritation: 0.28 },
+    annoyed: { warmth: -0.12, energy: 0.09, irritation: 0.12 },
     curious: { warmth: 0.05, energy: 0.15, irritation: -0.04 },
     empathetic: { warmth: 0.24, energy: -0.04, irritation: -0.14 },
     blush: { warmth: 0.28, energy: 0.06, irritation: -0.12 },
@@ -214,12 +214,12 @@ export const INTERACTION_MOOD_SHIFTS: Record<
     Pick<CharacterMood, "warmth" | "energy" | "irritation">
   > = {
   click: { warmth: 0.09, energy: 0.14, irritation: 0.05 },
-  "repeated-clicks": { warmth: -0.22, energy: 0.38, irritation: 0.55 },
+  "repeated-clicks": { warmth: -0.08, energy: 0.28, irritation: 0.25 },
   return: { warmth: 0.42, energy: 0.24, irritation: -0.28 },
   headpat: { warmth: 0.48, energy: 0.18, irritation: -0.36 },
-  chat_positive: { warmth: 0.28, energy: 0.16, irritation: -0.14 },
-  help_request: { warmth: 0.3, energy: 0.24, irritation: -0.12 },
-  ignored_initiative: { warmth: -0.28, energy: -0.14, irritation: 0.44 },
+  chat_positive: { warmth: 0.28, energy: 0.16, irritation: -0.2 },
+  help_request: { warmth: 0.3, energy: 0.24, irritation: -0.18 },
+  ignored_initiative: { warmth: -0.1, energy: -0.08, irritation: 0.16 },
   long_silence: { warmth: -0.1, energy: -0.16, irritation: 0.12 },
 };
 
@@ -232,9 +232,9 @@ export function applyRepeatedIgnoreMood(
   for (let index = 1; index < repeats; index += 1) {
     const current = decayMood(next);
     next = saveMood({
-      warmth: current.warmth - 0.06,
-      energy: current.energy - 0.04,
-      irritation: current.irritation + 0.11,
+      warmth: current.warmth - 0.03,
+      energy: current.energy - 0.02,
+      irritation: current.irritation + 0.05,
       updatedAt: Date.now(),
     });
   }

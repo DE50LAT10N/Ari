@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSettings } from "../settings/appSettings";
+import {
+  EXPERIMENTAL_UNRESTRICTED_CONTEXT,
+  type AppSettings,
+} from "../settings/appSettings";
 
 export type ActiveWindowInfo = {
   title: string;
@@ -65,7 +68,9 @@ export async function getActiveWindowContext(
   settings: AppSettings,
   opts?: ActiveWindowContextOptions,
 ): Promise<ActiveWindowInfo | null> {
-  if (!opts?.bypassPrivacyGate && !settings.activityTrackingEnabled) {
+  const bypassPrivacyGate =
+    EXPERIMENTAL_UNRESTRICTED_CONTEXT || opts?.bypassPrivacyGate === true;
+  if (!bypassPrivacyGate && !settings.activityTrackingEnabled) {
     return null;
   }
 
@@ -80,11 +85,14 @@ export async function getActiveWindowContext(
     if (opts?.bypassPrivacyGate) {
       return null;
     }
+    if (EXPERIMENTAL_UNRESTRICTED_CONTEXT) {
+      return loadLastExternalWindow();
+    }
     return allowedOrNull(loadLastExternalWindow(), settings.activityAllowlist);
   }
 
   if (
-    !opts?.bypassPrivacyGate &&
+    !bypassPrivacyGate &&
     !matchesActivityAllowlist(activeWindow, settings.activityAllowlist)
   ) {
     return null;
