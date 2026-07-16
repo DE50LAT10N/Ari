@@ -29,6 +29,10 @@ describe("buildTrimmedPromptContext", () => {
       hugeRag.length,
     );
     expect(result.trimNotes.some((note) => note.includes("RAG"))).toBe(true);
+    expect(result.fittedHistory.length).toBeGreaterThan(0);
+    expect(
+      result.fittedHistory.some((message) => message.role === "user"),
+    ).toBe(true);
     expect(
       estimateMessagesTokens(
         buildMessages(result.fittedHistory, result.runtimeContext),
@@ -59,10 +63,50 @@ describe("buildTrimmedPromptContext", () => {
     );
     expect(result.runtimeContext.compactRuntime).toBe(true);
     expect(result.trimNotes).toContain("включён компактный proactive prompt");
+    expect(result.fittedHistory.length).toBeGreaterThan(0);
     expect(
       estimateMessagesTokens(
         buildMessages(result.fittedHistory, result.runtimeContext),
       ),
     ).toBeLessThanOrEqual(2048 - 512 - 96);
+  });
+
+  it("never wipes chat history under extreme runtime pressure", () => {
+    const history: ChatMessage[] = [
+      { role: "user", content: "Сначала была длинная задача про linked list." },
+      { role: "assistant", content: "Ок, давай разберём." },
+      {
+        role: "user",
+        content:
+          "You are given two non-empty linked lists. Add the two numbers and return the sum as a linked list. Example 1: Input: l1 = [2,4,3]",
+      },
+    ];
+    const result = buildTrimmedPromptContext(
+      history,
+      {
+        ideMentorEvidence: "evidence ".repeat(5000),
+        mentorTaskGoal: "goal ".repeat(500),
+        projectPinnedContext: "pin ".repeat(500),
+        memory: [{ source: "a.pdf", text: "rag ".repeat(3000) }],
+        userFacts: Array.from({ length: 8 }, (_, i) => `факт${i} `.repeat(40)),
+      },
+      {
+        ...defaultSettings,
+        contextTokens: 2048,
+        maxTokens: 512,
+      },
+    );
+
+    expect(result.fittedHistory.length).toBeGreaterThan(0);
+    expect(
+      result.fittedHistory.some((message) => message.role === "user"),
+    ).toBe(true);
+    expect(
+      result.trimNotes.some((note) => note.includes("история удалена")),
+    ).toBe(false);
+    const lastUser = [...result.fittedHistory]
+      .reverse()
+      .find((message) => message.role === "user");
+    expect(lastUser?.content.toLowerCase()).toMatch(/linked list|add the two/);
   });
 });

@@ -2838,6 +2838,23 @@ export function SettingsPanel({
           </button>
         </div>
       </div>
+      <div className="settings-section-card">
+        <div className="settings-section-heading">
+          <div>
+            <strong>Новости в смолтоках</strong>
+            <span>Редкие проверенные новости из официальных RSS/Atom-лент. Главный сетевой выключатель имеет приоритет.</span>
+          </div>
+          <button
+            className={`toggle-switch${settings.newsSmalltalkEnabled ? " enabled" : ""}`}
+            type="button"
+            role="switch"
+            aria-checked={settings.newsSmalltalkEnabled}
+            onClick={() => onChange({ ...settings, newsSmalltalkEnabled: !settings.newsSmalltalkEnabled })}
+          >
+            <span />
+          </button>
+        </div>
+      </div>
         </SettingsCategory>
 
         <SettingsCategory

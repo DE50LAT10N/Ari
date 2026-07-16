@@ -393,6 +393,7 @@ export async function runReplyRevisionPipeline(
           responseMode: input.responseMode,
           proactive: input.processReplyOptions.proactive,
           userAskedQuestion: input.processReplyOptions.userAskedQuestion,
+          userPresentedTask: input.processReplyOptions.userPresentedTask,
           recentAssistantReplies:
             input.processReplyOptions.recentAssistantReplies,
           proactiveInitiativeMove: input.proactiveInitiativeMove,

@@ -132,6 +132,7 @@ export function hasUrgentAdvisorSignals(bundle: InitiativeSignalBundle): boolean
 
 const SMALLTALK_ONLY_KINDS = new Set<InitiativeKind>([
   "memory_callback",
+  "news_comment",
   "return_reaction",
   "context_comment",
   "quiet_presence",

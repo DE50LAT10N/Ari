@@ -2917,6 +2917,20 @@ button {
   margin-right: 4px;
 }
 
+.message-source-link {
+  display: block;
+  width: fit-content;
+  margin-top: 7px;
+  color: rgba(176, 218, 196, 0.9);
+  font-size: 11px;
+  line-height: 1.25;
+  text-decoration: none;
+}
+
+.message-source-link:hover {
+  text-decoration: underline;
+}
+
 .message-reaction-badge {
   position: absolute;
   right: -6px;

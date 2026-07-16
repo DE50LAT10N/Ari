@@ -5,6 +5,7 @@ export type InitiativeKind =
   | "return_reaction"
   | "context_comment"
   | "memory_callback"
+  | "news_comment"
   | "quiet_presence"
   | "screen_glance"
   | "process_advice"
@@ -25,6 +26,7 @@ const cooldowns: Record<InitiativeKind, number> = {
   return_reaction: 30 * 60_000,
   context_comment: 45 * 60_000,
   memory_callback: 12 * 60 * 60_000,
+  news_comment: 3 * 60 * 60_000,
   quiet_presence: 10 * 60_000,
   screen_glance: 25 * 60_000,
   process_advice: 20 * 60_000,
@@ -33,6 +35,7 @@ const cooldowns: Record<InitiativeKind, number> = {
 
 export function classifyInitiativeKind(description: string): InitiativeKind {
   const value = description.toLowerCase();
+  if (/news|новост|что нового/i.test(value)) return "news_comment";
   if (/перерыв|около часа|долг.*работ/.test(value)) return "break_suggestion";
   if (/незаверш|открыт.*лини|намерен|срок/.test(value)) return "unfinished_thread";
   if (/вернул|возвращ/.test(value)) return "return_reaction";
@@ -82,6 +85,7 @@ export function markInitiativeKind(kind: InitiativeKind): void {
 
 export function describeInitiativeKind(kind: InitiativeKind): string {
   return {
+    news_comment: "короткая проверенная новостная искра с указанием источника",
     check_in: "редкая мягкая проверка присутствия, без обязательного вопроса",
     break_suggestion: "предложение перерыва только после действительно долгой работы",
     unfinished_thread: "возврат к одной реальной незавершённой теме",

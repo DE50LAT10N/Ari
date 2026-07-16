@@ -74,6 +74,7 @@ export type AppSettings = {
   autoUpdateEnabled: boolean;
   autoVisionEnabled: boolean;
   webToolsEnabled: boolean;
+  newsSmalltalkEnabled: boolean;
   /** Internal compatibility marker for persisted privacy/profile settings. */
   privacyConsentVersion: number;
   avatarLivelinessEnabled: boolean;
@@ -172,6 +173,7 @@ export const defaultSettings: AppSettings = {
   autoUpdateEnabled: false,
   autoVisionEnabled: false,
   webToolsEnabled: true,
+  newsSmalltalkEnabled: true,
   privacyConsentVersion: CURRENT_PRIVACY_CONSENT_VERSION,
   avatarLivelinessEnabled: true,
   rerankEnabled: true,
@@ -251,6 +253,7 @@ function migrateProactiveFirst(settings: AppSettings): AppSettings {
     adviceCodeReadingEnabled: true,
     clipboardFullCaptureEnabled: true,
     webToolsEnabled: true,
+    newsSmalltalkEnabled: true,
     proactiveIntervalMinutes: Math.min(
       settings.proactiveAdviceIntervalMinutes ||
         settings.proactiveIntervalMinutes ||

@@ -7,6 +7,13 @@ export type FocusRecapMeta = {
   sessionId: string;
 };
 
+export type ChatSource = {
+  title: string;
+  publisher: string;
+  url: string;
+  publishedAt: number;
+};
+
 export type ChatMessage = {
   role: ChatRole;
   content: string;
@@ -21,4 +28,5 @@ export type ChatMessage = {
   adviceFeedback?: import("../character/adviceLedger").AdviceFeedback;
   focusRecap?: FocusRecapMeta;
   reaction?: string;
+  sources?: ChatSource[];
 };

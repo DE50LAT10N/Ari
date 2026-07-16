@@ -96,8 +96,8 @@ export function initiativeRiskTolerance(settings: AppSettings): number {
 }
 
 export function dailyInitiativeKindCap(
-  _kind: InitiativeKind,
+  kind: InitiativeKind,
   _settings: AppSettings,
 ): number {
-  return UNLIMITED_DAILY;
+  return kind === "news_comment" ? 3 : UNLIMITED_DAILY;
 }

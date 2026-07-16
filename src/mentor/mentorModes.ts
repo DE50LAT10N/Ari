@@ -1,3 +1,5 @@
+import { looksLikeTaskOrProblemStatement } from "../character/taskShape";
+
 export type MentorMode =
   | "project_understanding"
   | "mentor_explain"
@@ -36,10 +38,11 @@ export const READ_ONLY_MENTOR_AUTHORIZATION: MentorAuthorization = {
 };
 
 const ENGINEERING_MARKERS =
-  /(?:\b(?:code|coding|bug|debug|error|exception|stack\s*trace|test|lint|build|compile|refactor|review|architecture|dependency|function|class|api|typescript|javascript|react|rust|tauri|python|java|kotlin|git|repository|project)\b|код|ошибк|баг|отлад|тест|сборк|компил|рефактор|ревью|архитектур|зависимост|функци|класс|репозитор|проект)/i;
+  /(?:\b(?:code|coding|bug|debug|error|exception|stack\s*trace|test|lint|build|compile|refactor|review|architecture|dependency|function|class|api|typescript|javascript|react|rust|tauri|python|java|kotlin|git|repository|project|leetcode|algorithm|linked\s+list)\b|код|ошибк|баг|отлад|тест|сборк|компил|рефактор|ревью|архитектур|зависимост|функци|класс|репозитор|проект|задач[аиуе]|алгоритм)/i;
 
 export function isEngineeringRequest(message: string): boolean {
-  return ENGINEERING_MARKERS.test(message.trim());
+  const text = message.trim();
+  return ENGINEERING_MARKERS.test(text) || looksLikeTaskOrProblemStatement(text);
 }
 
 export function classifyMentorMode(message: string): MentorMode {

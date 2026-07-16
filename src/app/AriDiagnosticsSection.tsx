@@ -67,6 +67,8 @@ import {
 import { getInteractionAcknowledgementSummary } from "../character/interactionAcknowledgement";
 import type { IdeWorkspaceSnapshot } from "../ide/protocol";
 import type { IdeBridgeNativeStatus } from "../platform/ideBridgeNative";
+import { getNewsDiagnostics } from "../news/newsService";
+import type { NewsDiagnostics } from "../news/types";
 
 type DeskSnapshot = {
   focusSession: FocusSession | null;
@@ -277,6 +279,7 @@ export function AriDiagnosticsSection({
   const [proactiveDebug, setProactiveDebug] = useState<ProactiveDebug | null>(
     null,
   );
+  const [newsDebug, setNewsDebug] = useState<NewsDiagnostics>(() => getNewsDiagnostics());
 
   useEffect(() => {
     const refresh = () => {
@@ -302,6 +305,7 @@ export function AriDiagnosticsSection({
       setAdvisorTopics(diagnostics.topics);
       setSignalLines(formatActivitySignalsForDiagnostics(6));
       setProactiveDebug(buildProactiveDebug(ollamaOnline));
+      setNewsDebug(getNewsDiagnostics());
     };
     refresh();
     const timer = window.setInterval(refresh, 15_000);
@@ -313,6 +317,7 @@ export function AriDiagnosticsSection({
       "ari-tasks-changed",
       "ari-proactive-state-changed",
       "ari-mood-timeline-changed",
+      "ari-news-state-changed",
     ];
     for (const name of events) {
       window.addEventListener(name, refresh);
@@ -346,6 +351,31 @@ export function AriDiagnosticsSection({
               ? "experimental unrestricted · privacy gates bypassed"
               : "consent-controlled"}
           </dd>
+        </div>
+        <div>
+          <dt>News cache</dt>
+          <dd>
+            {settings.newsSmalltalkEnabled ? "on" : "off"} · {newsDebug.cacheSize} items · refresh{" "}
+            {newsDebug.lastRefreshAt ? new Date(newsDebug.lastRefreshAt).toLocaleTimeString("ru-RU") : "—"}
+            {newsDebug.nextRetryAt ? ` · retry ${new Date(newsDebug.nextRetryAt).toLocaleTimeString("ru-RU")}` : ""}
+          </dd>
+        </div>
+        <div>
+          <dt>News feeds</dt>
+          <dd>{newsDebug.sourceStatuses.length
+            ? newsDebug.sourceStatuses.map((source) => `${source.publisher}=${source.status}:${source.itemCount}${source.error ? `(${source.error})` : ""}`).join(" · ")
+            : "ещё не обновлялись"}</dd>
+        </div>
+        <div>
+          <dt>News selection</dt>
+          <dd>
+            {newsDebug.lastSelected ? `${newsDebug.lastSelected.score.toFixed(3)} · ${newsDebug.lastSelected.title}` : "—"}
+            {newsDebug.lastShown ? ` · shown: ${newsDebug.lastShown.publisher} / ${newsDebug.lastShown.title}` : ""}
+          </dd>
+        </div>
+        <div>
+          <dt>News rejects</dt>
+          <dd>{Object.entries(newsDebug.rejectionCounts).map(([reason, count]) => `${reason}=${count}`).join(" · ") || "—"}</dd>
         </div>
         <div>
           <dt>Фокус</dt>

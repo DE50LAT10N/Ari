@@ -20,4 +20,12 @@ describe("userIntent", () => {
     const result = classifyUserIntent("почему не работает сборка tauri");
     expect(result.intent).toBe("technical_help");
   });
+
+  it("detects LeetCode problem paste as technical help", () => {
+    const result = classifyUserIntent(
+      "You are given two non-empty linked lists representing two non-negative integers. Return the sum as a linked list. Example 1: Input: l1 = [2,4,3]",
+    );
+    expect(result.intent).toBe("technical_help");
+    expect(result.confidence).toBeGreaterThanOrEqual(0.85);
+  });
 });

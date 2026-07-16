@@ -118,6 +118,7 @@ import {
 } from "../character/blipVoiceManager";
 import { pickIdleAction, type IdleActionId } from "./idleActions";
 import { PROXIMITY_COOLDOWN_MS, ARI_USER_TYPING_EVENT } from "./avatarMotion";
+import { getNewsDiagnostics, isNewsLayerEnabled, NEWS_REFRESH_INTERVAL_MS, refreshNewsCache, selectNewsItem } from "../news/newsService";
 import { checkForAppUpdates } from "../platform/appUpdater";
 import {
   generateAmbientThought,
@@ -214,6 +215,8 @@ export function App() {
   const [ollamaOnline, setOllamaOnline] = useState<boolean | null>(null);
   const [lastActiveWindow, setLastActiveWindow] =
     useState<ActiveWindowInfo | null>(null);
+  const lastActiveWindowRef = useRef<ActiveWindowInfo | null>(lastActiveWindow);
+  lastActiveWindowRef.current = lastActiveWindow;
   const [userIdleSeconds, setUserIdleSeconds] = useState(0);
   const [pomodoro, setPomodoro] = useState<PomodoroState>(loadPomodoroState);
 
@@ -705,7 +708,40 @@ export function App() {
     });
   }
 
+  async function handleNewsQuickAction() {
+    setChatOpen(true);
+    if (!isNewsLayerEnabled(settings, isQuietModeActive(settings, lastActiveWindow))) {
+      window.dispatchEvent(new CustomEvent("ari-news-status", { detail: "Новости отключены в настройках." }));
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("ari-news-status", { detail: "Обновляю официальные новостные ленты…" }));
+    try {
+      const items = await refreshNewsCache({ force: true });
+      const selected = selectNewsItem({
+        items,
+        contextTerms: [lastActiveWindow?.processName ?? "", lastActiveWindow?.title ?? ""],
+      });
+      if (!selected) {
+        window.dispatchEvent(new CustomEvent("ari-news-status", { detail: "Нет свежей проверенной новости для показа." }));
+        return;
+      }
+      enqueueProactiveRequest({
+        kind: "news_comment",
+        eventHint: `Пользователь запросил свежую проверенную новость от ${selected.item.publisher}.`,
+        options: { newsItem: selected.item, conversationTopics: [selected.item.title] },
+      });
+    } catch (error) {
+      window.dispatchEvent(new CustomEvent("ari-news-status", {
+        detail: `Не удалось обновить новости: ${error instanceof Error ? error.message : String(error)}`,
+      }));
+    }
+  }
+
   function handleAvatarQuickAction(action: "focus" | "hide" | "news") {
+    if (action === "news") {
+      void handleNewsQuickAction();
+      return;
+    }
     if (action === "hide") {
       void hideMainWindow();
       return;
@@ -715,12 +751,6 @@ export function App() {
       window.dispatchEvent(new CustomEvent("ari-focus-prompt"));
       return;
     }
-    enqueueProactiveRequest({
-      kind: "check_in",
-      eventHint:
-        "Пользователь спросил «что нового» через меню аватара. Коротко расскажи о незавершённых линиях или текущем фокусе, если есть повод.",
-    });
-    setChatOpen(true);
   }
 
   useEffect(() => {
@@ -744,6 +774,41 @@ export function App() {
     }
     saveSettings(normalized);
   }, [settings]);
+
+  useEffect(() => {
+    if (!isNewsLayerEnabled(settings)) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const run = async () => {
+      if (isQuietModeActive(settingsRef.current, lastActiveWindowRef.current)) {
+        timer = window.setTimeout(() => void run(), 60_000);
+        return;
+      }
+      try {
+        await refreshNewsCache();
+      } catch {
+        if (!cancelled) timer = window.setTimeout(() => void run(), 5 * 60_000);
+        return;
+      }
+      if (cancelled) return;
+      const diagnostics = getNewsDiagnostics();
+      const nextAt = diagnostics.nextRetryAt ??
+        Math.max(Date.now() + 1_000, (diagnostics.lastRefreshAt ?? Date.now()) + NEWS_REFRESH_INTERVAL_MS);
+      timer = window.setTimeout(() => void run(), Math.max(1_000, nextAt - Date.now()));
+    };
+    timer = window.setTimeout(() => void run(), 10_000);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [
+    settings.proactiveEnabled,
+    settings.webToolsEnabled,
+    settings.newsSmalltalkEnabled,
+    settings.quietMode,
+    settings.quietModeUntil,
+    settings.quietModeProcess,
+  ]);
 
   useEffect(() => {
     chatOpenRef.current = chatOpen;

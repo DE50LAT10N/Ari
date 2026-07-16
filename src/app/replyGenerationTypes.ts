@@ -1,6 +1,7 @@
 import type { AdvisorAngle } from "../character/advisorEngine";
 import type { InitiativeKind } from "../character/initiativeKinds";
 import type { ProactiveReplyTone } from "../character/proactiveTone";
+import type { NewsItem } from "../news/types";
 
 export type ReplyGenerationOptions = {
   proactive?: boolean;
@@ -24,4 +25,5 @@ export type ReplyGenerationOptions = {
   proactiveInitiativeMove?: string;
   proactiveAdviceCandidateKind?: string;
   proactiveNoveltyGuidance?: string;
+  newsItem?: NewsItem;
 };

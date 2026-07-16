@@ -172,6 +172,16 @@ export async function runReplyPostprocess(
             emotion: replyEmotion,
             ...(options.proactive ? { proactive: true } : {}),
             ...(adviceEntry ? { adviceId: adviceEntry.id } : {}),
+            ...(options.newsItem
+              ? {
+                  sources: [{
+                    title: options.newsItem.title,
+                    publisher: options.newsItem.publisher,
+                    url: options.newsItem.url,
+                    publishedAt: options.newsItem.publishedAt,
+                  }],
+                }
+              : {}),
           }
         : message,
     ),

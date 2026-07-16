@@ -1,6 +1,11 @@
 import type { CharacterMood } from "../character/mood";
 import { deriveMoodArchetype } from "../character/moodBehavior";
 import type { ProactiveReplyTone } from "../character/proactiveTone";
+import {
+  looksLikeTaskOrProblemStatement,
+  shouldContinueOpenTask,
+  type ChatTurnLike,
+} from "../character/taskShape";
 
 export function chooseResponseLength(
   message: string,
@@ -15,6 +20,7 @@ export function chooseResponseLength(
     adviceAssertiveness?: number;
     questionBias?: number;
   },
+  recentHistory?: ChatTurnLike[],
 ): "short" | "medium" | "long" {
   if (mood && deriveMoodArchetype(mood) === "irritated") {
     return proactiveReplyTone === "advice" ? "short" : "short";
@@ -24,6 +30,13 @@ export function chooseResponseLength(
   }
   if (proactive) {
     return proactiveReplyTone === "advice" ? "medium" : "short";
+  }
+
+  if (looksLikeTaskOrProblemStatement(message)) {
+    return message.length > 260 ? "long" : "medium";
+  }
+  if (shouldContinueOpenTask(message, recentHistory)) {
+    return "medium";
   }
 
   const normalized = message.toLowerCase();

@@ -10,6 +10,34 @@ import { isValidMessageReaction } from "../character/messageReactions";
 const HISTORY_KEY = "desktop-character.chat-history.v1";
 const MAX_STORED_MESSAGES = 200;
 
+function normalizeSources(value: unknown): ChatMessage["sources"] {
+  if (!Array.isArray(value)) return undefined;
+  const sources = value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const source = entry as Record<string, unknown>;
+    if (
+      typeof source.title !== "string" ||
+      typeof source.publisher !== "string" ||
+      typeof source.url !== "string" ||
+      typeof source.publishedAt !== "number" ||
+      !Number.isFinite(source.publishedAt)
+    ) return [];
+    try {
+      const url = new URL(source.url);
+      if (url.protocol !== "https:") return [];
+      return [{
+        title: source.title.slice(0, 300),
+        publisher: source.publisher.slice(0, 120),
+        url: url.toString(),
+        publishedAt: source.publishedAt,
+      }];
+    } catch {
+      return [];
+    }
+  }).slice(0, 3);
+  return sources.length ? sources : undefined;
+}
+
 function normalizeChatMessage(value: unknown): ChatMessage | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -39,6 +67,7 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
       ? { ...candidate.action, status: "pending" as const, result: undefined }
       : candidate.action
     : undefined;
+  const sources = normalizeSources(candidate.sources);
 
   return {
     role,
@@ -52,6 +81,7 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
     ...(candidate.isCanon !== undefined ? { isCanon: candidate.isCanon } : {}),
     ...(candidate.messageId ? { messageId: candidate.messageId } : {}),
     ...(candidate.adviceId ? { adviceId: candidate.adviceId } : {}),
+    ...(sources ? { sources } : {}),
     ...(candidate.adviceFeedback === "useful" ||
     candidate.adviceFeedback === "not_now" ||
     candidate.adviceFeedback === "miss" ||

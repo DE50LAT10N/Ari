@@ -7,7 +7,10 @@ import {
   computeHistoryBudget,
   estimateMessagesTokens,
   fitHistoryToTokenBudget,
+  historyFloorMessageCount,
+  HISTORY_FLOOR_TOKEN_RESERVE,
   measurePromptOverhead,
+  preserveMinimumHistory,
 } from "./contextBudget";
 
 export type TrimmedContext = {
@@ -75,6 +78,7 @@ type ShrinkableStringKey =
   | "conversationMemory"
   | "moodTrigger"
   | "liveToolContext"
+  | "newsContext"
   | "ariTone"
   | "tonePreferences"
   | "userPreferences"
@@ -88,7 +92,8 @@ type ShrinkableStringKey =
   | "proactiveNoveltyGuidance"
   | "ragRetrievalStatus"
   | "mentorTaskGoal"
-  | "ideMentorEvidence";
+  | "ideMentorEvidence"
+  | "openTaskExcerpt";
 
 const SHRINKABLE_STRING_KEYS: readonly ShrinkableStringKey[] = [
   "userName",
@@ -107,6 +112,7 @@ const SHRINKABLE_STRING_KEYS: readonly ShrinkableStringKey[] = [
   "conversationMemory",
   "moodTrigger",
   "liveToolContext",
+  "newsContext",
   "ariTone",
   "tonePreferences",
   "userPreferences",
@@ -121,6 +127,7 @@ const SHRINKABLE_STRING_KEYS: readonly ShrinkableStringKey[] = [
   "ragRetrievalStatus",
   "mentorTaskGoal",
   "ideMentorEvidence",
+  "openTaskExcerpt",
 ];
 
 function shrinkText(text: string): string | undefined {
@@ -412,24 +419,7 @@ export function buildTrimmedPromptContext(
     tokens = totalTokens(fittedHistory, context);
   }
 
-  let historyTrimPasses = 0;
-  while (tokens > limit && fittedHistory.length > 1) {
-    historyTrimPasses += 1;
-    if (historyTrimPasses > fittedHistory.length + 4) {
-      break;
-    }
-    fittedHistory = fittedHistory.slice(1);
-    fittedHistory = fitHistoryToTokenBudget(
-      fittedHistory,
-      computeHistoryBudget(
-        settings,
-        measurePromptOverhead(fittedHistory, context),
-      ),
-    );
-    trimNotes.push("урезана история");
-    tokens = totalTokens(fittedHistory, context);
-  }
-
+  // Shrink runtime before dropping dialogue below the history floor.
   if (tokens > limit && context.proactive && !context.compactRuntime) {
     context.compactRuntime = true;
     trimNotes.push("включён компактный proactive prompt");
@@ -444,19 +434,63 @@ export function buildTrimmedPromptContext(
     if (!trimNotes.includes(`жёстко урезан контекст: ${note}`)) {
       trimNotes.push(`жёстко урезан контекст: ${note}`);
     }
-    fittedHistory = fitHistoryToTokenBudget(
-      fittedHistory,
+    fittedHistory = fitHistoryPreservingFloor(
+      fittedHistory.length > 0 ? fittedHistory : baseHistory,
+      context,
+      settings,
+    );
+    tokens = totalTokens(fittedHistory, context);
+  }
+
+  const floorCount = historyFloorMessageCount(
+    Math.max(fittedHistory.length, baseHistory.length, 1),
+  );
+
+  let historyTrimPasses = 0;
+  while (tokens > limit && fittedHistory.length > floorCount) {
+    historyTrimPasses += 1;
+    if (historyTrimPasses > fittedHistory.length + 4) {
+      break;
+    }
+    fittedHistory = fittedHistory.slice(1);
+    fittedHistory = fitHistoryPreservingFloor(fittedHistory, context, settings);
+    trimNotes.push("урезана история");
+    tokens = totalTokens(fittedHistory, context);
+  }
+
+  // Final shrink pass if still over limit while keeping history floor.
+  hardTrimPasses = 0;
+  while (tokens > limit && hardTrimPasses < 80) {
+    hardTrimPasses += 1;
+    const note = shrinkLargestRuntimeValue(context);
+    if (!note) break;
+    if (!trimNotes.includes(`жёстко урезан контекст: ${note}`)) {
+      trimNotes.push(`жёстко урезан контекст: ${note}`);
+    }
+    fittedHistory = fitHistoryPreservingFloor(
+      fittedHistory.length > 0 ? fittedHistory : baseHistory,
+      context,
+      settings,
+    );
+    tokens = totalTokens(fittedHistory, context);
+  }
+
+  if (fittedHistory.length === 0 && baseHistory.length > 0) {
+    fittedHistory = fitHistoryPreservingFloor(baseHistory, context, settings);
+    trimNotes.push("история восстановлена до минимума (floor)");
+    tokens = totalTokens(fittedHistory, context);
+  }
+
+  if (tokens > limit && fittedHistory.length > 0) {
+    const budget = Math.max(
+      64,
       computeHistoryBudget(
         settings,
         measurePromptOverhead(fittedHistory, context),
       ),
     );
-    tokens = totalTokens(fittedHistory, context);
-  }
-
-  if (tokens > limit && fittedHistory.length > 0) {
-    fittedHistory = [];
-    trimNotes.push("история удалена из-за жёсткого лимита контекста");
+    fittedHistory = preserveMinimumHistory(fittedHistory, budget);
+    trimNotes.push("история усечена до floor, без полного удаления");
     tokens = totalTokens(fittedHistory, context);
   }
 
@@ -467,7 +501,7 @@ export function buildTrimmedPromptContext(
   return { runtimeContext: context, fittedHistory, trimNotes };
 }
 
-function fitHistoryToContextPass(
+function fitHistoryPreservingFloor(
   history: ChatMessage[],
   context: RuntimeContext,
   settings: AppSettings,
@@ -475,5 +509,20 @@ function fitHistoryToContextPass(
   const provisional = history.map(({ role, content }) => ({ role, content }));
   const overhead = measurePromptOverhead(provisional, context);
   const budget = computeHistoryBudget(settings, overhead);
-  return fitHistoryToTokenBudget(provisional, budget);
+  const fitted = fitHistoryToTokenBudget(provisional, budget);
+  if (fitted.length > 0) {
+    return fitted;
+  }
+  return preserveMinimumHistory(
+    provisional,
+    Math.max(budget, HISTORY_FLOOR_TOKEN_RESERVE, 64),
+  );
+}
+
+function fitHistoryToContextPass(
+  history: ChatMessage[],
+  context: RuntimeContext,
+  settings: AppSettings,
+): ChatMessage[] {
+  return fitHistoryPreservingFloor(history, context, settings);
 }

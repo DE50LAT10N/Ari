@@ -22,9 +22,18 @@ export type ReplyValidationContext = {
   hasDebugSignals?: boolean;
   responseMode?: ResponseMode;
   userAskedQuestion?: boolean;
+  /** User pasted a problem / asked for task help — acknowledgement-only replies are invalid. */
+  userPresentedTask?: boolean;
   recentAssistantReplies?: string[];
   moodArchetype?: string;
   proactiveInitiativeMove?: string;
+  newsEvidence?: {
+    title: string;
+    summary: string;
+    excerpt: string;
+    publisher: string;
+    publishedAt: number;
+  };
 };
 
 const CONVERSATIONAL_MODES = new Set<ResponseMode>([
@@ -75,6 +84,7 @@ export const REPLY_VALIDATION_ISSUES = [
   "implicit solicitation",
   "empty reply",
   "evasive reply",
+  "task acknowledgement only",
   "duplicate reply",
   "duplicate proactive reply",
   "shallow advice",
@@ -85,6 +95,8 @@ export const REPLY_VALIDATION_ISSUES = [
   "thin-context generic",
   "missing clipboard quote",
   "missing fact quote",
+  "news grounding",
+  "news unsupported detail",
 ] as const;
 
 export type ReplyValidationIssue = (typeof REPLY_VALIDATION_ISSUES)[number];
@@ -199,8 +211,35 @@ function hasEvidenceOverlap(reply: string, evidence: readonly string[]): boolean
   return false;
 }
 
+function unsupportedNewsDetails(reply: string, evidence: string): boolean {
+  const normalizedEvidence = evidence.normalize("NFKC").toLocaleLowerCase("ru-RU");
+  const dateWords = reply.match(/\b(?:сегодня|вчера|завтра|понедельник|вторник|сред[ау]|четверг|пятниц[ау]|суббот[ау]|воскресенье|январ[ья]|феврал[ья]|март[ае]?|апрел[ья]|ма[йя]|июн[ья]|июл[ья]|август[ае]?|сентябр[ья]|октябр[ья]|ноябр[ья]|декабр[ья])\b/giu) ?? [];
+  if (dateWords.some((word) => !normalizedEvidence.includes(word.toLocaleLowerCase("ru-RU")))) return true;
+  const properNames = [...reply.matchAll(/\b(?:[A-ZА-ЯЁ]{2,}|[A-Z][a-z]+[A-Z][A-Za-z]*|[A-Z][a-z]{2,})\b/g)];
+  return properNames.some((match) => {
+    const name = match[0];
+    const before = reply.slice(0, match.index ?? 0);
+    const startsSentence = !before.trim() || /[.!?]\s*$/.test(before);
+    return !startsSentence && !normalizedEvidence.includes(name.toLocaleLowerCase("ru-RU"));
+  });
+}
+
+function hasPublisherAttribution(reply: string, publisher: string): boolean {
+  const replyWords = new Set(
+    reply.normalize("NFKC").toLocaleLowerCase("ru-RU").match(/[\p{L}\p{N}]{3,}/gu) ?? [],
+  );
+  const publisherWords = publisher
+    .normalize("NFKC")
+    .toLocaleLowerCase("ru-RU")
+    .match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+  return publisherWords.some((word) => replyWords.has(word));
+}
+
 const EVASIVE_REPLY_PATTERN =
   /(?:лучше самому разобраться|сам(?:ому|а) разбер(?:ё|е)шься|если что-то конкретное интересует|не могу сказать точно|не уверена, что знаю|попробуй сам|я не эксперт)/i;
+
+const TASK_SUBSTANCE_PATTERN =
+  /(?:алгоритм|сложность|O\s*\(|(?:^|[^\p{L}])код(?:$|[^\p{L}])|функци|класс|перенос|узел|(?:^|[^\p{L}])node(?:$|[^\p{L}])|(?:^|[^\p{L}])pointer(?:$|[^\p{L}])|(?:^|[^\p{L}])carry(?:$|[^\p{L}])|(?:^|[^\p{L}])digit(?:$|[^\p{L}])|сначала\s+(?:сложим|пройдём|пройдем)|идём\s+с|идем\s+с|поразрядно|проверка\s+на\s+примере)/iu;
 
 export function validateCharacterReply(
   reply: string,
@@ -368,6 +407,15 @@ export function validateCharacterReply(
     issues.push("evasive reply");
   }
   if (
+    context.userPresentedTask &&
+    !context.proactive &&
+    context.responseMode === "technical_help" &&
+    reply.trim().length < 280 &&
+    !TASK_SUBSTANCE_PATTERN.test(reply)
+  ) {
+    issues.push("task acknowledgement only");
+  }
+  if (
     recent.length > 0 &&
     isTooSimilarToRecent(
       reply,
@@ -376,6 +424,30 @@ export function validateCharacterReply(
     )
   ) {
     issues.push(context.proactive ? "duplicate proactive reply" : "duplicate reply");
+  }
+  if (context.newsEvidence) {
+    const evidence = context.newsEvidence;
+    const newsSentences = reply
+      .replace(/<emotion>[\s\S]*?<\/emotion>/gi, " ")
+      .split(/[.!?]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (
+      !hasEvidenceOverlap(reply, [evidence.title, evidence.summary, evidence.excerpt]) ||
+      !hasPublisherAttribution(reply, evidence.publisher) ||
+      newsSentences.length > 2 ||
+      /\?|(?:^|\s)(?:попробуй|стоит|нужно|следует|можешь|советую|рекомендую|открой|проверь)(?:\s|[,.!]|$)/iu.test(reply)
+    ) {
+      issues.push("news grounding");
+    }
+    const replyDetails = reply.match(/\b\d+(?:[.,]\d+)?\b/g) ?? [];
+    const evidenceText = `${evidence.title} ${evidence.summary} ${evidence.excerpt} ${evidence.publishedAt}`;
+    if (
+      replyDetails.some((detail) => !evidenceText.includes(detail)) ||
+      unsupportedNewsDetails(reply, evidenceText)
+    ) {
+      issues.push("news unsupported detail");
+    }
   }
   return { valid: issues.length === 0, issues };
 }

@@ -17,6 +17,8 @@ import {
 } from "./userIntent";
 import type { InitiativeKind } from "./initiativeKinds";
 import type { ProactiveReplyTone } from "./proactiveTone";
+import { looksLikeTaskOrProblemStatement, shouldContinueOpenTask } from "./taskShape";
+import type { ChatTurnLike } from "./taskShape";
 
 export function intentToResponseMode(intent: UserIntent): ResponseMode | null {
   const map: Record<UserIntent, ResponseMode> = {
@@ -59,6 +61,8 @@ export function classifyResponseModeWithIntent({
   initiativeKind,
   proactiveReplyTone,
   useIntentClassifier = false,
+  recentHistory,
+  hasOpenTaskThread,
 }: {
   message: string;
   proactive?: boolean;
@@ -67,6 +71,8 @@ export function classifyResponseModeWithIntent({
   initiativeKind?: InitiativeKind;
   proactiveReplyTone?: ProactiveReplyTone;
   useIntentClassifier?: boolean;
+  recentHistory?: ChatTurnLike[];
+  hasOpenTaskThread?: boolean;
 }): ResponseMode {
   if (screenObservation) return "vision_commentary";
   const event = eventDescription?.toLowerCase() ?? "";
@@ -91,6 +97,17 @@ export function classifyResponseModeWithIntent({
         return mapped;
       }
     }
+  }
+
+  if (looksLikeTaskOrProblemStatement(message)) {
+    return "technical_help";
+  }
+
+  const openThread =
+    hasOpenTaskThread === true ||
+    (recentHistory ? shouldContinueOpenTask(message, recentHistory) : false);
+  if (openThread) {
+    return "technical_help";
   }
 
   const normalized = message.toLowerCase();

@@ -93,6 +93,15 @@ import {
 } from "./chatRuntimeLoaders";
 import { yieldToMain, withTimeout } from "../platform/asyncTimeout";
 import { chooseResponseLength } from "./replyResponseLength";
+import {
+  previousUserMessageFromHistory,
+  shouldContinueOpenTask,
+  userPresentedTask as detectUserPresentedTask,
+} from "../character/taskShape";
+import {
+  isExplicitTaskClose,
+  syncOpenTaskThread,
+} from "../character/openTaskThread";
 import type { ReplyGenerationOptions } from "./replyGenerationTypes";
 import {
   REPLY_CONTEXT_RETRIEVAL_TIMEOUT_MS,
@@ -290,7 +299,8 @@ export async function buildReplyContext(
   ]
     .filter(Boolean)
     .join(" ");
-  const memoryQuery = options.proactive ? proactiveQuery : lastUserMessage;
+  const newsOnly = Boolean(options.newsItem);
+  const memoryQuery = newsOnly ? "" : options.proactive ? proactiveQuery : lastUserMessage;
   const ragSearchPlan =
     !options.proactive && memoryQuery.trim()
       ? buildRagSearchPlan(memoryQuery)
@@ -593,15 +603,31 @@ export async function buildReplyContext(
     ? moodVectorToPrompt(getCurrentMoodVector().vector)
     : null;
   const moodPrompt = moodStyle?.promptModifier ?? describeMoodForPrompt(moodForReply);
-  const responseLength = chooseResponseLength(
+  const openTaskState = options.proactive
+    ? null
+    : syncOpenTaskThread({
+        lastUserMessage,
+        history: baseHistory,
+      });
+  const stickyOpenTask =
+    Boolean(openTaskState) &&
+    !options.proactive &&
+    !isExplicitTaskClose(lastUserMessage);
+  const hasOpenTaskThread =
+    stickyOpenTask || shouldContinueOpenTask(lastUserMessage, baseHistory);
+  let responseLength = chooseResponseLength(
     lastUserMessage,
     memory.length,
     Boolean(options.proactive),
     proactiveReplyTone,
     moodForReply,
     moodStyle?.responseParams,
+    baseHistory,
   );
-  const responseMode = classifyResponseMode({
+  if (stickyOpenTask && responseLength === "short") {
+    responseLength = "medium";
+  }
+  let responseMode = classifyResponseMode({
     message: lastUserMessage,
     proactive: options.proactive,
     screenObservation: Boolean(options.screenObservation),
@@ -609,7 +635,12 @@ export async function buildReplyContext(
     initiativeKind: options.initiativeKind,
     proactiveReplyTone,
     useIntentClassifier: settings.intentClassifierEnabled,
+    recentHistory: baseHistory,
+    hasOpenTaskThread,
   });
+  if (stickyOpenTask) {
+    responseMode = "technical_help";
+  }
   const relationshipToneKey = deriveRelationshipTone(relationship, moodForReply);
   const relationshipTone = describeRelationshipTone(relationshipToneKey);
   const workingMemoryForPrompt = describeWorkingMemory() || undefined;
@@ -619,6 +650,17 @@ export async function buildReplyContext(
     .map((message) => message.content)
     .slice(-5);
   const userAskedQuestion = isQuestionLikeRequest(lastUserMessage);
+  const previousUserMessage = previousUserMessageFromHistory(
+    baseHistory,
+    lastUserMessage,
+  );
+  const userPresentedTask =
+    stickyOpenTask ||
+    detectUserPresentedTask(
+      lastUserMessage,
+      previousUserMessage,
+      baseHistory,
+    );
   const memoryEvidence = [
     ...userMemory.facts.map((fact) => fact.text),
     ...userMemory.summaries.flatMap((summary) => [summary.title, summary.text]),
@@ -636,6 +678,7 @@ export async function buildReplyContext(
     documentLookupIntent,
     hasLiveTool: Boolean(liveToolContext),
     userAskedQuestion,
+    userPresentedTask,
     proactive: Boolean(options.proactive),
     proactiveReplyTone,
     responseMode,
@@ -650,6 +693,15 @@ export async function buildReplyContext(
         }),
       ),
     proactiveInitiativeMove: options.proactiveInitiativeMove,
+    newsEvidence: options.newsItem
+      ? {
+          title: options.newsItem.title,
+          summary: options.newsItem.summary,
+          excerpt: options.newsItem.excerpt,
+          publisher: options.newsItem.publisher,
+          publishedAt: options.newsItem.publishedAt,
+        }
+      : undefined,
   };
   const processReplyOptions: ProcessReplyOptions = {
     responseMode,
@@ -658,6 +710,7 @@ export async function buildReplyContext(
     recentAssistantReplies,
     proactive: Boolean(options.proactive),
     userAskedQuestion,
+    userPresentedTask,
   };
 
   let runtimeContext: RuntimeContext = {
@@ -692,6 +745,8 @@ export async function buildReplyContext(
     scene: describePresenceScene(scene),
     safeActionsAvailable: settings.safeActionsEnabled,
     responseMode,
+    userPresentedTask,
+    openTaskExcerpt: stickyOpenTask ? openTaskState?.excerpt : undefined,
     selfMemory: [describeAriSelfMemory(selfMemory), describeReactionLearningSummary()]
       .filter(Boolean)
       .join(". "),
@@ -715,6 +770,15 @@ export async function buildReplyContext(
     conversationMemory: conversationMemoryForPrompt,
     moodTrigger: moodTriggerDescription,
     liveToolContext,
+    newsContext: options.newsItem
+      ? [
+          `Издатель: ${options.newsItem.publisher}`,
+          `Заголовок: ${options.newsItem.title}`,
+          `Дата: ${new Date(options.newsItem.publishedAt).toISOString()}`,
+          `Краткий факт: ${options.newsItem.summary}`,
+          `Фрагмент: ${options.newsItem.excerpt}`,
+        ].join("\n")
+      : undefined,
     ragRetrievalStatus,
     documentLookupItemNumber: ragSearchPlan?.itemNumber,
     projectPinnedContext: describePinnedProjectContext() || undefined,
@@ -730,7 +794,30 @@ export async function buildReplyContext(
     mentorTaskGoal: mentorTask?.goal,
     ideMentorEvidence,
   };
-  const fittedBundle = buildTrimmedPromptContext(baseHistory, runtimeContext, settings);
+  if (newsOnly) {
+    runtimeContext = {
+      proactive: true,
+      eventDescription: options.eventDescription,
+      initiativeAnchor: options.newsItem?.title,
+      softInitiativeAnchor: true,
+      mood: moodPrompt,
+      relationship: runtimeContext.relationship,
+      relationshipToneConstraints: runtimeContext.relationshipToneConstraints,
+      attention: runtimeContext.attention,
+      routine: runtimeContext.routine,
+      scene: runtimeContext.scene,
+      responseMode,
+      initiativeKind: "news_comment",
+      proactiveReplyTone: "smalltalk",
+      responseLength: "short",
+      avoidPhrases: runtimeContext.avoidPhrases,
+      emotionGuidance: runtimeContext.emotionGuidance,
+      ariTone: runtimeContext.ariTone,
+      tonePreferences: runtimeContext.tonePreferences,
+      newsContext: runtimeContext.newsContext,
+    };
+  }
+  const fittedBundle = buildTrimmedPromptContext(newsOnly ? [] : baseHistory, runtimeContext, settings);
   const fittedHistory = fittedBundle.fittedHistory;
   runtimeContext = fittedBundle.runtimeContext;
   if (fittedBundle.trimNotes.length) {

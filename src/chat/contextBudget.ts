@@ -7,6 +7,11 @@ const ASCII_CHARS_PER_TOKEN = 3;
 const NON_ASCII_CHARS_PER_TOKEN = 2.2;
 const TOKEN_OVERHEAD = 4;
 
+/** Minimum dialogue turns to keep under token pressure (user+assistant pairs count as messages). */
+export const HISTORY_FLOOR_MIN_MESSAGES = 2;
+/** Soft token reserve for recent history before wiping older turns / ambient context. */
+export const HISTORY_FLOOR_TOKEN_RESERVE = 1600;
+
 export function estimateTextTokens(text: string): number {
   let nonAscii = 0;
   for (const char of text) {
@@ -108,4 +113,69 @@ export function fitHistoryToTokenBudget(
   }
 
   return selected.map(({ role, content }) => ({ role, content }));
+}
+
+/**
+ * Keep at least the newest user turn (truncated if needed). Never returns [] when history is non-empty.
+ * Prefer also keeping the previous assistant turn when budget allows.
+ */
+export function preserveMinimumHistory(
+  history: ChatMessage[],
+  budgetTokens: number,
+): ChatMessage[] {
+  if (history.length === 0) {
+    return [];
+  }
+
+  const fitted = fitHistoryToTokenBudget(history, Math.max(budgetTokens, 1));
+  if (fitted.length > 0) {
+    return fitted;
+  }
+
+  // Budget was too small even for one message — force-truncate the last user turn.
+  let lastUserIndex = -1;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index]?.role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  if (lastUserIndex < 0) {
+    const last = history[history.length - 1]!;
+    const content = truncateTextToTokenBudget(last.content, Math.max(32, budgetTokens));
+    return content
+      ? [{ role: last.role, content }]
+      : [{ role: last.role, content: last.content.slice(0, 80) }];
+  }
+
+  const lastUser = history[lastUserIndex]!;
+  const content = truncateTextToTokenBudget(
+    lastUser.content,
+    Math.max(48, budgetTokens > 0 ? budgetTokens : 48),
+  );
+  const result: ChatMessage[] = [
+    {
+      role: "user",
+      content: content || lastUser.content.slice(0, 120),
+    },
+  ];
+
+  // Optionally prepend previous assistant if any budget remains.
+  if (lastUserIndex > 0 && history[lastUserIndex - 1]?.role === "assistant") {
+    const prev = history[lastUserIndex - 1]!;
+    const used = estimateTextTokens(result[0]!.content) + 8;
+    const remaining = Math.max(0, budgetTokens - used);
+    if (remaining > 40) {
+      const prevContent = truncateTextToTokenBudget(prev.content, remaining - 8);
+      if (prevContent) {
+        result.unshift({ role: "assistant", content: prevContent });
+      }
+    }
+  }
+
+  return result;
+}
+
+export function historyFloorMessageCount(historyLength: number): number {
+  return Math.min(HISTORY_FLOOR_MIN_MESSAGES, Math.max(1, historyLength));
 }

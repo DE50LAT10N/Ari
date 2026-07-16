@@ -99,6 +99,8 @@ import { exitAri, stopOllamaAndExit } from "../platform/ollamaProcess";
 import type { ScreenCapture } from "../platform/screenCapture";
 import type { AppSettings } from "../settings/appSettings";
 import type { ChatMessage } from "../types/chat";
+import { markNewsShown } from "../news/newsService";
+import type { NewsItem } from "../news/types";
 import type {
   CharacterEmotion,
   CharacterState,
@@ -321,6 +323,15 @@ type ChatPanelProps = {
 const STARTING_LINE =
   "Ну привет. Я Ari. Можешь сделать вид, что открыл чат случайно.";
 
+function safeNewsSourceUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function ideEditorLabel(uri?: string): string | null {
   if (!uri) return null;
   const parts = uri.split(/[\\/]/).filter(Boolean);
@@ -509,6 +520,17 @@ export function ChatPanel({
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [liveToolStatus, setLiveToolStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onNewsStatus = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (!detail) return;
+      setLiveToolStatus(detail);
+      window.setTimeout(() => setLiveToolStatus((current) => current === detail ? null : current), 8_000);
+    };
+    window.addEventListener("ari-news-status", onNewsStatus);
+    return () => window.removeEventListener("ari-news-status", onNewsStatus);
+  }, []);
   const [visionLoading, setVisionLoading] = useState(false);
   const [visionMenuOpen, setVisionMenuOpen] = useState(false);
   const [quickCommandOpen, setQuickCommandOpen] = useState(false);
@@ -1776,7 +1798,9 @@ export function ChatPanel({
     const banned = collectBannedProactiveTopics();
     const candidateTopics =
       options.conversationTopics ??
-      (kind === "check_in" || kind === "process_advice"
+      (kind === "news_comment" && mergedOpts.newsItem
+        ? [mergedOpts.newsItem.title]
+        : kind === "check_in" || kind === "process_advice"
         ? buildConversationTopics(bundle.advisor, 6, banned, bundle)
         : []);
 
@@ -1869,6 +1893,7 @@ export function ChatPanel({
         recentChatTurns: mergedOpts.recentChatTurns,
         ragSnippets: ragSnippets.length ? ragSnippets : undefined,
         codeExcerpts: contextExcerpts.length ? contextExcerpts : undefined,
+        newsItem: mergedOpts.newsItem,
       });
       const adviceTopicKey = buildAdviceTopicKey({
         anchor: preliminaryAnchor,
@@ -1944,6 +1969,7 @@ export function ChatPanel({
         codeExcerpts: contextExcerpts.length ? contextExcerpts : undefined,
         adviceCandidate: advicePlan?.selected,
         requirePracticalHook: tone === "advice",
+        newsItem: mergedOpts.newsItem,
       });
       if (tone === "advice" && llmBundle.shouldSend) {
         const hookText = [
@@ -2045,6 +2071,7 @@ export function ChatPanel({
       proactiveNoveltyGuidance: describeAdviceNoveltyForPrompt(
         loadAdviceLedger(),
       ),
+      newsItem: pkg.newsItem,
       engineApproved: extra.engineApproved,
       ignoreKindDailyCap: extra.ignoreKindDailyCap,
       kindCooldownMs: extra.kindCooldownMs,
@@ -2083,6 +2110,7 @@ export function ChatPanel({
       proactiveInitiativeMove?: string;
       proactiveAdviceCandidateKind?: string;
       proactiveNoveltyGuidance?: string;
+      newsItem?: NewsItem;
       engineApproved?: boolean;
     } = {},
   ): Promise<InitiativeLaunchResult> {
@@ -2257,8 +2285,10 @@ export function ChatPanel({
         proactiveInitiativeMove: options.proactiveInitiativeMove,
         proactiveAdviceCandidateKind: options.proactiveAdviceCandidateKind,
         proactiveNoveltyGuidance: options.proactiveNoveltyGuidance,
+        newsItem: options.newsItem,
       });
       if (sent) {
+        if (options.newsItem) markNewsShown(options.newsItem);
         setLastProactiveMessageAt();
         markInitiativeKind(initiativeKind);
         markInitiativeSent(
@@ -3485,6 +3515,21 @@ export function ChatPanel({
                         <i />
                       </span>
                     ) : null)}
+                    {message.sources?.map((source) => {
+                      const href = safeNewsSourceUrl(source.url);
+                      return href ? (
+                        <a
+                          key={href}
+                          className="message-source-link"
+                          href={href}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={source.title}
+                        >
+                          Источник: {source.publisher}
+                        </a>
+                      ) : null;
+                    })}
                     {message.reaction && (
                       <span
                         className="message-reaction-badge"

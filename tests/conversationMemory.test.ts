@@ -41,6 +41,13 @@ describe("conversationMemory", () => {
     expect(shouldPostprocessConversationMemory(message, "Записала.")).toBe(true);
   });
 
+  it("retrieves memory for short continuation follow-ups", () => {
+    expect(shouldRetrieveLongTermMemory("продолжи")).toBe(true);
+    expect(shouldRetrieveLongTermMemory("а код?")).toBe(true);
+    expect(shouldRetrieveLongTermMemory("сделай")).toBe(true);
+    expect(shouldRetrieveLongTermMemory("дальше")).toBe(true);
+  });
+
   it("keeps lightweight conversational continuity without LLM extraction", () => {
     recordConversationMemoryExchange({
       userMessage: "Запомни: я не люблю длинные финальные вопросы.",

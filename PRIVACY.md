@@ -13,15 +13,15 @@ useful conversations. In GigaChat mode, selected context may leave the device.
 When **GigaChat API** is selected, Ari sends only the data required for each
 enabled feature to Sber's GigaChat API:
 
-- conversation messages and system prompt context;
-- memory and RAG fragments selected for the current request;
-- structured background tasks (memory extraction, initiative gating) when enabled;
-- images or OCR pages only after the same explicit user actions as in local mode.
-
+- conversation messages and system prompt cont
 The Authorization key is stored with Windows DPAPI under Ari's app-data directory.
 It is not written to `localStorage`, chat history, or logs.
 
 Uploaded vision files are deleted from GigaChat storage after the request completes.
+ext;
+- memory and RAG fragments selected for the current request;
+- structured background tasks (memory extraction, initiative gating) when enabled;
+- images or OCR pages only after the same explicit user actions as in local mode.
 
 ## Activity and window context
 

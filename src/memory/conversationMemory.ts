@@ -1,4 +1,5 @@
 import type { CharacterEmotion } from "../types/character";
+import { looksLikeContinuationFollowUp } from "../character/taskShape";
 
 export type ConversationMemoryKind =
   | "topic"
@@ -119,6 +120,9 @@ export function shouldRetrieveLongTermMemory(
     return true;
   }
   if (hasDurableMemorySignal(text) || hasOpenLoopSignal(text) || hasRecallSignal(text)) {
+    return true;
+  }
+  if (looksLikeContinuationFollowUp(text)) {
     return true;
   }
   if (isTinySocialMessage(text)) {

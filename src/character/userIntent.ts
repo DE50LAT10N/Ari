@@ -1,3 +1,5 @@
+import { looksLikeTaskOrProblemStatement } from "./taskShape";
+
 export type UserIntent =
   | "question"
   | "task_command"
@@ -40,7 +42,7 @@ const INTENT_RULES: IntentRule[] = [
   {
     intent: "technical_help",
     pattern:
-      /(?:ошибк|код|сборк|typescript|rust|tauri|api|сервер|модель|как реализ|почему не работ|баг|лог|компил)/i,
+      /(?:ошибк|код|сборк|typescript|rust|tauri|api|сервер|модель|как реализ|почему не работ|баг|лог|компил|leetcode|реши задачу|помоги с (?:этой )?задач|напиши функцию)/i,
     weight: 0.85,
   },
   {
@@ -60,6 +62,10 @@ export function classifyUserIntent(text: string): UserIntentResult {
   const normalized = text.trim();
   if (!normalized) {
     return { intent: "smalltalk", confidence: 0.4 };
+  }
+
+  if (looksLikeTaskOrProblemStatement(normalized)) {
+    return { intent: "technical_help", confidence: 0.9 };
   }
 
   let best: UserIntentResult = { intent: "smalltalk", confidence: 0.45 };

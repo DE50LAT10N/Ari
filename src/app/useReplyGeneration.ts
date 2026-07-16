@@ -310,7 +310,10 @@ export function useReplyGeneration(input: ReplyGenerationInput) {
 
         if (
           options.proactive &&
-          shouldSuppressProactiveReply(processed.validation.issues)
+          (shouldSuppressProactiveReply(processed.validation.issues) ||
+            (options.newsItem && processed.validation.issues.some((issue) =>
+              issue === "news grounding" || issue === "news unsupported detail"
+            )))
         ) {
           recordInitiativeSuppressed(
             `proactive reply novelty: ${processed.validation.issues.join(", ")}`,

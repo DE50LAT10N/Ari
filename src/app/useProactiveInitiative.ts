@@ -93,6 +93,8 @@ import {
   useLatestRef,
   useStableCallbackRef,
 } from "./useStableCallbackRef";
+import { selectNewsItem } from "../news/newsService";
+import { loadUserMemory } from "../memory/userMemory";
 
 type InitiativeLaunchResult = { sent: boolean; suppressReason?: string };
 
@@ -388,6 +390,49 @@ export function useProactiveInitiative(input: {
         return;
       }
 
+      if (
+        settings.webToolsEnabled &&
+        settings.newsSmalltalkEnabled &&
+        randomChance(randomRef.current, 0.25) &&
+        canUseInitiativeKind("news_comment", { now })
+      ) {
+        const recentTurns = historyRef.current.slice(-8);
+        const longTermInterests = await loadUserMemory()
+          .then((facts) => facts
+            .filter((fact) => fact.importance !== "trivial" && !fact.supersededAt)
+            .slice(-30)
+            .map((fact) => fact.text))
+          .catch(() => [] as string[]);
+        const selected = selectNewsItem({
+          now,
+          contextTerms: [
+            activeWindowRef.current?.processName ?? "",
+            activeWindowRef.current?.title ?? "",
+            basePackageOptions.ideEditorFile ?? "",
+          ],
+          interestTerms: recentTurns
+            .filter((message) => message.role === "user")
+            .map((message) => message.content)
+            .concat(longTermInterests),
+        });
+        if (selected) {
+          const pkg = await prepareProactivePackageRef.current("news_comment", {
+            ...basePackageOptions,
+            newsItem: selected.item,
+            conversationTopics: [selected.item.title],
+            eventHint: `Короткая проверенная новость от ${selected.item.publisher}.`,
+          });
+          if (pkg) {
+            const { sent } = await launchProactiveInitiativeRef.current(pkg, {
+              kindCooldownMs: 3 * 60 * 60_000,
+              plannedCheckMinSilenceMs: smalltalkPlannedSilenceMs,
+              engineApproved: true,
+            });
+            if (sent) return;
+          }
+        }
+      }
+
       const ritualPending = getPendingDailyRitual() !== null;
       const longSilence = activityAgoMs >= 20 * 60_000;
       const adviceStreak = countRecentAdviceStreak();
@@ -592,6 +637,7 @@ export function useProactiveInitiative(input: {
           }
           void launchProactiveInitiativeRef.current(pkg, {
             ignoreKindDailyCap: req.lab,
+            engineApproved: req.kind === "news_comment",
           }).then((result) => {
             if (result.sent && req.scenario) {
               markScenarioTriggered(req.scenario);

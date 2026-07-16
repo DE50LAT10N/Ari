@@ -28,6 +28,7 @@ export type ProcessReplyOptions = {
   recentAssistantReplies?: string[];
   proactive?: boolean;
   userAskedQuestion?: boolean;
+  userPresentedTask?: boolean;
 };
 
 export function shouldUseInCharacterFallback(
@@ -91,6 +92,7 @@ export function processModelReply(
     responseMode: options.responseMode,
     proactive: options.proactive,
     userAskedQuestion: options.userAskedQuestion,
+    userPresentedTask: options.userPresentedTask,
     recentAssistantReplies: options.recentAssistantReplies,
   });
   const issues: ReplyValidationIssue[] = [...validation.issues];
@@ -190,12 +192,15 @@ export function shouldRetryReply(validation: OocValidationResult): boolean {
       "implicit solicitation",
       "empty reply",
       "evasive reply",
+      "task acknowledgement only",
       "duplicate reply",
       "duplicate proactive reply",
       "shallow advice",
       "proactive quality",
       "proactive meta commentary",
       "advice novelty",
+      "news grounding",
+      "news unsupported detail",
     ]);
 }
 
@@ -261,9 +266,17 @@ export function buildCorrectionUserMessage(
   if (issues.includes("RAG claim without fragments")) {
     lines.push("Не ссылайся на документы без RAG-фрагментов.");
   }
+  if (issues.includes("news grounding") || issues.includes("news unsupported detail")) {
+    lines.push("Оставь ровно один факт из переданной новости, назови издателя и не добавляй отсутствующие имена, числа или даты. Это смолток, не совет и не дайджест.");
+  }
   if (issues.includes("evasive reply")) {
     lines.push(
       "Дай прямой содержательный ответ на вопрос. Не отмахивайся и не говори «лучше самому разобраться», если можешь помочь хотя бы частично.",
+    );
+  }
+  if (issues.includes("task acknowledgement only")) {
+    lines.push(
+      "Открыта задача из истории. Дай конкретный подход или решение по условию — не здоровайся с нуля, не переспрашивай условие и не предлагай «помочь с чем-нибудь» вместо сути.",
     );
   }
   if (issues.includes("proactive quality")) {
